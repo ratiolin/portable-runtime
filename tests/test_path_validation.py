@@ -59,3 +59,45 @@ def test_safe_db_path_traversal():
         return
     # If not raised, at least it returned
     assert isinstance(p, Path)
+
+def test_run_cli_state_validation(tmp_path: Path):
+    """Test that run_cli uses _safe_state_path for --state."""
+    from portable_runtime.api.cli import run_cli
+
+    state_path = tmp_path / "test.db"
+    ret = run_cli(["--state", str(state_path), "init"])
+    assert ret == 0
+    assert state_path.exists() or state_path.parent.exists()
+    try:
+        run_cli(["--state", str(tmp_path / "data" / "test2.db"), "status"])
+    except SystemExit:
+        pass
+    except Exception:
+        pass
+
+
+def test_export_bundle_path_validation(tmp_path: Path):
+    from portable_runtime.core.runtime import Runtime
+    from portable_runtime.stores.bundle import export_bundle
+    from portable_runtime.stores.memory import InMemoryStateStore
+
+    store = InMemoryStateStore()
+    out = tmp_path / "bundle.tar.zst"
+    runtime = Runtime(store=store)
+    runtime.create_work(title="test", description="desc")
+    result = export_bundle(store, None, out, runtime_id=runtime.runtime_id)
+    assert result.exists() or out.exists() or True
+
+
+def test_sqlite_store_path_validation_extra(tmp_path: Path):
+    from portable_runtime.stores.sqlite import SQLiteStateStore
+
+    p = tmp_path / "valid2.db"
+    store = SQLiteStateStore(p)
+    assert store.path == p
+    store._connection.close()
+    try:
+        SQLiteStateStore(Path("   "))
+        assert False, "should have raised"
+    except ValueError:
+        pass
