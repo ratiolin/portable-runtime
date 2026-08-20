@@ -1,6 +1,9 @@
 from __future__ import annotations
+
 from typing import Literal
+
 from pydantic import BaseModel, ConfigDict, Field
+
 ImpactClass = Literal["read", "write-local", "write-remote", "deploy", "admin", "irreversible"]
 EffectSemantics = Literal["pure", "idempotent", "deduplicatable", "reconcilable", "irreversible-opaque"]
 AuthorizationRequirement = Literal["none", "optional", "required"]
