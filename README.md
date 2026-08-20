@@ -121,3 +121,6 @@ uv run pytest
 Standalone portable runtime for durable execution.
 
 
+
+<!-- sonar trigger 2026-08-20 20:15 -->
+
