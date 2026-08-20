@@ -119,9 +119,10 @@ def test_safe_helpers_comprehensive(tmp_path: Path):
     # Test empty and whitespace
     try:
         _safe_state_path(Path("   "))
-        assert False
+        raise AssertionError
     except ValueError:
         pass
     # Test bundle and sqlite similarly
     assert _safe_output_path(Path("out/bundle.tar")) == Path("out/bundle.tar")
     assert _safe_db_path(tmp_path / "x.db") == tmp_path / "x.db"
+
