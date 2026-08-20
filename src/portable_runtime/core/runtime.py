@@ -103,6 +103,7 @@ class Runtime:
             run_id=run.id,
             instruction=instruction,
             parameters=parameters,
+            lease_generation=getattr(run, "lease_generation", 0),
         )
         run = run.model_copy(update={"provider_invocation_refs": [*run.provider_invocation_refs, request.id]})
         self.store.save_run(run)

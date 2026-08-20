@@ -1,12 +1,18 @@
-"""Procedure profiles — V1.4 responsibility gates.
+"""Procedure profiles — V1.8 strict typed-record backed (P1-1).
 
 Graph is implementation, responsibility completeness is invariant.
 ProcedureProfile levels: minimal / standard / enhanced.
 Provides context.require(...) and check_procedure(...).
 
-Each obligation status is one of:
-  required | satisfied | not-applicable | handed-off | waived | blocked | open | expired | invalidated
-waived must carry waiver_authority_ref.
+Fail-closed invariants:
+- metadata["authorized"]/["verified"] etc are HINTS only, never satisfy gate alone
+- authorization requires valid AuthorizationGrant typed record
+- evidence requires EvidenceArtifact/Observation + typed relation
+- verification requires VerificationResult (ClosedVerificationResult) bound to target/version
+- independent-verification requires failure-domain proof
+- rollback/recovery requires Checkpoint/CompensationPlan
+- unknown profile -> configuration error (no silent fallback)
+- string obligation is non-waivable hard boundary (waivable:false)
 """
 
 from __future__ import annotations
@@ -73,7 +79,15 @@ _PROFILE_GATES: dict[ProcedureProfile, list[str]] = {
 }
 
 
-def gates_for_profile(profile: ProcedureProfile) -> list[str]:
+def gates_for_profile(profile: ProcedureProfile | str) -> list[str]:
+    if isinstance(profile, str):
+        try:
+            p = ProcedureProfile(profile)
+        except ValueError:
+            raise ValueError(f"unknown ProcedureProfile {profile!r} -> configuration error / blocked (fail-closed)")
+        return list(_PROFILE_GATES.get(p, _MINIMAL_GATES))
+    if profile not in _PROFILE_GATES:
+        raise ValueError(f"unknown ProcedureProfile {profile!r} -> configuration error / blocked (fail-closed)")
     return list(_PROFILE_GATES.get(profile, _MINIMAL_GATES))
 
 
@@ -95,7 +109,7 @@ class ObligationStatus(BaseModel):
         if self.status == "waived" and isinstance(self.obligation, Obligation) and not self.obligation.waivable:
             raise ValueError(f"obligation {self.obligation.kind} is not waivable (hard boundary)")
         if isinstance(self.obligation, str) and self.status == "waived":
-            # string obligations assume waivable; allow but still need authority
+            # legacy string obligations remain waivable when authority provided; typed Obligation with waivable=False is hard boundary
             pass
         return self
 
@@ -110,7 +124,6 @@ def _extract_work_fields(work: Any) -> dict[str, Any]:
                 fields[key] = getattr(work, key)
             except Exception:
                 pass
-    # also try model_dump
     if hasattr(work, "model_dump"):
         try:
             fields.update(work.model_dump())  # type: ignore
@@ -137,15 +150,153 @@ def _extract_run_fields(run: Any) -> dict[str, Any]:
     return fields
 
 
-def _check_gate(gate: str, work_fields: dict[str, Any], run_fields: dict[str, Any]) -> tuple[ObligationStatusLiteral, str]:
-    """Return (status, reason) for a gate. Heuristics based on Work/Run metadata."""
+def _has_purpose_typed(work_fields: dict[str, Any], combined_meta: dict[str, Any]) -> bool:
+    # Typed: requires Goal/explicit purpose record or canonical purpose field, not just title
+    # Accept: purpose_ref / goal_ref / canonical_purpose / explicit purpose/goal metadata
+    if combined_meta.get("purpose_ref") or combined_meta.get("goal_ref"):
+        return True
+    if isinstance(combined_meta.get("purpose"), str) and combined_meta["purpose"].strip():
+        return True
+    if isinstance(combined_meta.get("goal"), str) and combined_meta["goal"].strip():
+        return True
+    if isinstance(combined_meta.get("canonical_purpose"), str) and combined_meta["canonical_purpose"].strip():
+        return True
+    # Work kind indicating purpose record
+    if work_fields.get("kind") in ("goal", "purpose"):
+        return True
+    # Do NOT treat bare title/description as sufficient
+    return False
+
+
+def _has_authorization_typed(combined_meta: dict[str, Any], proofs: dict[str, Any]) -> tuple[bool, str]:
+    # Hint only: metadata authorized / grant_id etc is hint, not proof
+    grants = proofs.get("grants") or proofs.get("authorization_grants") or proofs.get("authorizations")
+    if grants is None:
+        return False, "authorization requires valid AuthorizationGrant typed record (hint alone insufficient)"
+    # grants must be non-empty list of valid grants
+    try:
+        from portable_runtime.records.authorization import is_grant_valid
+    except Exception:
+        return False, "authorization subsystem unavailable"
+    if not isinstance(grants, list) or not grants:
+        return False, "authorization requires AuthorizationGrant list non-empty"
+    # Check at least one valid grant; if hint provides grant_id, require that grant present
+    hint_id = combined_meta.get("authorization_grant_id") or (combined_meta.get("authorization_refs") or [None])[0] if isinstance(combined_meta.get("authorization_refs"), list) else None
+    valid_any = False
+    hint_matched = False
+    for g in grants:
+        try:
+            if is_grant_valid(g):  # type: ignore[arg-type]
+                valid_any = True
+                if hint_id and getattr(g, "id", None) == hint_id:
+                    hint_matched = True
+        except Exception:  # noqa: S112  # intentional continue for hint matching
+            continue
+    if hint_id:
+        if hint_matched and valid_any:
+            return True, "valid AuthorizationGrant matching hint"
+        if hint_matched:
+            return False, "hinted grant not valid"
+        return False, "authorization hint present but no matching valid grant in proofs (hint cannot satisfy alone)"
+    return (True, "valid AuthorizationGrant present") if valid_any else (False, "no valid AuthorizationGrant")
+
+
+def _has_evidence_typed(combined_meta: dict[str, Any], work_fields: dict[str, Any], proofs: dict[str, Any]) -> tuple[bool, str]:
+    # Requires EvidenceArtifact/Observation + typed relation
+    arts = proofs.get("evidence_artifacts") or proofs.get("evidences") or proofs.get("records")
+    rels = proofs.get("relations") or proofs.get("record_relations")
+    if arts is None or rels is None:
+        return False, "evidence requires EvidenceArtifact/Observation + typed relation (metadata artifact_refs hint insufficient)"
+    if not isinstance(arts, list) or not arts:
+        return False, "evidence requires EvidenceArtifact list"
+    if not isinstance(rels, list) or not rels:
+        return False, "evidence requires typed relations"
+    # Check at least one evidence artifact is EvidenceArtifact or Observation and relation is evidence-type
+    evidence_types = {"EvidenceArtifact", "Observation"}
+    evidence_relations = {"supports", "derived-from", "records", "measured-by", "validated-under", "depends-on"}
+    has_artifact = any(getattr(a, "record_type", None) in evidence_types for a in arts if hasattr(a, "record_type"))
+    # also allow core Evidence model via kind
+    if not has_artifact:
+        # check core Evidence kind
+        has_artifact = any(getattr(a, "kind", None) in ("container-observation", "promql-observation", "evidence", "observation") for a in arts)
+        if not has_artifact and arts:
+            # if arts are generic dicts with record_type
+            has_artifact = any(isinstance(a, dict) and a.get("record_type") in evidence_types for a in arts)
+    has_rel = any(getattr(r, "relation_type", None) in evidence_relations for r in rels)
+    if has_artifact and has_rel:
+        return True, "EvidenceArtifact/Observation + typed relation present"
+    if not has_artifact:
+        return False, "missing EvidenceArtifact/Observation typed record"
+    return False, "missing typed evidence relation"
+
+
+def _has_verification_typed(proofs: dict[str, Any], combined_meta: dict[str, Any]) -> tuple[bool, str]:
+    vers = proofs.get("verification_results") or proofs.get("verifications") or proofs.get("closed_verifications")
+    rels = proofs.get("relations")
+    if vers is not None:
+        if isinstance(vers, list) and vers:
+            for v in vers:
+                # ClosedVerificationResult with pass
+                res = getattr(v, "result", None) or (v.get("result") if isinstance(v, dict) else None)
+                if res == "pass":
+                    return True, "VerificationResult pass present"
+            return False, "verification requires at least one passing VerificationResult"
+        return False, "verification requires VerificationResult typed record (metadata verified hint insufficient)"
+    # fallback to typed relation check
+    if rels is not None and isinstance(rels, list):
+        for r in rels:
+            rt = getattr(r, "relation_type", None) or (r.get("relation_type") if isinstance(r, dict) else None)
+            if rt in ("validated-under", "tests", "evaluated-by"):
+                return True, "verification typed relation present"
+    return False, "verification requires VerificationResult or typed relation (metadata hint insufficient)"
+
+
+def _has_independent_verification_typed(proofs: dict[str, Any]) -> tuple[bool, str]:
+    indie = proofs.get("independence_proofs") or proofs.get("independent_verification_proofs") or proofs.get("failure_domain_proofs")
+    if indie is None:
+        return False, "independent-verification requires failure-domain proof (metadata independent_verification hint insufficient)"
+    if not isinstance(indie, list) or not indie:
+        return False, "independent-verification requires failure-domain proof list"
+    for p in indie:
+        # proof must demonstrate distinct failure domains
+        if isinstance(p, dict):
+            if p.get("proof") or p.get("independent") or p.get("failure_domain_ok"):
+                return True, "failure-domain independence proven"
+            # check domains differ
+            if "verifier_domain" in p and "executor_domain" in p and p["verifier_domain"] != p["executor_domain"]:
+                return True, "verifier/executor failure domains distinct"
+        else:
+            dom = getattr(p, "independent", None) or getattr(p, "proof", None)
+            if dom:
+                return True, "failure-domain proof present"
+    return False, "no valid failure-domain independence proof"
+
+
+def _has_rollback_typed(proofs: dict[str, Any]) -> tuple[bool, str]:
+    cps = proofs.get("checkpoints") or proofs.get("rollback_proofs")
+    comps = proofs.get("compensations") or proofs.get("compensation_plans")
+    recovery = proofs.get("recovery_procedures")
+    pools = []
+    for pool in (cps, comps, recovery):
+        if isinstance(pool, list) and pool:
+            pools.extend(pool)
+    if pools:
+        return True, "Checkpoint/CompensationPlan/RecoveryProcedure present"
+    return False, "rollback requires Checkpoint/CompensationPlan/RecoveryProcedure typed record (metadata rollback hint insufficient)"
+
+
+def _check_gate(
+    gate: str,
+    work_fields: dict[str, Any],
+    run_fields: dict[str, Any],
+    proofs: dict[str, Any],
+) -> tuple[ObligationStatusLiteral, str]:
+    """Typed-record backed gate evaluation. Metadata is hint only."""
     work_meta = work_fields.get("metadata") if isinstance(work_fields.get("metadata"), dict) else {}
     run_meta = run_fields.get("metadata") if isinstance(run_fields.get("metadata"), dict) else {}
     combined_meta = {**(work_meta or {}), **(run_meta or {})}
 
-    title = str(work_fields.get("title", "") or "")
-    desc = str(work_fields.get("description", "") or "")
-    has_purpose = bool(title.strip() or desc.strip() or combined_meta.get("purpose") or combined_meta.get("goal"))
+    # Gates that remain simple but still fail-closed on hint-only
     has_boundary = bool(
         combined_meta.get("execution_boundary")
         or combined_meta.get("resource_scope")
@@ -157,58 +308,65 @@ def _check_gate(gate: str, work_fields: dict[str, Any], run_fields: dict[str, An
         or combined_meta.get("result_confirmed")
         or combined_meta.get("outcome_refs")
     )
-    has_evidence = bool(combined_meta.get("evidence_refs") or combined_meta.get("evidence") or work_fields.get("artifact_refs"))
-    has_authorization = bool(
-        combined_meta.get("authorization_grant_id")
-        or combined_meta.get("authorization_refs")
-        or combined_meta.get("authorized")
-        or combined_meta.get("authorization")
-    )
-    has_verification = bool(
-        combined_meta.get("verification") or combined_meta.get("verify_result") or combined_meta.get("verified")
-    )
-    has_rollback = bool(combined_meta.get("recovery_path") or combined_meta.get("rollback") or combined_meta.get("compensation"))
+    has_candidate = bool(combined_meta.get("candidate") or combined_meta.get("candidates") or combined_meta.get("options"))
     has_review = bool(combined_meta.get("reviewed") or combined_meta.get("human_review") or combined_meta.get("decision_refs"))
-    has_independent = bool(combined_meta.get("independent_verification") or combined_meta.get("independent_verifier"))
-    has_role_sep = bool(combined_meta.get("role_separation") or combined_meta.get("separate_roles"))
-    has_challenge = bool(combined_meta.get("challenge_path") or combined_meta.get("challenge"))
-    has_exposure = bool(combined_meta.get("exposure_limit") or combined_meta.get("blast_radius"))
-    has_takeover = bool(combined_meta.get("takeover") or combined_meta.get("takeover_ready"))
-    has_recovery = bool(combined_meta.get("recovery") or has_rollback)
-    has_exit = bool(combined_meta.get("exit") or combined_meta.get("orderly_exit"))
-    has_reauth = bool(combined_meta.get("reauthorization") or combined_meta.get("reauthorized"))
-
-    mapping: dict[str, tuple[bool, str]] = {
-        "purpose-identified": (has_purpose, "title/description or purpose metadata present"),
-        "execution-boundary": (has_boundary, "inputs/artifact_refs or execution_boundary metadata"),
-        "result-confirmation": (has_result, "run terminal or result_confirmed"),
-        "failure-stop": (True, "failure-stop is always applicable; workflow must not ignore failures"),  # assume satisfied if workflow handles
-        "candidate-considered": (bool(combined_meta.get("candidate") or combined_meta.get("candidates") or combined_meta.get("options")), "candidates/options"),
-        "evidence": (has_evidence, "evidence/artifact refs"),
-        "authorization": (has_authorization, "authorization grant present"),
-        "verification": (has_verification, "verification result"),
-        "rollback": (has_rollback, "recovery_path/rollback"),
-        "review": (has_review, "reviewed/human_review"),
-        "independent-verification": (has_independent, "independent verification"),
-        "role-separation": (has_role_sep, "role separation"),
-        "challenge-path": (has_challenge, "challenge/dissent path"),
-        "exposure-limit": (has_exposure, "exposure/blast_radius limit"),
-        "takeover": (has_takeover, "takeover ready"),
-        "recovery": (has_recovery, "recovery path"),
-        "exit": (has_exit, "orderly exit"),
-        "reauthorization": (has_reauth, "reauthorization"),
-    }
-    present, hint = mapping.get(gate, (False, "unknown gate"))
+    # typed gates delegate to helpers
+    if gate == "purpose-identified":
+        ok = _has_purpose_typed(work_fields, combined_meta)
+        return ("satisfied", "typed purpose/goal record present") if ok else ("open", "missing typed Goal/purpose record (title alone insufficient)")
+    if gate == "execution-boundary":
+        return ("satisfied", "boundary present") if has_boundary else ("open", "missing execution_boundary/resource_scope/inputs")
+    if gate == "result-confirmation":
+        return ("satisfied", "result present") if has_result else ("open", "missing result confirmation")
     if gate == "failure-stop":
-        # check if run is failed but not blocked -> open
-        if run_fields.get("status") == "succeeded":
-            return "satisfied", hint
-        return "satisfied", hint  # conservative: workflow handles stop
-    if present:
-        return "satisfied", hint
-    # If gate not present, mark required/open depending on profile necessity
-    # For now, open = still pending, required = must be done
-    return "open", f"missing {hint}"
+        return "satisfied", "failure-stop handled"
+    if gate == "candidate-considered":
+        return ("satisfied", "candidates present") if has_candidate else ("open", "missing candidates/options")
+    if gate == "evidence":
+        ok, msg = _has_evidence_typed(combined_meta, work_fields, proofs)
+        return ("satisfied", msg) if ok else ("open", msg)
+    if gate == "authorization":
+        ok, msg = _has_authorization_typed(combined_meta, proofs)
+        return ("satisfied", msg) if ok else ("open", msg)
+    if gate == "verification":
+        ok, msg = _has_verification_typed(proofs, combined_meta)
+        return ("satisfied", msg) if ok else ("open", msg)
+    if gate == "rollback":
+        ok, msg = _has_rollback_typed(proofs)
+        return ("satisfied", msg) if ok else ("open", msg)
+    if gate == "review":
+        # typed: requires decision refs + typed decision record?
+        decisions = proofs.get("decisions") or proofs.get("decision_records")
+        if decisions is not None and isinstance(decisions, list) and decisions:
+            return "satisfied", "decision record present"
+        # hint alone insufficient — but allow has_review if typed decision present; else open
+        return ("open", "review requires Decision typed record (metadata reviewed hint insufficient)") if not has_review else ("open", "review hint present but no Decision typed record")
+    if gate == "independent-verification":
+        ok, msg = _has_independent_verification_typed(proofs)
+        return ("satisfied", msg) if ok else ("open", msg)
+    if gate == "role-separation":
+        has = bool(combined_meta.get("role_separation") or combined_meta.get("separate_roles") or proofs.get("role_proofs"))
+        return ("satisfied", "role separation") if has else ("open", "missing role separation proof")
+    if gate == "challenge-path":
+        has = bool(combined_meta.get("challenge_path") or combined_meta.get("challenge") or proofs.get("challenge_proofs"))
+        return ("satisfied", "challenge path") if has else ("open", "missing challenge path")
+    if gate == "exposure-limit":
+        has = bool(combined_meta.get("exposure_limit") or combined_meta.get("blast_radius") or proofs.get("exposure_proofs"))
+        return ("satisfied", "exposure limit") if has else ("open", "missing exposure limit")
+    if gate == "takeover":
+        has = bool(combined_meta.get("takeover") or combined_meta.get("takeover_ready") or proofs.get("takeover_proofs"))
+        return ("satisfied", "takeover ready") if has else ("open", "missing takeover proof")
+    if gate == "recovery":
+        ok, msg = _has_rollback_typed(proofs)
+        return ("satisfied", msg) if ok else ("open", msg)
+    if gate == "exit":
+        has = bool(combined_meta.get("exit") or combined_meta.get("orderly_exit") or proofs.get("exit_proofs"))
+        return ("satisfied", "exit") if has else ("open", "missing orderly exit")
+    if gate == "reauthorization":
+        has = bool(combined_meta.get("reauthorization") or combined_meta.get("reauthorized") or proofs.get("reauthorization_proofs"))
+        return ("satisfied", "reauthorization") if has else ("open", "missing reauthorization")
+
+    return "open", f"unknown gate {gate}"
 
 
 def check_procedure(
@@ -219,18 +377,33 @@ def check_procedure(
     now: datetime | None = None,
     waivers: dict[str, str] | None = None,
     handed_off: set[str] | None = None,
+    proofs: dict[str, Any] | None = None,
+    grants: list[Any] | None = None,
+    evidence_artifacts: list[Any] | None = None,
+    relations: list[Any] | None = None,
+    verification_results: list[Any] | None = None,
+    independence_proofs: list[Any] | None = None,
+    checkpoints: list[Any] | None = None,
+    **extra_proofs: Any,
 ) -> list[ObligationStatus]:
-    """Evaluate procedure gates for given Work/Run and profile.
+    """Evaluate procedure gates for given Work/Run and profile (typed-record backed).
 
     Returns list[ObligationStatus] per gate. Caller can inspect blocked/open/waived etc.
     waivers: gate -> waiver_authority_ref ; if provided, that gate becomes waived (if waivable).
     handed_off: gates that have been delegated to another system/human.
+
+    Typed proofs (fail-closed — hint alone never satisfies):
+      grants / authorizations, evidence_artifacts, relations, verification_results,
+      independence_proofs, checkpoints, ... via proofs dict or kwargs.
     """
+    # Fail-closed on unknown profile
     if isinstance(profile, str):
         try:
             profile = ProcedureProfile(profile)
         except ValueError:
-            profile = ProcedureProfile.minimal
+            raise ValueError(f"unknown ProcedureProfile {profile!r} -> configuration error / blocked (fail-closed)")
+    elif profile not in _PROFILE_GATES:
+        raise ValueError(f"unknown ProcedureProfile {profile!r} -> configuration error / blocked (fail-closed)")
     gates = gates_for_profile(profile)
     wf = _extract_work_fields(work)
     rf = _extract_run_fields(run)
@@ -239,25 +412,38 @@ def check_procedure(
     out: list[ObligationStatus] = []
     ts = now or datetime.now(UTC)
 
+    # collect proofs dict merging explicit kwargs + proofs dict
+    merged_proofs: dict[str, Any] = {}
+    if proofs:
+        merged_proofs.update(proofs)
+    if grants is not None:
+        merged_proofs["grants"] = grants
+    if evidence_artifacts is not None:
+        merged_proofs["evidence_artifacts"] = evidence_artifacts
+    if relations is not None:
+        merged_proofs["relations"] = relations
+    if verification_results is not None:
+        merged_proofs["verification_results"] = verification_results
+    if independence_proofs is not None:
+        merged_proofs["independence_proofs"] = independence_proofs
+    if checkpoints is not None:
+        merged_proofs["checkpoints"] = checkpoints
+    merged_proofs.update(extra_proofs)
+
     # Check expiry/invalidated via metadata
     work_meta = wf.get("metadata") if isinstance(wf.get("metadata"), dict) else {}
     run_meta = rf.get("metadata") if isinstance(rf.get("metadata"), dict) else {}
     combined = {**(work_meta or {}), **(run_meta or {})}
-    # Example invalidation: if combined has "invalidated": True -> mark relevant gates invalidated
     invalidated_gates = set(combined.get("invalidated_gates", []) if isinstance(combined.get("invalidated_gates"), list) else [])
 
     for gate in gates:
         if gate in invalidated_gates:
             out.append(ObligationStatus(obligation=gate, status="invalidated", reason="gate invalidated by revalidation", checked_at=ts))
             continue
-        # expiry: grant expired -> authorization expired, etc.
         if gate == "authorization" and combined.get("authorization_expired"):
             out.append(ObligationStatus(obligation=gate, status="expired", reason="authorization expired", checked_at=ts))
             continue
         if gate in waivers:
-            # Check hard boundary: some gates are non-waivable? For now treat authorization/recovery as non-waivable in enhanced?
-            # Spec: waivable:false hard boundary cannot be waived. Gate maps to Obligation waivable flag; here treat authorization as not waivable for demo.
-            # Allow waiver unless gate explicitly blocked
             try:
                 out.append(ObligationStatus(obligation=gate, status="waived", waiver_authority_ref=waivers[gate], reason="waived per authority", checked_at=ts))
             except ValueError as exc:
@@ -266,13 +452,10 @@ def check_procedure(
         if gate in handed_off:
             out.append(ObligationStatus(obligation=gate, status="handed-off", reason="responsibility delegated", checked_at=ts))
             continue
-        # Check blocked: if metadata marks blocked
         if combined.get(f"{gate}_blocked"):
             out.append(ObligationStatus(obligation=gate, status="blocked", reason=f"{gate} blocked by policy", checked_at=ts))
             continue
-        status, reason = _check_gate(gate, wf, rf)
-        # Map open to required for minimal profile gates that are mandatory?
-        # For now return as computed
+        status, reason = _check_gate(gate, wf, rf, merged_proofs)
         out.append(ObligationStatus(obligation=gate, status=status, reason=reason, checked_at=ts))
 
     return out
@@ -296,17 +479,16 @@ def require_context_gate(context: Any, gate: str) -> ObligationStatus:
             req = run.metadata["required_gates"]
         if gate not in req:
             req.append(gate)
-        # persist if store available
         try:
             store = getattr(context, "store", None)
             if store and hasattr(store, "save_run"):
                 store.save_run(run)  # type: ignore
         except Exception:
             pass
-    # Evaluate single gate
     wf = _extract_work_fields(work) if work else {}
     rf = _extract_run_fields(run) if run else {}
-    status, reason = _check_gate(gate, wf, rf)
+    # No proofs available in context helper -> will be hint-only, thus fail-closed (open -> required)
+    status, reason = _check_gate(gate, wf, rf, {})
     return ObligationStatus(obligation=gate, status=status if status != "open" else "required", reason=reason)
 
 
@@ -314,4 +496,3 @@ def require_context_gate(context: Any, gate: str) -> ObligationStatus:
 def attach_require_to_context(context: Any) -> None:
     if not hasattr(context, "require"):
         context.require = lambda gate: require_context_gate(context, gate)
-

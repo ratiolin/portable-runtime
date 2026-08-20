@@ -142,13 +142,42 @@ _KC_SUPPORTED = {"knowledge-consolidation", "knowledge_consolidation", "consolid
 
 
 def _is_promotable(item: Any, evidence_by_id: dict[str, Any]) -> tuple[bool, str]:
-    # item is KnowledgeItem
+    """Fail-closed: evidence existence alone does NOT imply promotable.
+
+    Requires explicit epistemic judgment refs + authorization refs + valid_scope + version context.
+    """
     if not getattr(item, "title", "") or not getattr(item, "content_ref", ""):
         return False, "missing title or content_ref"
     ev_refs: list[str] = list(getattr(item, "evidence_refs", []) or [])
     if not ev_refs:
         return False, "no evidence_refs"
-    # At least one evidence must be supported or exist
+    meta: dict[str, Any] = getattr(item, "metadata", {}) if isinstance(getattr(item, "metadata", {}), dict) else {}
+    judgment_refs = (
+        meta.get("epistemic_judgment_refs")
+        or getattr(item, "epistemic_judgment_refs", None)
+        or []
+    )
+    auth_refs = (
+        meta.get("authorization_refs")
+        or meta.get("authorization_grant_ids")
+        or getattr(item, "authorization_refs", None)
+        or []
+    )
+    valid_scope = getattr(item, "valid_scope", None) or meta.get("valid_scope") or {}
+    env_versions = (
+        getattr(item, "environment_versions", None)
+        or meta.get("environment_versions")
+        or meta.get("environment_bindings")
+        or {}
+    )
+    if not judgment_refs or not isinstance(judgment_refs, list) or not any(isinstance(x, str) and x.strip() for x in judgment_refs):  # noqa: E501
+        return False, "missing epistemic_judgment_refs (explicit judgment required)"  # noqa: E501
+    if not auth_refs or not isinstance(auth_refs, list) or not any(isinstance(x, str) and x.strip() for x in auth_refs):
+        return False, "missing authorization_refs (governance required)"
+    if not isinstance(valid_scope, dict) or not valid_scope:
+        return False, "missing valid_scope (scope required for official)"
+    if not isinstance(env_versions, dict) or not env_versions:
+        return False, "missing environment_versions/version context"
     has_supported = False
     for ref in ev_refs:
         ev = evidence_by_id.get(ref)
@@ -158,15 +187,12 @@ def _is_promotable(item: Any, evidence_by_id: dict[str, Any]) -> tuple[bool, str
         if status == "supported":
             has_supported = True
             break
-        if status in ("unverified", "unknown"):
-            has_supported = True
     if not has_supported:
-        # If none supported, check if evidence exists at all; if none exists, not promotable
         exists = any(r in evidence_by_id for r in ev_refs)
         if not exists:
             return False, "evidence refs do not exist"
-        return False, "no supported evidence"
-    return True, "validated"
+        return False, "no supported evidence (and explicit judgment still required)"
+    return True, "validated with explicit judgment + authorization + scope + version"
 
 
 class KnowledgeConsolidationWorkflow:
@@ -258,5 +284,10 @@ class KnowledgeConsolidationWorkflow:
         with contextlib.suppress(ValueError):
             context.transition_run("succeeded", current_step="kc-done")
         return "succeeded"
+
+
+
+
+
 
 

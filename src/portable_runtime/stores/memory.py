@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import threading
 import time
 from contextlib import contextmanager
 from typing import Any
@@ -48,19 +49,23 @@ class InMemoryStateStore:
             "authorization": {},
         }
         self._leases: dict[str, dict[str, Any]] = {}
+        self._lock = threading.RLock()
 
     def _save(self, kind: str, value: BaseModel) -> None:
         identifier = getattr(value, "id", None)
         if not isinstance(identifier, str):
             raise ValueError("runtime records require a string id")
-        self._records[kind][identifier] = value
+        with self._lock:
+            self._records[kind][identifier] = value
 
     def _get(self, kind: str, value_type: type[Any], identifier: str) -> Any | None:
-        value = self._records[kind].get(identifier)
+        with self._lock:
+            value = self._records[kind].get(identifier)
         return value if isinstance(value, value_type) else None
 
     def _list(self, kind: str, value_type: type[Any]) -> list[Any]:
-        values = [value for value in self._records[kind].values() if isinstance(value, value_type)]
+        with self._lock:
+            values = [value for value in self._records[kind].values() if isinstance(value, value_type)]
         return sorted(values, key=lambda value: value.created_at, reverse=True)
 
     def save_work(self, value: Work) -> None: self._save("work", value)
@@ -97,19 +102,20 @@ class InMemoryStateStore:
     def save_event(self, value: Event) -> None: self.append_event(value)
 
     def append_event(self, value: Event) -> None:
-        existing = self._records.get("event", {}).get(value.id)
-        if existing is not None:
-            try:
-                ex = existing.model_dump(mode="json").copy()
-                val = value.model_dump(mode="json").copy()
-                ex.pop("created_at", None)
-                val.pop("created_at", None)
-                if ex == val:
-                    return
-            except Exception:
-                pass
-            raise ValueError(f"event journal is append-only: refusing to overwrite event {value.id!r}")
-        self._save("event", value)
+        with self._lock:
+            existing = self._records.get("event", {}).get(value.id)
+            if existing is not None:
+                try:
+                    ex = existing.model_dump(mode="json").copy()
+                    val = value.model_dump(mode="json").copy()
+                    ex.pop("created_at", None)
+                    val.pop("created_at", None)
+                    if ex == val:
+                        return
+                except Exception:
+                    pass
+                raise ValueError(f"event journal is append-only: refusing to overwrite event {value.id!r}")
+            self._records["event"][value.id] = value
     def get_event(self, event_id: str) -> Event | None: return self._get("event", Event, event_id)
     def list_events(self, subject_ref: str | None = None) -> list[Event]:
         return [
@@ -137,60 +143,84 @@ class InMemoryStateStore:
     def save_compensation(self, value: Compensation) -> None: self._save("compensation", value)
 
     def compare_and_swap(self, kind: str, identifier: str, expected_version: int, new_value: Any) -> bool:
-        existing = self._records.get(kind, {}).get(identifier)
-        if existing is None:
-            return False
-        current_version = getattr(existing, "version", 0) if hasattr(existing, "version") else 0
-        if current_version != expected_version:
-            return False
-        self._records[kind][identifier] = new_value
-        return True
+        with self._lock:
+            existing = self._records.get(kind, {}).get(identifier)
+            if existing is None:
+                return False
+            current_version = getattr(existing, "version", 0) if hasattr(existing, "version") else 0
+            if current_version != expected_version:
+                return False
+            self._records[kind][identifier] = new_value
+            return True
 
     @contextmanager
     def transaction(self):
-        yield self
+        with self._lock:
+            yield self
 
     def acquire_lease(self, run_id: str, owner: str, ttl_seconds: float = 30) -> bool:
-        now = time.monotonic()
-        existing = self._leases.get(run_id)
-        if existing and existing["expires_at"] > now and existing["owner"] != owner:
-            return False
-        self._leases[run_id] = {"owner": owner, "expires_at": now + ttl_seconds, "generation": existing["generation"] + 1 if existing else 1}
-        run = self.get_run(run_id)
-        if run:
-            run.lease_owner = owner
-            run.lease_generation = self._leases[run_id]["generation"]
-            import datetime
-            run.lease_expires_at = datetime.datetime.now(datetime.UTC) + datetime.timedelta(seconds=ttl_seconds)
-            self.save_run(run)
-        return True
+        with self._lock:
+            now = time.monotonic()
+            existing = self._leases.get(run_id)
+            if existing and existing["expires_at"] > now and existing["owner"] != owner:
+                return False
+            generation = (existing["generation"] + 1 if existing else 1)
+            # also verify Run state generation monotonic
+            run = self._records.get("run", {}).get(run_id)
+            if isinstance(run, Run):
+                if run.lease_generation and run.lease_generation != (existing["generation"] if existing else 0):
+                    generation = max(generation, run.lease_generation + 1)
+            self._leases[run_id] = {"owner": owner, "expires_at": now + ttl_seconds, "generation": generation}
+            run_obj = self.get_run(run_id)
+            if run_obj:
+                run_obj.lease_owner = owner
+                run_obj.lease_generation = generation
+                import datetime
+                run_obj.lease_expires_at = datetime.datetime.now(datetime.UTC) + datetime.timedelta(seconds=ttl_seconds)
+                run_obj.heartbeat_at = run_obj.lease_expires_at
+                self._records["run"][run_id] = run_obj
+            return True
 
     def renew_lease(self, run_id: str, owner: str, ttl_seconds: float = 30) -> bool:
-        existing = self._leases.get(run_id)
-        if not existing or existing["owner"] != owner:
-            return False
-        existing["expires_at"] = time.monotonic() + ttl_seconds
-        return True
+        with self._lock:
+            existing = self._leases.get(run_id)
+            if not existing or existing["owner"] != owner:
+                return False
+            # fail closed if expired
+            if existing["expires_at"] <= time.monotonic():
+                return False
+            existing["expires_at"] = time.monotonic() + ttl_seconds
+            run_obj = self._records.get("run", {}).get(run_id)
+            if isinstance(run_obj, Run):
+                if run_obj.lease_owner != owner:
+                    return False
+                import datetime
+                run_obj.lease_expires_at = datetime.datetime.now(datetime.UTC) + datetime.timedelta(seconds=ttl_seconds)
+                run_obj.heartbeat_at = run_obj.lease_expires_at
+                self._records["run"][run_id] = run_obj
+            return True
 
     def release_lease(self, run_id: str, owner: str) -> bool:
-        existing = self._leases.get(run_id)
-        if not existing or existing["owner"] != owner:
-            return False
-        del self._leases[run_id]
-        return True
+        with self._lock:
+            existing = self._leases.get(run_id)
+            if not existing or existing["owner"] != owner:
+                return False
+            del self._leases[run_id]
+            run_obj = self._records.get("run", {}).get(run_id)
+            if isinstance(run_obj, Run) and run_obj.lease_owner == owner:
+                run_obj.lease_owner = None
+                self._records["run"][run_id] = run_obj
+            return True
 
     # Records V1.2
     def save_record(self, value: BaseRecord) -> None:
-        # Gracefully handle AuthorizationGrant mis-routed via save_record (used in some tests)
         try:
             from portable_runtime.records.authorization import AuthorizationGrant
             if isinstance(value, AuthorizationGrant):
-                # delegate to authorization bucket
                 self.save_authorization(value)
                 return
         except Exception:
             pass
-        # validate orthogonal dimensions
         from portable_runtime.records.validation import validate_record
         errs = validate_record(value)
         if errs:
@@ -209,13 +239,11 @@ class InMemoryStateStore:
         self._save("relation", value)
     def get_relation(self, relation_id: str) -> RecordRelation | None:
         return self._get("relation", RecordRelation, relation_id)
-    # Authorization (Bundle v2) — isolated from decision
     def save_authorization(self, value: Any) -> None:
         from portable_runtime.records.authorization import AuthorizationGrant
         if isinstance(value, AuthorizationGrant):
             from portable_runtime.records.authorization import validate_grant
             errs = validate_grant(value)
-            # allow saving even if expired? validate only structural? For now raise only on missing fields via model validation already
             if any("principal_ref required" in e or "grantee_ref required" in e or "allowed_capabilities" in e for e in errs):
                 raise ValueError("; ".join(errs))
         self._save("authorization", value)
@@ -230,10 +258,11 @@ class InMemoryStateStore:
         return [v for v in vals if relation_type is None or v.relation_type == relation_type]
 
     def export_state(self) -> dict[str, list[dict[str, object]]]:
-        return {
-            kind: [value.model_dump(mode="json") for value in values.values()]
-            for kind, values in self._records.items()
-        }
+        with self._lock:
+            return {
+                kind: [value.model_dump(mode="json") for value in values.values()]
+                for kind, values in self._records.items()
+            }
 
     def import_state(self, state: dict[str, list[dict[str, object]]]) -> None:
         types: dict[str, type[Any]] = {
@@ -253,23 +282,17 @@ class InMemoryStateStore:
             "record": BaseRecord,
             "relation": RecordRelation,
         }
-        # authorization handled separately
         try:
             from portable_runtime.records.authorization import AuthorizationGrant as _AuthGrant
             types["authorization"] = _AuthGrant
         except Exception:
             pass
-        for kind, values in state.items():
-            model_type = types.get(kind)
-            if model_type is None:
-                continue
-            for raw in values:
-                value = model_type.model_validate(raw)
-                self._records[kind][value.id] = value
-
-# noqa: E501 on long line handled
-
-
-
-
+        with self._lock:
+            for kind, values in state.items():
+                model_type = types.get(kind)
+                if model_type is None:
+                    continue
+                for raw in values:
+                    value = model_type.model_validate(raw)
+                    self._records[kind][value.id] = value
 

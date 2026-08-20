@@ -295,7 +295,7 @@ async def test_knowledge_consolidation_promote_and_archive() -> None:
         id=new_id("evidence"), kind="test", subject_refs=[work.id], artifact_refs=[], source="test", status="supported"
     )
     store.save_evidence(ev)
-    # Candidate with evidence -> should promote
+    # Candidate with evidence -> should promote (strict: needs judgment+auth+scope+version)
     ki_good = KnowledgeItem(
         id=new_id("knowledge"),
         kind="pattern",
@@ -304,6 +304,8 @@ async def test_knowledge_consolidation_promote_and_archive() -> None:
         status="candidate",
         evidence_refs=[ev.id],
         source_work_refs=[work.id],
+        valid_scope={"domain": "test"},
+        metadata={"epistemic_judgment_refs": ["j1"], "authorization_refs": ["a1"], "environment_versions": {"env": "v1"}},
     )
     store.save_knowledge(ki_good)
     # Candidate without evidence -> should archive

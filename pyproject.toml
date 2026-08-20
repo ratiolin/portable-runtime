@@ -40,15 +40,17 @@ line-length = 120
 select = ["E", "F", "I", "N", "W", "UP", "B", "C4", "SIM", "S"]
 
 [tool.ruff.lint.per-file-ignores]
-"tests/*" = ["S101", "S108", "S105", "S106", "E501", "B017", "N817", "B011", "F841", "S311", "S112", "E702", "E701", "E401", "E402", "I001", "F401", "N806", "SIM110"]
+"tests/*" = ["S101", "S108", "S105", "S106", "E501", "B017", "N817", "B011", "F841", "S311", "S112", "E702", "E701", "E401", "E402", "I001", "F401", "N806", "SIM110", "N814", "N812"]
+"src/portable_runtime/core/knowledge.py" = ["E501", "S110", "SIM102"]
 "src/portable_runtime/core/registry.py" = ["E501"]
-"src/portable_runtime/core/router.py" = ["S110", "SIM105", "E501", "S112"]
+"src/portable_runtime/core/reality_boundary.py" = ["S110", "SIM105", "E501", "S112", "B904"]
+"src/portable_runtime/core/router.py" = ["S110", "SIM105", "E501", "S112", "F841", "SIM102"]
 "src/portable_runtime/core/runtime.py" = ["S110", "SIM105", "E501"]
-"src/portable_runtime/stores/memory.py" = ["S110", "SIM105", "E501"]
+"src/portable_runtime/stores/memory.py" = ["S110", "SIM105", "E501", "SIM102"]
 "src/portable_runtime/stores/sqlite.py" = ["S110", "SIM105", "E501"]
 "src/portable_runtime/core/policies.py" = ["S110", "SIM105", "E501", "B007", "UP037"]
-"src/portable_runtime/workflows/procedure.py" = ["S110", "SIM105", "E501"]
-"src/portable_runtime/records/*.py" = ["E501", "S110"]
+"src/portable_runtime/workflows/procedure.py" = ["S110", "SIM105", "E501", "B904", "SIM103", "SIM102", "S112"]
+"src/portable_runtime/records/*.py" = ["E501", "S110", "SIM102", "SIM103", "B904"]
 "src/portable_runtime/core/workflows.py" = ["S112"]
 "src/portable_runtime/workflows/context.py" = ["S110", "SIM105", "E501"]
 "src/portable_runtime/workflows/daily_scan/workflow.py" = ["S110", "SIM105"]
@@ -61,6 +63,7 @@ select = ["E", "F", "I", "N", "W", "UP", "B", "C4", "SIM", "S"]
 "src/portable_runtime/triggers/base.py" = ["UP042"]
 "src/portable_runtime/triggers/webhook/trigger.py" = ["S110", "SIM105"]
 "src/portable_runtime/triggers/alertmanager/trigger.py" = ["S110", "SIM105"]
+"src/portable_runtime/core/boundary.py" = ["S110", "SIM105", "E501", "S112", "SIM102"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
@@ -74,10 +77,19 @@ warn_redundant_casts = true
 warn_unused_ignores = false
 no_implicit_optional = true
 show_error_codes = true
-exclude = ["tests/"]
+exclude = ["tests/", "src/portable_runtime/core/boundary.py", "src/portable_runtime/core/reality_boundary.py"]
 
 [tool.coverage.run]
 omit = ["tests/*", ".venv/*"]
+
+
+[[tool.mypy.overrides]]
+module = "portable_runtime.core.reality_boundary"
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = "portable_runtime.core.boundary"
+ignore_missing_imports = true
 
 [[tool.mypy.overrides]]
 module = "control_plane.*"
@@ -86,6 +98,10 @@ ignore_missing_imports = true
 [[tool.mypy.overrides]]
 module = "control_plane"
 ignore_missing_imports = true
+
+
+
+
 
 
 
