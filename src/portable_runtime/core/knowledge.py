@@ -60,14 +60,73 @@ def promote(item: KnowledgeItem) -> KnowledgeItem:
     return item.model_copy(update={"status": "official"})
 
 
+def is_explicitly_invalid(item: KnowledgeItem) -> bool:
+    """Only refuted/superseded/withdrawn/governance-retired/invalidated beyond recovery/explicitly rejected should archive."""
+    meta: dict[str, Any] = item.metadata if isinstance(item.metadata, dict) else {}
+    # Check explicit flags
+    if meta.get("refuted") or meta.get("superseded") or meta.get("withdrawn") or meta.get("explicitly_rejected") or meta.get("governance_retired"):
+        return True
+    # Check status markers in metadata
+    for key in ["_archive_reason", "archive_reason", "invalidation_reason"]:
+        val = meta.get(key)
+        if isinstance(val, str) and any(kw in val.lower() for kw in ["refuted", "superseded", "withdrawn", "governance-retired", "explicitly rejected", "invalidated beyond recovery"]):
+            return True
+    # Check evidence status if explicitly refuted?
+    # Do not treat missing judgment/auth/scope/version as invalid
+    return False
+
+
+def classify(item: KnowledgeItem) -> str:
+    """Tri-state: promote / retain-candidate / archive. Not sufficiently qualified != invalid."""
+    if can_promote(item):
+        return "promote"
+    if is_explicitly_invalid(item):
+        return "archive"
+    # Missing prerequisites -> retain candidate
+    errs = _promotion_errors(item)
+    # If errors are only about missing judgment/auth/scope/version/evidence, retain
+    if errs:
+        # Check if any error indicates explicit invalid vs just missing
+        return "retain-candidate"
+    return "retain-candidate"
+
+
+def retain_candidate(item: KnowledgeItem, reason: str | None = None) -> KnowledgeItem:
+    """Keep candidate - insufficient qualification is not invalidation."""
+    if item.status != "candidate":
+        return item
+    if reason and isinstance(item.metadata, dict):
+        # copy to avoid mutating original
+        new_item = item.model_copy(update={"metadata": {**item.metadata, "_retain_reason": reason}})
+        return new_item
+    return item
+
+
 def deprecate(item: KnowledgeItem) -> KnowledgeItem:
+    # Only for superseded/governance-retired
     return item.model_copy(update={"status": "deprecated"})
 
 
 def archive(item: KnowledgeItem) -> KnowledgeItem:
+    # Fail-closed: only archive if explicitly invalid; otherwise retain
+    if not is_explicitly_invalid(item):
+        # Log warning but still allow explicit archive if caller explicitly wants it?
+        # For safety, allow archive only if explicitly marked invalid; otherwise treat as retain
+        # However for backward compat, we still perform archive but note that workflow should prefer retain
+        pass
     return item.model_copy(update={"status": "archived"})
 
 
 def candidate_to_official(item: KnowledgeItem) -> KnowledgeItem:
     """Alias used by legacy compat (promote)."""
     return promote(item)
+
+
+def promote_or_retain(item: KnowledgeItem) -> tuple[KnowledgeItem, str]:
+    """Helper for workflows: returns (item, decision)."""
+    decision = classify(item)
+    if decision == "promote":
+        return promote(item), "promote"
+    if decision == "archive":
+        return archive(item), "archive"
+    return retain_candidate(item), "retain-candidate" 

@@ -11,11 +11,37 @@ from portable_runtime.core.capabilities import (
     InvocationContext,
     ProviderDescriptor,
 )
+from portable_runtime.core.capability_contract import (
+    CapabilityContractRegistry,
+    EffectContractInvalid,
+    compute_effective_impact,
+)
 from portable_runtime.core.models import Action, Event, Outcome, Step, StepAttempt, new_id, utcnow
 from portable_runtime.core.reliability import CircuitBreaker, ReliabilityControls
 from portable_runtime.core.router import ConstraintRouter
 
+CODE_FENCING_REJECTED = "FencingRejected"
+CODE_LEASE_UNAVAILABLE = "LeaseUnavailable"
+CODE_POLICY_DENIED = "PolicyDenied"
+CODE_POLICY_UNAVAILABLE = "PolicyUnavailable"
+CODE_OBLIGATION_UNSATISFIED = "ObligationUnsatisfied"
+CODE_PROCEDURE_INCOMPLETE = "ProcedureIncomplete"
+CODE_PROCEDURE_UNAVAILABLE = "ProcedureUnavailable"
+CODE_AUTHORIZATION_REQUIRED = "AuthorizationRequired"
+CODE_AUTHORIZATION_DENIED = "AuthorizationDenied"
+CODE_AUTHORIZATION_UNAVAILABLE = "AuthorizationUnavailable"
+CODE_EFFECT_CONTRACT_INVALID = "EffectContractInvalid"
+CODE_RELIABILITY_BLOCKED = "ReliabilityBlocked"
+CODE_INDEPENDENCE_UNSATISFIED = "IndependenceUnsatisfied"
+CODE_NO_ELIGIBLE_PROVIDER = "NoEligibleProvider"
+CODE_PRECOMMIT_FAILED = "PrecommitFailed"
+CODE_POST_FENCING_REJECTED = "PostFencingRejected"
+CODE_RESULT_COMMIT_FAILED = "ResultCommitFailed"
+CODE_STALE_RESULT = "StaleResult"
+BOUNDARY_ERROR_CODES = {CODE_FENCING_REJECTED, CODE_LEASE_UNAVAILABLE, CODE_POLICY_DENIED, CODE_POLICY_UNAVAILABLE, CODE_OBLIGATION_UNSATISFIED, CODE_PROCEDURE_INCOMPLETE, CODE_PROCEDURE_UNAVAILABLE, CODE_AUTHORIZATION_REQUIRED, CODE_AUTHORIZATION_DENIED, CODE_AUTHORIZATION_UNAVAILABLE, CODE_EFFECT_CONTRACT_INVALID, CODE_RELIABILITY_BLOCKED, CODE_INDEPENDENCE_UNSATISFIED, CODE_NO_ELIGIBLE_PROVIDER, CODE_PRECOMMIT_FAILED, CODE_POST_FENCING_REJECTED, CODE_RESULT_COMMIT_FAILED, CODE_STALE_RESULT}
+
 _EffectClass = Literal["pure", "idempotent", "deduplicatable", "reconcilable", "irreversible-opaque"]
+_IMPACT_ORDER = {"read": 0, "write-local": 1, "write-remote": 2, "deploy": 3, "admin": 4, "irreversible": 5}
 _CIRCUITS: dict[str, CircuitBreaker] = {}
 
 def _circuit_for(provider_id: str) -> CircuitBreaker:
@@ -80,13 +106,14 @@ def _append_event(store: Any, event_type: str, subject_ref: str, payload: dict[s
         pass
 
 class RealityBoundary:
-    def __init__(self, store: Any | None = None, registry: Any | None = None, *, routing: Any | None = None, policy_engine: Any | None = None, reliability: ReliabilityControls | None = None, runtime_id: str = "runtime") -> None:
+    def __init__(self, store: Any | None = None, registry: Any | None = None, *, routing: Any | None = None, policy_engine: Any | None = None, reliability: ReliabilityControls | None = None, runtime_id: str = "runtime", contract_registry: CapabilityContractRegistry | None = None) -> None:
         self.store = store
         self.registry = registry
         self.routing = routing or ConstraintRouter()
         self.policy_engine = policy_engine
         self.reliability = reliability or ReliabilityControls()
         self.runtime_id = runtime_id
+        self.contract_registry = contract_registry or CapabilityContractRegistry()
 
     def validate_fencing(self, request: CapabilityRequest) -> tuple[bool, str]:
         if self.store is None or request.run_id is None:
@@ -100,30 +127,135 @@ class RealityBoundary:
     def check_fencing(self, request: CapabilityRequest) -> tuple[bool, str]:
         return self.validate_fencing(request)
 
+    def _extract_actor(self, request: CapabilityRequest) -> str | None:
+        actor = getattr(request, "actor_ref", None)
+        if actor:
+            return actor
+        if isinstance(request.metadata, dict):
+            v = request.metadata.get("actor_ref")
+            if isinstance(v, str):
+                return v
+        return None
+    def _extract_resource(self, request: CapabilityRequest) -> str | None:
+        res = getattr(request, "resource_ref", None)
+        if res:
+            return res
+        if isinstance(request.metadata, dict):
+            v = request.metadata.get("resource_ref") or request.metadata.get("resource")
+            if isinstance(v, str):
+                return v
+            if isinstance(v, list) and v:
+                return str(v[0])
+        if isinstance(request.parameters, dict):
+            for k in ("resource", "path", "target"):
+                vv = request.parameters.get(k)
+                if isinstance(vv, str):
+                    return vv
+        return None
+    def _extract_versions(self, request: CapabilityRequest) -> list[str]:
+        svr = getattr(request, "subject_version_refs", None)
+        if isinstance(svr, list) and svr:
+            return [str(x) for x in svr]
+        if isinstance(request.metadata, dict):
+            v = request.metadata.get("subject_version_refs")
+            if isinstance(v, str):
+                return [v]
+            if isinstance(v, list) and v:
+                return [str(x) for x in v]
+        return []
+    def _effective_impact(self, request: CapabilityRequest, contract: any) -> str:
+        cmin = getattr(contract, "minimum_impact_class", "read") if contract else "read"
+        req = getattr(request, "effect_class", "read")
+        if isinstance(request.metadata, dict) and "requested_effect_class" in request.metadata:
+            req2 = request.metadata.get("requested_effect_class")
+            if isinstance(req2, str) and req2 in _IMPACT_ORDER and _IMPACT_ORDER.get(req2, 0) > _IMPACT_ORDER.get(req, 0):
+                req = req2
+        try:
+            return compute_effective_impact(cmin, None, req)  # type: ignore
+        except Exception:
+            return cmin
     def check_authorization(self, request: CapabilityRequest) -> tuple[bool, str]:
         try:
-            if self.store is not None and hasattr(self.store, "list_authorizations"):
-                grants = self.store.list_authorizations()  # type: ignore[attr-defined]
-                if not grants:
-                    return True, "no grants configured"
-                actor = getattr(request, "actor_ref", None) or (request.metadata.get("actor_ref") if isinstance(request.metadata, dict) else None)
-                if not actor:
-                    # if no actor, treat as not requiring auth for read-like
-                    return True, "no actor"
-                from portable_runtime.records.authorization import is_authorized_for  # noqa: PLC0415
-
-                resource = getattr(request, "resource_ref", None) or (request.metadata.get("resource_ref") if isinstance(request.metadata, dict) else None)
-                svr = getattr(request, "subject_version_refs", None) or (request.metadata.get("subject_version_refs") if isinstance(request.metadata, dict) else None) or []
-                action = {"capability": request.capability, "resource": resource, "subject_version_refs": svr, "actor_ref": actor, "effect_class": getattr(request, "effect_class", None)}
-                for g in grants:
-                    if getattr(g, "grantee_ref", None) == actor and is_authorized_for(action, g):
-                        return True, "authorized"
-                return False, f"no valid grant for actor {actor} capability {request.capability}"
-        except Exception as exc:  # noqa: BLE001
-            return False, f"auth check failed: {exc}"
-        return True, "authorized"
+            contract = self.contract_registry.resolve(request.capability)
+        except EffectContractInvalid as exc:
+            return False, f"EffectContractInvalid: {exc}"
+        except Exception as exc:
+            return False, f"contract resolve failed: {exc}"
+        req_level = getattr(contract, "authorization_requirement", "required")
+        if req_level == "none":
+            return True, "authorization not required by contract"
+        grants: list[any] | None = None
+        if self.store is None or not hasattr(self.store, "list_authorizations"):
+            if req_level == "required":
+                return False, "AuthorizationRequired: authorization store unavailable"
+            return True, "no store, optional auth"
+        try:
+            grants = self.store.list_authorizations()  # type: ignore[attr-defined]
+        except Exception as exc:
+            return False, f"AuthorizationUnavailable: authorization store failure: {exc}"
+        if not grants:
+            if req_level == "required":
+                return False, "AuthorizationRequired: no grants for capability requiring authorization"
+            return True, "no grants, optional"
+        actor = self._extract_actor(request)
+        if not actor:
+            if req_level == "required":
+                return False, "AuthorizationRequired: actor missing"
+            return True, "no actor, optional"
+        if getattr(contract, "resource_required", False):
+            res = self._extract_resource(request)
+            if not res:
+                return False, "AuthorizationRequired: resource missing but contract requires resource"
+        if getattr(contract, "subject_version_required", False):
+            vers = self._extract_versions(request)
+            if not vers:
+                return False, "AuthorizationRequired: subject_version missing but contract requires version"
+        effective = self._effective_impact(request, contract)
+        from portable_runtime.records.authorization import is_authorized_for  # noqa: PLC0415
+        resource = self._extract_resource(request)
+        svr = self._extract_versions(request)
+        action = {"capability": request.capability, "resource": resource, "subject_version_refs": svr, "actor_ref": actor, "effect_class": effective}
+        any_match = False
+        for g in grants:
+            try:
+                if getattr(g, "grantee_ref", None) != actor:
+                    continue
+                any_match = True
+                if is_authorized_for(action, g):
+                    return True, "authorized"
+            except Exception as exc:
+                return False, f"AuthorizationUnavailable: grant parse error {exc}"
+        if not any_match:
+            return False, f"AuthorizationDenied: no grant for actor {actor}"
+        return False, f"AuthorizationDenied: no valid grant authorizes {request.capability} with effective_impact {effective} for actor {actor}"
 
     async def execute(self, request: CapabilityRequest, *, capability_service: Any | None = None) -> CapabilityResult:
+        # CapabilityContract resolve + effective impact (never downgrade)
+        _contract: any = None
+        try:
+            _contract = self.contract_registry.resolve(request.capability)
+        except EffectContractInvalid as exc:
+            _append_event(self.store, CODE_EFFECT_CONTRACT_INVALID, request.id, {"capability": request.capability, "reason": str(exc)})
+            return CapabilityResult(request_id=request.id, provider_id="", status="unavailable", message=str(exc), error={"code": CODE_EFFECT_CONTRACT_INVALID, "reason": str(exc), "capability": request.capability})
+        except Exception as exc:
+            _append_event(self.store, CODE_EFFECT_CONTRACT_INVALID, request.id, {"reason": str(exc)})
+            return CapabilityResult(request_id=request.id, provider_id="", status="unavailable", message=f"contract resolve failed: {exc}", error={"code": CODE_EFFECT_CONTRACT_INVALID, "reason": str(exc)})
+        try:
+            _effective = self._effective_impact(request, _contract)
+            _cur = getattr(request, "effect_class", "read")
+            if _IMPACT_ORDER.get(_effective, 0) > _IMPACT_ORDER.get(_cur, 0):
+                request = request.model_copy(update={"effect_class": _effective})
+                if isinstance(request.metadata, dict):
+                    request.metadata["effective_impact"] = _effective
+            else:
+                if isinstance(request.metadata, dict) and "effective_impact" not in request.metadata:
+                    request.metadata["effective_impact"] = _cur
+            if _contract and hasattr(_contract, "effect_semantics"):
+                if isinstance(request.metadata, dict) and "effect_semantics" not in request.metadata:
+                    request.metadata["effect_semantics"] = _contract.effect_semantics
+        except Exception:
+            pass
+        contract = _contract
         registry = self.registry or (getattr(capability_service, "registry", None) if capability_service else None)
         store = self.store or (getattr(capability_service, "store", None) if capability_service else None)
         routing = self.routing
@@ -177,21 +309,18 @@ class RealityBoundary:
                         return CapabilityResult(request_id=request.id, provider_id="", status="unavailable", message=f"procedure blocked: {blocked[0].obligation}", error={"code": "ProcedureBlocked"})
         except Exception:
             pass
-        try:
-            if store is not None and hasattr(store, "list_authorizations"):
-                grants = store.list_authorizations()
-                if grants:
-                    actor = request.actor_ref or (request.metadata.get("actor_ref") if isinstance(request.metadata, dict) else None)
-                    if actor:
-                        from portable_runtime.records.authorization import is_authorized_for
-                        action = {"capability": request.capability, "resource": request.resource_ref or (request.metadata.get("resource_ref") if isinstance(request.metadata, dict) else None) or request.parameters.get("resource") or request.parameters.get("path"), "subject_version_refs": request.subject_version_refs or (request.metadata.get("subject_version_refs") if isinstance(request.metadata, dict) else None), "actor_ref": actor}
-                        if not any(is_authorized_for(action, g) for g in grants if getattr(g, "grantee_ref", None) == actor):
-                            matches_actor = [g for g in grants if getattr(g, "grantee_ref", None) == actor]
-                            if matches_actor:
-                                _append_event(store, "AuthorizationDenied", request.id, {"actor": actor})
-                                return CapabilityResult(request_id=request.id, provider_id="", status="unavailable", message="authorization denied", error={"code": "AuthorizationDenied"})
-        except Exception:
-            pass
+        auth_ok, auth_reason = self.check_authorization(request)
+        if not auth_ok:
+            if "EffectContractInvalid" in auth_reason:
+                _code = CODE_EFFECT_CONTRACT_INVALID
+            elif "AuthorizationRequired" in auth_reason:
+                _code = CODE_AUTHORIZATION_REQUIRED
+            elif "AuthorizationUnavailable" in auth_reason:
+                _code = CODE_AUTHORIZATION_UNAVAILABLE
+            else:
+                _code = CODE_AUTHORIZATION_DENIED
+            _append_event(store, _code, request.id, {"reason": auth_reason, "actor": self._extract_actor(request)})
+            return CapabilityResult(request_id=request.id, provider_id="", status="unavailable", message=auth_reason, error={"code": _code, "reason": auth_reason})
         try:
             side_effect = False
             if descriptors:
@@ -223,6 +352,11 @@ class RealityBoundary:
             return CapabilityResult(request_id=request.id, provider_id="", status="unavailable", message=f"capability unavailable: {request.capability}")
         side_effect_class: _EffectClass = getattr(selected, "side_effect_class", "pure")  # type: ignore
         effect_semantics = getattr(selected, "effect_semantics", side_effect_class)
+        if contract and hasattr(contract, "effect_semantics"):
+            _ord = {"pure": 0, "idempotent": 1, "deduplicatable": 2, "reconcilable": 3, "irreversible-opaque": 4}
+            _c = contract.effect_semantics
+            if _ord.get(_c, 0) > _ord.get(effect_semantics, 0):
+                effect_semantics = _c
         step_id: str | None = None
         attempt_id: str | None = None
         action_id: str | None = None

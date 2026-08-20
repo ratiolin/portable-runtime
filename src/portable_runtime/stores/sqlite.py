@@ -74,6 +74,11 @@ class SQLiteStateStore:
                 "kind TEXT NOT NULL, id TEXT NOT NULL, data TEXT NOT NULL, "
                 "created_at TEXT NOT NULL, PRIMARY KEY(kind, id))"
             )
+            self._connection.execute(
+                "CREATE TABLE IF NOT EXISTS runtime_leases ("
+                "run_id TEXT PRIMARY KEY, owner TEXT, generation INTEGER NOT NULL, "
+                "expires_at TEXT, heartbeat_at TEXT, version INTEGER NOT NULL)"
+            )
 
     def close(self) -> None:
         with self._lock:
@@ -171,49 +176,22 @@ class SQLiteStateStore:
     def get_checkpoint(self, checkpoint_id: str) -> Checkpoint | None: return self._get("checkpoint", Checkpoint, checkpoint_id)
     def save_compensation(self, value: Compensation) -> None: self._save("compensation", value)
     def compare_and_swap(self, kind: str, identifier: str, expected_version: int, new_value) -> bool:
-        # Atomic conditional update: verify version inside transaction and check rowcount
         import json as _json
 
-        data = new_value.model_dump(mode="json")  # type: ignore[attr-defined]
+        data = new_value.model_dump(mode="json")
         raw = _json.dumps(data, ensure_ascii=False)
         created_at = data.get("created_at", "") if isinstance(data, dict) else ""
         with self._lock:
-            # Use transaction for atomicity
             cur = self._connection.cursor()
             try:
-                cur.execute("BEGIN EXCLUSIVE")
-                # Verify current version via json_extract for atomic check
-                row = cur.execute(
-                    "SELECT data FROM runtime_records WHERE kind=? AND id=?",
-                    (kind, identifier),
-                ).fetchone()
-                if row is None:
-                    cur.execute("ROLLBACK")
-                    return False
-                try:
-                    existing_data = _json.loads(row["data"])
-                    cur_ver = existing_data.get("version", 0) if isinstance(existing_data, dict) else 0
-                except Exception:
-                    cur_ver = 0
-                if cur_ver != expected_version:
-                    cur.execute("ROLLBACK")
-                    return False
+                cur.execute("BEGIN IMMEDIATE")
                 cur.execute(
-                    "UPDATE runtime_records SET data=?, created_at=? WHERE kind=? AND id=? AND json_extract(data, ''$.version'') = ?",
+                    "UPDATE runtime_records SET data=?, created_at=? WHERE kind=? AND id=? AND CAST(json_extract(data, '$.version') AS INTEGER)=?",
                     (raw, created_at, kind, identifier, expected_version),
                 )
-                # Fallback: if json_extract not matching due to missing version field, try alternative where clause
-                if cur.rowcount == 0:
-                    # Try direct update with version check via previous read (still within transaction)
-                    cur.execute(
-                        "INSERT INTO runtime_records(kind, id, data, created_at) VALUES (?, ?, ?, ?) ON CONFLICT(kind, id) DO UPDATE SET data=excluded.data, created_at=excluded.created_at WHERE json_extract(data, ''$.version'') = ? OR json_extract(excluded.data, ''$.version'') = ?",
-                        (kind, identifier, raw, created_at, str(expected_version), str(expected_version)),
-                    )
-                    # If still 0, check if we successfully wrote via conditional
-                    if cur.rowcount == 0:
-                        # Final fallback: ensure version matches by re-reading after write attempt
-                        cur.execute("ROLLBACK")
-                        return False
+                if cur.rowcount != 1:
+                    cur.execute("ROLLBACK")
+                    return False
                 cur.execute("COMMIT")
                 return True
             except Exception:
@@ -237,35 +215,163 @@ class SQLiteStateStore:
         return _tx()
     def acquire_lease(self, run_id: str, owner: str, ttl_seconds: float = 30) -> bool:
         import datetime
-        run = self.get_run(run_id)
-        if run is None:
-            return False
-        now = datetime.datetime.now(datetime.UTC)
-        if run.lease_owner and run.lease_owner != owner and run.lease_expires_at and run.lease_expires_at > now:
-            return False
-        run.lease_owner = owner
-        run.lease_generation = (run.lease_generation or 0) + 1
-        run.lease_expires_at = now + datetime.timedelta(seconds=ttl_seconds)
-        run.heartbeat_at = now
-        self.save_run(run)
-        return True
+        import json as _json2
+        with self._lock:
+            cur = self._connection.cursor()
+            try:
+                cur.execute("BEGIN IMMEDIATE")
+                row = cur.execute("SELECT data FROM runtime_records WHERE kind=? AND id=?", ("run", run_id)).fetchone()
+                if row is None:
+                    cur.execute("ROLLBACK")
+                    return False
+                lease_row = cur.execute("SELECT owner, generation, expires_at FROM runtime_leases WHERE run_id=?", (run_id,)).fetchone()
+                now = datetime.datetime.now(datetime.UTC)
+                now_iso = now.isoformat()
+                expires_iso = (now + datetime.timedelta(seconds=ttl_seconds)).isoformat()
+                if lease_row is not None:
+                    exp_raw = lease_row["expires_at"]
+                    gen = int(lease_row["generation"] or 0)
+                    try:
+                        exp_dt = datetime.datetime.fromisoformat(exp_raw) if isinstance(exp_raw, str) else None
+                        if exp_dt is not None and exp_dt.tzinfo is None:
+                            exp_dt = exp_dt.replace(tzinfo=datetime.timezone.utc)
+                    except Exception:
+                        exp_dt = None
+                    if lease_row["owner"] != owner and exp_dt is not None and exp_dt > now:
+                        cur.execute("ROLLBACK")
+                        return False
+                    new_gen = gen + 1
+                    cur.execute(
+                        "INSERT INTO runtime_leases(run_id, owner, generation, expires_at, heartbeat_at, version) VALUES (?,?,?,?,?,?) ON CONFLICT(run_id) DO UPDATE SET owner=excluded.owner, generation=excluded.generation, expires_at=excluded.expires_at, heartbeat_at=excluded.heartbeat_at, version=excluded.version",
+                        (run_id, owner, new_gen, expires_iso, now_iso, new_gen),
+                    )
+                else:
+                    try:
+                        data = _json2.loads(row["data"]) if isinstance(row["data"], str) else {}
+                        cur_gen = int(data.get("lease_generation") or 0)
+                        cur_owner = data.get("lease_owner")
+                        cur_exp_raw = data.get("lease_expires_at")
+                    except Exception:
+                        cur_gen = 0
+                        cur_owner = None
+                        cur_exp_raw = None
+                    if cur_owner and cur_owner != owner and cur_exp_raw:
+                        try:
+                            cur_exp = datetime.datetime.fromisoformat(cur_exp_raw) if isinstance(cur_exp_raw, str) else None
+                            if cur_exp is not None and cur_exp.tzinfo is None:
+                                cur_exp = cur_exp.replace(tzinfo=datetime.timezone.utc)
+                            if cur_exp is not None and cur_exp > now:
+                                cur.execute("ROLLBACK")
+                                return False
+                        except Exception:
+                            pass
+                    new_gen = cur_gen + 1
+                    cur.execute(
+                        "INSERT INTO runtime_leases(run_id, owner, generation, expires_at, heartbeat_at, version) VALUES (?,?,?,?,?,?) ON CONFLICT(run_id) DO UPDATE SET owner=excluded.owner, generation=excluded.generation, expires_at=excluded.expires_at, heartbeat_at=excluded.heartbeat_at, version=excluded.version",
+                        (run_id, owner, new_gen, expires_iso, now_iso, new_gen),
+                    )
+                cur_row = cur.execute("SELECT data, created_at FROM runtime_records WHERE kind=? AND id=?", ("run", run_id)).fetchone()
+                if cur_row is not None:
+                    try:
+                        rd = _json2.loads(cur_row["data"])
+                    except Exception:
+                        rd = {}
+                    rd["lease_owner"] = owner
+                    rd["lease_generation"] = new_gen
+                    rd["lease_expires_at"] = expires_iso
+                    rd["heartbeat_at"] = now_iso
+                    raw = _json2.dumps(rd, ensure_ascii=False)
+                    created_at = rd.get("created_at") or cur_row["created_at"] or now_iso
+                    cur.execute("UPDATE runtime_records SET data=?, created_at=? WHERE kind=? AND id=?", (raw, created_at, "run", run_id))
+                cur.execute("COMMIT")
+                return True
+            except Exception:
+                try:
+                    cur.execute("ROLLBACK")
+                except Exception:
+                    pass
+                return False
+
     def renew_lease(self, run_id: str, owner: str, ttl_seconds: float = 30) -> bool:
         import datetime
-        run = self.get_run(run_id)
-        if not run or run.lease_owner != owner:
-            return False
-        now = datetime.datetime.now(datetime.UTC)
-        run.lease_expires_at = now + datetime.timedelta(seconds=ttl_seconds)
-        run.heartbeat_at = now
-        self.save_run(run)
-        return True
+        import json as _json2
+        with self._lock:
+            cur = self._connection.cursor()
+            try:
+                cur.execute("BEGIN IMMEDIATE")
+                lease_row = cur.execute("SELECT owner, generation, expires_at FROM runtime_leases WHERE run_id=?", (run_id,)).fetchone()
+                now = datetime.datetime.now(datetime.UTC)
+                if lease_row is None or lease_row["owner"] != owner:
+                    cur.execute("ROLLBACK")
+                    return False
+                try:
+                    exp_dt = datetime.datetime.fromisoformat(lease_row["expires_at"]) if isinstance(lease_row["expires_at"], str) else None
+                    if exp_dt is not None and exp_dt.tzinfo is None:
+                        exp_dt = exp_dt.replace(tzinfo=datetime.timezone.utc)
+                    if exp_dt is not None and exp_dt <= now:
+                        cur.execute("ROLLBACK")
+                        return False
+                except Exception:
+                    pass
+                expires_iso = (now + datetime.timedelta(seconds=ttl_seconds)).isoformat()
+                now_iso = now.isoformat()
+                cur.execute("UPDATE runtime_leases SET expires_at=?, heartbeat_at=? WHERE run_id=?", (expires_iso, now_iso, run_id))
+                cur_row = cur.execute("SELECT data, created_at FROM runtime_records WHERE kind=? AND id=?", ("run", run_id)).fetchone()
+                if cur_row is not None:
+                    try:
+                        rd = _json2.loads(cur_row["data"])
+                    except Exception:
+                        rd = {}
+                    if rd.get("lease_owner") != owner:
+                        cur.execute("ROLLBACK")
+                        return False
+                    rd["lease_expires_at"] = expires_iso
+                    rd["heartbeat_at"] = now_iso
+                    raw = _json2.dumps(rd, ensure_ascii=False)
+                    created_at = rd.get("created_at") or cur_row["created_at"] or now_iso
+                    cur.execute("UPDATE runtime_records SET data=?, created_at=? WHERE kind=? AND id=?", (raw, created_at, "run", run_id))
+                cur.execute("COMMIT")
+                return True
+            except Exception:
+                try:
+                    cur.execute("ROLLBACK")
+                except Exception:
+                    pass
+                return False
+
     def release_lease(self, run_id: str, owner: str) -> bool:
-        run = self.get_run(run_id)
-        if not run or run.lease_owner != owner:
-            return False
-        run.lease_owner = None
-        self.save_run(run)
-        return True
+        import datetime
+        import json as _json2
+        with self._lock:
+            cur = self._connection.cursor()
+            try:
+                cur.execute("BEGIN IMMEDIATE")
+                lease_row = cur.execute("SELECT owner FROM runtime_leases WHERE run_id=?", (run_id,)).fetchone()
+                if lease_row is None or lease_row["owner"] != owner:
+                    cur.execute("ROLLBACK")
+                    return False
+                cur.execute("DELETE FROM runtime_leases WHERE run_id=?", (run_id,))
+                cur_row = cur.execute("SELECT data, created_at FROM runtime_records WHERE kind=? AND id=?", ("run", run_id)).fetchone()
+                if cur_row is not None:
+                    try:
+                        rd = _json2.loads(cur_row["data"])
+                    except Exception:
+                        rd = {}
+                    if rd.get("lease_owner") != owner:
+                        cur.execute("ROLLBACK")
+                        return False
+                    rd["lease_owner"] = None
+                    raw = _json2.dumps(rd, ensure_ascii=False)
+                    created_at = rd.get("created_at") or cur_row["created_at"] or ""
+                    cur.execute("UPDATE runtime_records SET data=?, created_at=? WHERE kind=? AND id=?", (raw, created_at, "run", run_id))
+                cur.execute("COMMIT")
+                return True
+            except Exception:
+                try:
+                    cur.execute("ROLLBACK")
+                except Exception:
+                    pass
+                return False
 
     # Records V1.2
     def save_record(self, value: BaseRecord) -> None:

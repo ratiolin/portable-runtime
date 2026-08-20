@@ -341,8 +341,9 @@ async def test_knowledge_consolidation_promote_and_archive() -> None:
     archived = store.get_knowledge(ki_bad.id)
     archived2 = store.get_knowledge(ki_bad2.id)
     assert promoted is not None and promoted.status == "official"
-    assert archived is not None and archived.status == "archived"
-    assert archived2 is not None and archived2.status == "archived"
+    # P1-3: missing prerequisites -> retain candidate, not archive
+    assert archived is not None and archived.status == "candidate"
+    assert archived2 is not None and archived2.status == "candidate"
 
 
 @pytest.mark.asyncio

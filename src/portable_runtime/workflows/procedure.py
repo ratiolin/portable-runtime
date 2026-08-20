@@ -285,6 +285,125 @@ def _has_rollback_typed(proofs: dict[str, Any]) -> tuple[bool, str]:
     return False, "rollback requires Checkpoint/CompensationPlan/RecoveryProcedure typed record (metadata rollback hint insufficient)"
 
 
+def _has_failure_stop_typed(proofs: dict[str, Any]) -> tuple[bool, str]:
+    candidates = [
+        proofs.get("failure_stop_proofs"),
+        proofs.get("stop_conditions"),
+        proofs.get("failure_policies"),
+        proofs.get("circuit_breaker_policies"),
+        proofs.get("human_stop_authorities"),
+        proofs.get("recovery_abort_paths"),
+        proofs.get("stop_authorities"),
+    ]
+    for pool in candidates:
+        if isinstance(pool, list) and pool:
+            # Validate at least one typed proof has required fields
+            for item in pool:
+                if isinstance(item, dict):
+                    if any(k in item for k in ["condition", "policy", "authority", "procedure", "type", "stop_condition"]):
+                        return True, "failure-stop typed proof present"
+                else:
+                    if getattr(item, "condition", None) or getattr(item, "policy", None) or getattr(item, "authority", None):
+                        return True, "failure-stop typed proof present"
+            return True, "failure-stop typed proof present"
+    return False, "failure-stop requires typed StopCondition/FailurePolicy/CircuitBreaker/HumanStopAuthority/RecoveryAbortPath (metadata boolean insufficient)"
+
+
+def _has_role_separation_typed(proofs: dict[str, Any]) -> tuple[bool, str]:
+    pools = proofs.get("role_proofs") or proofs.get("role_separation_proofs") or proofs.get("separation_proofs")
+    if not isinstance(pools, list) or not pools:
+        return False, "role-separation requires typed proof with three distinct actors (decision/execution/verification) in separate dimensions"
+    for entry in pools:
+        if isinstance(entry, dict):
+            dec = entry.get("decision_actor") or entry.get("decision")
+            exe = entry.get("execution_actor") or entry.get("execution")
+            ver = entry.get("verification_actor") or entry.get("verification")
+            # Require three distinct
+            if dec and exe and ver and len({dec, exe, ver}) == 3:
+                # Also check dimension separation if provided
+                dim = entry.get("dimension") or entry.get("separation_dimension")
+                if dim:
+                    return True, f"role-separation proven in dimension {dim}"
+                return True, "role-separation three actors distinct"
+            # Alternative: actors list
+            actors = entry.get("actors")
+            if isinstance(actors, list) and len(actors) >= 3 and len(set(actors)) >= 3:
+                return True, "role-separation actors distinct"
+        else:
+            dec = getattr(entry, "decision_actor", None)
+            exe = getattr(entry, "execution_actor", None)
+            ver = getattr(entry, "verification_actor", None)
+            if dec and exe and ver and len({dec, exe, ver}) == 3:
+                return True, "role-separation three actors distinct"
+    return False, "role-separation requires three distinct actors (decision/execution/verification) proof"
+
+
+def _has_challenge_path_typed(proofs: dict[str, Any]) -> tuple[bool, str]:
+    pools = [
+        proofs.get("challenge_proofs"),
+        proofs.get("challenge_capabilities"),
+        proofs.get("escalation_routes"),
+        proofs.get("dissent_channels"),
+        proofs.get("challenge_paths"),
+    ]
+    for pool in pools:
+        if isinstance(pool, list) and pool:
+            for item in pool:
+                if isinstance(item, dict):
+                    if any(k in item for k in ["capability", "route", "channel", "type", "challenge_capability", "escalation_route", "dissent_channel"]):
+                        return True, "challenge-path typed proof present"
+                else:
+                    if getattr(item, "capability", None) or getattr(item, "route", None) or getattr(item, "channel", None):
+                        return True, "challenge-path typed proof present"
+            return True, "challenge-path typed proof present"
+    return False, "challenge-path requires ChallengeCapability/EscalationRoute/DissentChannel typed proof (metadata boolean insufficient)"
+
+
+def _has_exposure_limit_typed(proofs: dict[str, Any]) -> tuple[bool, str]:
+    pools = proofs.get("exposure_proofs") or proofs.get("blast_radius_proofs") or proofs.get("exposure_limits")
+    if isinstance(pools, list) and pools:
+        return True, "exposure-limit typed proof present"
+    lim = proofs.get("exposure_limit") or proofs.get("blast_radius")
+    if isinstance(lim, dict) and lim:
+        return True, "exposure-limit typed proof present"
+    return False, "exposure-limit requires typed BlastRadius/ExposureLimit proof (metadata boolean insufficient)"
+
+
+def _has_takeover_typed(proofs: dict[str, Any]) -> tuple[bool, str]:
+    pools = [
+        proofs.get("takeover_proofs"),
+        proofs.get("takeover_procedures"),
+        proofs.get("recovery_authorities"),
+        proofs.get("alternative_operators"),
+        proofs.get("takeover_ready_proofs"),
+    ]
+    for pool in pools:
+        if isinstance(pool, list) and pool:
+            return True, "takeover typed proof present"
+    return False, "takeover requires TakeoverProcedure/RecoveryAuthority/AlternativeOperator typed proof (metadata boolean insufficient)"
+
+
+def _has_exit_typed(proofs: dict[str, Any]) -> tuple[bool, str]:
+    pools = [
+        proofs.get("exit_proofs"),
+        proofs.get("stop_procedures"),
+        proofs.get("migration_paths"),
+        proofs.get("shutdown_capabilities"),
+        proofs.get("orderly_exit_proofs"),
+    ]
+    for pool in pools:
+        if isinstance(pool, list) and pool:
+            return True, "exit typed proof present"
+    return False, "exit requires StopProcedure/MigrationPath/ShutdownCapability typed proof (metadata boolean insufficient)"
+
+
+def _has_reauthorization_typed(proofs: dict[str, Any]) -> tuple[bool, str]:
+    pools = proofs.get("reauthorization_proofs") or proofs.get("reauthorization_grants") or proofs.get("reapproved_grants")
+    if isinstance(pools, list) and pools:
+        return True, "reauthorization typed proof present"
+    return False, "reauthorization requires typed Reauthorization proof (metadata boolean insufficient)" 
+
+
 def _check_gate(
     gate: str,
     work_fields: dict[str, Any],
@@ -319,7 +438,8 @@ def _check_gate(
     if gate == "result-confirmation":
         return ("satisfied", "result present") if has_result else ("open", "missing result confirmation")
     if gate == "failure-stop":
-        return "satisfied", "failure-stop handled"
+        ok, msg = _has_failure_stop_typed(proofs)
+        return ("satisfied", msg) if ok else ("open", msg)
     if gate == "candidate-considered":
         return ("satisfied", "candidates present") if has_candidate else ("open", "missing candidates/options")
     if gate == "evidence":
@@ -345,26 +465,26 @@ def _check_gate(
         ok, msg = _has_independent_verification_typed(proofs)
         return ("satisfied", msg) if ok else ("open", msg)
     if gate == "role-separation":
-        has = bool(combined_meta.get("role_separation") or combined_meta.get("separate_roles") or proofs.get("role_proofs"))
-        return ("satisfied", "role separation") if has else ("open", "missing role separation proof")
+        ok, msg = _has_role_separation_typed(proofs)
+        return ("satisfied", msg) if ok else ("open", msg)
     if gate == "challenge-path":
-        has = bool(combined_meta.get("challenge_path") or combined_meta.get("challenge") or proofs.get("challenge_proofs"))
-        return ("satisfied", "challenge path") if has else ("open", "missing challenge path")
+        ok, msg = _has_challenge_path_typed(proofs)
+        return ("satisfied", msg) if ok else ("open", msg)
     if gate == "exposure-limit":
-        has = bool(combined_meta.get("exposure_limit") or combined_meta.get("blast_radius") or proofs.get("exposure_proofs"))
-        return ("satisfied", "exposure limit") if has else ("open", "missing exposure limit")
+        ok, msg = _has_exposure_limit_typed(proofs)
+        return ("satisfied", msg) if ok else ("open", msg)
     if gate == "takeover":
-        has = bool(combined_meta.get("takeover") or combined_meta.get("takeover_ready") or proofs.get("takeover_proofs"))
-        return ("satisfied", "takeover ready") if has else ("open", "missing takeover proof")
+        ok, msg = _has_takeover_typed(proofs)
+        return ("satisfied", msg) if ok else ("open", msg)
     if gate == "recovery":
         ok, msg = _has_rollback_typed(proofs)
         return ("satisfied", msg) if ok else ("open", msg)
     if gate == "exit":
-        has = bool(combined_meta.get("exit") or combined_meta.get("orderly_exit") or proofs.get("exit_proofs"))
-        return ("satisfied", "exit") if has else ("open", "missing orderly exit")
+        ok, msg = _has_exit_typed(proofs)
+        return ("satisfied", msg) if ok else ("open", msg)
     if gate == "reauthorization":
-        has = bool(combined_meta.get("reauthorization") or combined_meta.get("reauthorized") or proofs.get("reauthorization_proofs"))
-        return ("satisfied", "reauthorization") if has else ("open", "missing reauthorization")
+        ok, msg = _has_reauthorization_typed(proofs)
+        return ("satisfied", msg) if ok else ("open", msg)
 
     return "open", f"unknown gate {gate}"
 

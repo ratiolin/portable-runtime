@@ -14,8 +14,6 @@ from portable_runtime.stores.memory import InMemoryStateStore
 
 
 class Runtime:
-    """Long-lived state and capability coordination, independent of providers."""
-
     def __init__(
         self,
         *,
@@ -23,23 +21,34 @@ class Runtime:
         artifact_store: ArtifactStore | None = None,
         registry: ProviderRegistry | None = None,
         runtime_id: str = "runtime",
+        policy_engine: Any | None = None,
+        contract_registry: Any | None = None,
     ) -> None:
+        from portable_runtime.core.boundary import RealityBoundary
+        from portable_runtime.core.capability_contract import CapabilityContractRegistry
+        from portable_runtime.core.router import ConstraintRouter
         self.runtime_id = runtime_id
         self.store = store or InMemoryStateStore()
         self.artifact_store = artifact_store
         self.registry = registry or ProviderRegistry()
-        self.capabilities = CapabilityService(
-            self.registry,
+        self.contract_registry = contract_registry or CapabilityContractRegistry()
+        self.routing = ConstraintRouter()
+        self.policy_engine = policy_engine
+        self.boundary = RealityBoundary(
             store=self.store,
-            runtime_id=runtime_id,
+            registry=self.registry,
+            routing=self.routing,
+            policy_engine=self.policy_engine,
+            runtime_id=self.runtime_id,
+            contract_registry=self.contract_registry,  # type: ignore[call-arg]
         )
+        self.capabilities = CapabilityService(boundary=self.boundary)
 
     def create_work(self, *, title: str, description: str = "", kind: str = "generic-task", **fields: Any) -> Work:
         work = Work(id=new_id("work"), title=title, description=description, kind=kind, **fields)
         self.store.save_work(work)
         with contextlib.suppress(Exception):
             from portable_runtime.core import metrics as _metrics
-
             _metrics.inc_work(kind=work.kind, status=work.status)
             _metrics.inc_event("work_created")
         return work
@@ -66,7 +75,6 @@ class Runtime:
         self.store.save_work(work.model_copy(update={"status": "running", "updated_at": now}))
         with contextlib.suppress(Exception):
             from portable_runtime.core import metrics as _metrics
-
             _metrics.inc_run(workflow_id=workflow_id, status="running")
             _metrics.inc_event("run_started")
         return run
@@ -75,7 +83,6 @@ class Runtime:
         result = await self.capabilities.invoke(request)
         with contextlib.suppress(Exception):
             from portable_runtime.core import metrics as _metrics
-
             _metrics.inc_provider_invocation(result.provider_id or "none", request.capability, result.status)
         return result
 
@@ -86,24 +93,25 @@ class Runtime:
         *,
         instruction: str | None = None,
         run_id: str | None = None,
+        actor_ref: str | None = None,
+        resource_ref: str | None = None,
+        subject_version_refs: list[str] | None = None,
         **parameters: Any,
     ) -> CapabilityResult:
+        from portable_runtime.core.invocation import InvocationFactory
         run = self.store.get_run(run_id) if run_id else None
         if run is None:
             run = self.start_run(work_id)
-        # fencing check
-        if run.lease_owner and run.lease_expires_at:
-            import datetime
-            if run.lease_expires_at < datetime.datetime.now(datetime.UTC) and run.lease_generation > 0:
-                pass
-        request = CapabilityRequest(
-            id=new_id("request"),
-            capability=capability,
+        factory = InvocationFactory(store=self.store, registry=self.registry, contract_registry=self.contract_registry, runtime_id=self.runtime_id)
+        request = factory.build(
+            capability,
             work_id=work_id,
             run_id=run.id,
             instruction=instruction,
             parameters=parameters,
-            lease_generation=getattr(run, "lease_generation", 0),
+            actor_ref=actor_ref,
+            resource_ref=resource_ref,
+            subject_version_refs=subject_version_refs,
         )
         run = run.model_copy(update={"provider_invocation_refs": [*run.provider_invocation_refs, request.id]})
         self.store.save_run(run)
@@ -116,15 +124,11 @@ class Runtime:
         self.store.import_state(state)
 
     def export_bundle(self, bundle_path: Path) -> Path:
-        """Export full portable bundle (manifest.json + *.jsonl + artifacts/) as tar.zst."""
         from portable_runtime.stores.bundle import export_bundle
-
         return export_bundle(self.store, self.artifact_store, bundle_path, runtime_id=self.runtime_id)
 
     def import_bundle(self, bundle_path: Path) -> dict[str, Any]:
-        """Import portable bundle (tar.zst)."""
         from portable_runtime.stores.bundle import import_bundle
-
         return import_bundle(self.store, self.artifact_store, bundle_path)
 
     async def health(self) -> dict[str, Any]:
@@ -134,16 +138,12 @@ class Runtime:
             providers.append(health.model_dump(mode="json"))
             with contextlib.suppress(Exception):
                 from portable_runtime.core import metrics as _metrics
-
                 _metrics.set_provider_health(descriptor.id, health.available)
         return {"runtime_id": self.runtime_id, "providers": providers}
 
     def metrics_snapshot(self) -> dict[str, Any]:
         from portable_runtime.core.metrics import metrics_snapshot
-
         return metrics_snapshot(self.store)
-
-    # V1.1 Execution Integrity
 
     def resume(self, run_id: str) -> Run:
         run = self.store.get_run(run_id)
@@ -155,14 +155,12 @@ class Runtime:
         return run
 
     def recover(self, before_seconds: float = 30) -> list[Step]:
-        """Find stale running steps for reconcile."""
         try:
             return self.store.list_stale_steps(before_seconds)  # type: ignore[attr-defined]
         except Exception:
             return []
 
     async def reconcile(self, step_id: str) -> CapabilityResult | None:
-        """Attempt to reconcile a stale step via provider.reconcile."""
         try:
             step = self.store.get_step(step_id)  # type: ignore[attr-defined]
         except Exception:
@@ -184,14 +182,12 @@ class Runtime:
             if hasattr(provider, "reconcile"):
                 result = await provider.reconcile(last.request_ref)  # type: ignore
                 if result:
-                    # Handle effect semantics: if irreversible-opaque and no result, mark unknown
                     if result.status == "unknown":
                         step.status = "unknown"
                         self.store.save_step(step)  # type: ignore
                     return result
         except Exception:
             pass
-        # fallback: if effect is pure/idempotent, safe to retry; else unknown
         if step.effect_semantics in ("irreversible-opaque", "reconcilable"):
             step.status = "unknown"
             self.store.save_step(step)  # type: ignore
@@ -231,7 +227,3 @@ class Runtime:
             return self.store.release_lease(run_id, owner)  # type: ignore
         except Exception:
             return False
-
-
-
-
