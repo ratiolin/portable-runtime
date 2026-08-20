@@ -234,7 +234,7 @@ class ContainerVerifierProvider:
             except Exception as exc:  # noqa: BLE001
                 return CapabilityResult(request_id=request.id, provider_id=self.descriptor.id, status="failed", error={"type": type(exc).__name__, "message": str(exc)[:2000]})  # noqa: E501
         try:
-            from control_plane.tools import check_container_status  # type: ignore[attr-defined]
+            from control_plane.tools import check_container_status
 
             ok, message, ref = await check_container_status(targets)
             return CapabilityResult(request_id=request.id, provider_id=self.descriptor.id, status="succeeded" if ok else "failed", message=message, metadata={"evidence_ref": ref})  # noqa: E501
@@ -318,3 +318,5 @@ class GitVerifierProvider:
 
     async def cancel(self, request_id: str) -> None:
         return None
+
+

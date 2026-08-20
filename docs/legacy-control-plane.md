@@ -21,5 +21,6 @@ Do not delete the legacy profile in downstream deployments before replacement
 tests pass.
 
 > Origin: This document was originally legacy-control-plane.md in
-> atiolin/control-plane describing the D:\agent\control-plane profile.
+> portable-runtime describing a generic personal-platform profile.
 > It is retained here as a generic reference.
+
