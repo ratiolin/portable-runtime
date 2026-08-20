@@ -71,9 +71,9 @@ def test_run_cli_state_validation(tmp_path: Path):
     try:
         run_cli(["--state", str(tmp_path / "data" / "test2.db"), "status"])
     except SystemExit:
-        pass
+        pass  # noqa: S110
     except Exception:
-        pass
+        pass  # noqa: S110
 
 
 def test_export_bundle_path_validation(tmp_path: Path):
@@ -98,6 +98,7 @@ def test_sqlite_store_path_validation_extra(tmp_path: Path):
     store._connection.close()
     try:
         SQLiteStateStore(Path("   "))
-        assert False, "should have raised"
+        raise AssertionError("should have raised")  # noqa: B011
     except ValueError:
         pass
+
