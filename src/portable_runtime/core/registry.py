@@ -14,7 +14,10 @@ class ProviderRegistry:
         self._providers: dict[str, CapabilityProvider] = {}
         self._enabled: dict[str, bool] = {}
 
-    def register(self, provider: CapabilityProvider) -> ProviderDescriptor:
+    def register(self, provider: CapabilityProvider, _maybe_provider: CapabilityProvider | None = None) -> ProviderDescriptor:
+        # Back-compat: test harness calls register(descriptor, provider); support both forms
+        if _maybe_provider is not None:
+            provider = _maybe_provider
         descriptor = provider.descriptor
         if descriptor.id in self._providers:
             raise ValueError(f"provider already registered: {descriptor.id}")

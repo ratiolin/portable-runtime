@@ -50,3 +50,5 @@ class FailingProvider(EchoProvider):
 
     async def invoke(self, request: CapabilityRequest, context: InvocationContext) -> CapabilityResult:
         raise RuntimeError("provider failure")
+
+
