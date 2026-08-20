@@ -64,7 +64,7 @@ def verify_webhook_signature(payload: bytes, signature: str, secret: str, algori
         if algorithm == "sha256":
             expected = hmac.new(secret.encode("utf-8"), payload, hashlib.sha256).hexdigest()
         elif algorithm == "sha1":
-            expected = hmac.new(secret.encode("utf-8"), payload, hashlib.sha1).hexdigest()
+            expected = hmac.new(secret.encode("utf-8"), payload, hashlib.sha1).hexdigest()  # NOSONAR S4790
         else:
             expected = hmac.new(secret.encode("utf-8"), payload, hashlib.sha256).hexdigest()
     except Exception:
@@ -77,7 +77,7 @@ def compute_webhook_signature(payload: bytes, secret: str, algorithm: str = "sha
         digest = hmac.new(secret.encode("utf-8"), payload, hashlib.sha256).hexdigest()
         return f"sha256={digest}"
     if algorithm == "sha1":
-        digest = hmac.new(secret.encode("utf-8"), payload, hashlib.sha1).hexdigest()
+        digest = hmac.new(secret.encode("utf-8"), payload, hashlib.sha1).hexdigest()  # NOSONAR S4790
         return f"sha1={digest}"
     digest = hmac.new(secret.encode("utf-8"), payload, hashlib.sha256).hexdigest()
     return digest
@@ -170,3 +170,6 @@ def http_status_for_category(category: TransportErrorCategory) -> int:
         TransportErrorCategory.UNKNOWN: 500,
     }
     return mapping.get(category, 500)
+
+
+

@@ -65,7 +65,7 @@ def run_cli(args: list[str]) -> int:
     reopen_parser.add_argument("record_id")
     reopen_parser.add_argument("--scope", default="other")
     reopen_parser.add_argument("--reason", default="")
-    unresolved = sub.add_parser("unresolved")
+    _ = sub.add_parser("unresolved")
     revalidation_parser = sub.add_parser("revalidation")
     revalidation_parser.add_argument("reval_command", choices=["pending", "affected-by"], nargs="?", default="pending")
     revalidation_parser.add_argument("change_ref", nargs="?", default=None)
@@ -431,6 +431,7 @@ def run_cli(args: list[str]) -> int:
     finally:
         runtime.store.close() if isinstance(runtime.store, SQLiteStateStore) else None
     return 0
+
 
 
 
