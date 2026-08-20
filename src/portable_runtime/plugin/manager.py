@@ -61,12 +61,12 @@ class PluginManager:
         try:
             provider = StdioJsonlProvider(manifest, working_directory=(path if path.is_dir() else path.parent).resolve())  # noqa: E501
             # Conformance without affecting runtime state
-            health_errors = await check_provider(provider)
+            health_errors = await check_provider(provider)  # type: ignore[arg-type]
             if health_errors and "health unavailable" in ";".join(health_errors):
                 # For stdio providers, health may be "ready" even if not yet enabled; treat as validated
                 pass
             # Register
-            self.registry.register(provider)
+            self.registry.register(provider)  # type: ignore[arg-type]
             # Enable via registry (enabled flag)
             rec = PluginRecord(id=manifest.id, path=path, manifest=manifest, status="loaded")
             self._records[manifest.id] = rec
@@ -120,3 +120,4 @@ class PluginManager:
 
     def validate_all(self) -> dict[str, builtins.list[str]]:
         return {rec.id: self.validate(rec.path) for rec in self._records.values()}
+

@@ -24,3 +24,6 @@ class CapabilityProvider(Protocol):
     ) -> CapabilityResult: ...
 
     async def cancel(self, request_id: str) -> None: ...
+
+    async def reconcile(self, request_id: str) -> CapabilityResult | None: ...  # optional
+

@@ -9,14 +9,20 @@ from typing import Any
 from portable_runtime.core.models import (
     Action,
     Artifact,
+    Checkpoint,
+    Compensation,
     Decision,
     Event,
     Evidence,
     KnowledgeItem,
     Outcome,
     Run,
+    Step,
+    StepAttempt,
     Work,
 )
+from portable_runtime.records.models import BaseRecord
+from portable_runtime.records.relations import RecordRelation
 
 
 def _safe_db_path(p: Path) -> Path:
@@ -28,7 +34,6 @@ def _safe_db_path(p: Path) -> Path:
         if not (resolved.is_relative_to(cwd) or resolved.is_relative_to(cwd.parent)):
             raise ValueError(f"db path escapes allowed base: {p}")
     return p
-
 
 
 class SQLiteStateStore:
@@ -44,7 +49,15 @@ class SQLiteStateStore:
         "outcome": Outcome,
         "knowledge": KnowledgeItem,
         "event": Event,
+        "step": Step,
+        "attempt": StepAttempt,
+        "checkpoint": Checkpoint,
+        "compensation": Compensation,
+        "record": BaseRecord,
+        "relation": RecordRelation,
     }
+    # authorization added dynamically via import_state handling
+
 
     def __init__(self, path: Path) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -101,6 +114,7 @@ class SQLiteStateStore:
     def save_artifact(self, value: Artifact) -> None: self._save("artifact", value)
     def get_artifact(self, artifact_id: str) -> Artifact | None: return self._get("artifact", Artifact, artifact_id)
     def save_evidence(self, value: Evidence) -> None: self._save("evidence", value)
+    def get_evidence(self, evidence_id: str) -> Evidence | None: return self._get("evidence", Evidence, evidence_id)
     def list_evidence(self, subject_ref: str | None = None) -> list[Evidence]:
         return [
             value
@@ -115,24 +129,185 @@ class SQLiteStateStore:
         return self._get("knowledge", KnowledgeItem, knowledge_id)
     def list_knowledge(self, status: str | None = None) -> list[KnowledgeItem]:
         return [value for value in self._list("knowledge", KnowledgeItem) if status is None or value.status == status]
-    def append_event(self, value: Event) -> None: self._save("event", value)
+    def append_event(self, value: Event) -> None:
+        existing = self._get("event", Event, value.id)
+        if existing is not None:
+            try:
+                ex = existing.model_dump(mode="json").copy()
+                val = value.model_dump(mode="json").copy()
+                ex.pop("created_at", None)
+                val.pop("created_at", None)
+                if ex == val:
+                    return
+            except Exception:
+                pass
+            raise ValueError(f"event journal is append-only: refusing to overwrite event {value.id!r}")
+        self._save("event", value)
+    def save_event(self, value: Event) -> None: self.append_event(value)
+    def get_event(self, event_id: str) -> Event | None: return self._get("event", Event, event_id)
+    def list_events(self, subject_ref: str | None = None) -> list[Event]:
+        return [
+            value
+            for value in self._list("event", Event)
+            if subject_ref is None or value.subject_ref == subject_ref
+        ]
+
+    # V1.1 Execution Integrity
+    def save_step(self, value: Step) -> None: self._save("step", value)
+    def get_step(self, step_id: str) -> Step | None: return self._get("step", Step, step_id)
+    def list_steps(self, run_id: str | None = None) -> list[Step]:
+        return [v for v in self._list("step", Step) if run_id is None or v.run_id == run_id]
+    def list_stale_steps(self, before_seconds: float = 30) -> list[Step]:
+        import datetime
+        now = datetime.datetime.now(datetime.UTC)
+        cutoff = now - datetime.timedelta(seconds=before_seconds)
+        return [v for v in self._list("step", Step) if v.status == "running" and v.updated_at < cutoff]
+    def save_attempt(self, value: StepAttempt) -> None: self._save("attempt", value)
+    def get_attempt(self, attempt_id: str) -> StepAttempt | None: return self._get("attempt", StepAttempt, attempt_id)
+    def list_attempts(self, step_id: str | None = None) -> list[StepAttempt]:
+        return [v for v in self._list("attempt", StepAttempt) if step_id is None or v.step_id == step_id]
+    def save_checkpoint(self, value: Checkpoint) -> None: self._save("checkpoint", value)
+    def get_checkpoint(self, checkpoint_id: str) -> Checkpoint | None: return self._get("checkpoint", Checkpoint, checkpoint_id)
+    def save_compensation(self, value: Compensation) -> None: self._save("compensation", value)
+    def compare_and_swap(self, kind: str, identifier: str, expected_version: int, new_value) -> bool:
+        existing = self._get(kind, self._types.get(kind, object), identifier)
+        if existing is None:
+            return False
+        cur = getattr(existing, "version", 0) if hasattr(existing, "version") else 0
+        if cur != expected_version:
+            return False
+        self._save(kind, new_value)
+        return True
+    def transaction(self):
+        from contextlib import contextmanager
+        @contextmanager
+        def _tx():
+            with self._lock:
+                self._connection.execute("BEGIN")
+                try:
+                    yield self
+                    self._connection.execute("COMMIT")
+                except Exception:
+                    self._connection.execute("ROLLBACK")
+                    raise
+        return _tx()
+    def acquire_lease(self, run_id: str, owner: str, ttl_seconds: float = 30) -> bool:
+        import datetime
+        run = self.get_run(run_id)
+        if run is None:
+            return False
+        now = datetime.datetime.now(datetime.UTC)
+        if run.lease_owner and run.lease_owner != owner and run.lease_expires_at and run.lease_expires_at > now:
+            return False
+        run.lease_owner = owner
+        run.lease_generation = (run.lease_generation or 0) + 1
+        run.lease_expires_at = now + datetime.timedelta(seconds=ttl_seconds)
+        run.heartbeat_at = now
+        self.save_run(run)
+        return True
+    def renew_lease(self, run_id: str, owner: str, ttl_seconds: float = 30) -> bool:
+        import datetime
+        run = self.get_run(run_id)
+        if not run or run.lease_owner != owner:
+            return False
+        now = datetime.datetime.now(datetime.UTC)
+        run.lease_expires_at = now + datetime.timedelta(seconds=ttl_seconds)
+        run.heartbeat_at = now
+        self.save_run(run)
+        return True
+    def release_lease(self, run_id: str, owner: str) -> bool:
+        run = self.get_run(run_id)
+        if not run or run.lease_owner != owner:
+            return False
+        run.lease_owner = None
+        self.save_run(run)
+        return True
+
+    # Records V1.2
+    def save_record(self, value: BaseRecord) -> None:
+        try:
+            from portable_runtime.records.authorization import AuthorizationGrant
+            if isinstance(value, AuthorizationGrant):
+                self.save_authorization(value)
+                return
+        except Exception:
+            pass
+        from portable_runtime.records.validation import validate_record
+        errs = validate_record(value)
+        if errs:
+            raise ValueError("; ".join(errs))
+        self._save("record", value)
+
+    def get_record(self, record_id: str) -> BaseRecord | None:
+        return self._get("record", BaseRecord, record_id)
+
+    def list_records(self, record_type: str | None = None) -> list[BaseRecord]:
+        vals = self._list("record", BaseRecord)
+        return [v for v in vals if record_type is None or v.record_type == record_type]
+
+    def save_relation(self, value: RecordRelation) -> None:
+        from portable_runtime.records.relations import validate_relation
+        errs = validate_relation(value)
+        if errs:
+            raise ValueError("; ".join(errs))
+        self._save("relation", value)
+
+    def get_relation(self, relation_id: str) -> RecordRelation | None:
+        return self._get("relation", RecordRelation, relation_id)
+    def save_authorization(self, value: Any) -> None:
+        # structural validation delegated to model
+        self._save("authorization", value)
+    def get_authorization(self, auth_id: str) -> Any | None:
+        from portable_runtime.records.authorization import AuthorizationGrant
+        return self._get("authorization", AuthorizationGrant, auth_id)
+    def list_authorizations(self) -> list[Any]:
+        from portable_runtime.records.authorization import AuthorizationGrant
+        return self._list("authorization", AuthorizationGrant)
+
+    def list_relations(self, relation_type: str | None = None) -> list[RecordRelation]:
+        vals = self._list("relation", RecordRelation)
+        return [v for v in vals if relation_type is None or v.relation_type == relation_type]
 
     def export_state(self) -> dict[str, list[dict[str, object]]]:
         with self._lock:
             rows = self._connection.execute("SELECT kind, data FROM runtime_records ORDER BY kind, id").fetchall()
+        # ensure authorization bucket exists even if _types not yet contains it
+        try:
+            from portable_runtime.records.authorization import AuthorizationGrant as _AG3  # noqa: N814
+            if "authorization" not in self._types:
+                self._types["authorization"] = _AG3
+        except Exception:
+            pass
         result: dict[str, list[dict[str, object]]] = {kind: [] for kind in self._types}
         for row in rows:
             result.setdefault(row["kind"], []).append(json.loads(row["data"]))
         return result
 
     def import_state(self, state: dict[str, list[dict[str, object]]]) -> None:
+        # lazily ensure authorization type is known
+        if "authorization" not in self._types:
+            try:
+                from portable_runtime.records.authorization import AuthorizationGrant as _AG  # noqa: N814
+                self._types["authorization"] = _AG
+            except Exception:
+                pass
         with self._lock:
             self._connection.execute("BEGIN")
             try:
                 for kind, values in state.items():
                     value_type = self._types.get(kind)
                     if value_type is None:
-                        continue
+                        # try dynamic for authorization
+                        if kind == "authorization":
+                            try:
+                                from portable_runtime.records.authorization import (
+                                    AuthorizationGrant as _AG2,  # noqa: N814
+                                )
+                                value_type = _AG2
+                            except Exception:  # noqa: S112
+                                continue
+                        else:
+                            continue
                     for raw in values:
                         value = value_type.model_validate(raw)
                         self._connection.execute(
@@ -150,17 +325,14 @@ class SQLiteStateStore:
                 self._connection.execute("ROLLBACK")
                 raise
 
-    # ---- bundle helpers (tar.zst with manifest + artifacts) ----
-
     def export_bundle(self, bundle_path: Path, artifact_store: Any | None = None, runtime_id: str = "runtime") -> Path:
         from .bundle import export_bundle as _export_bundle
-
         return _export_bundle(self, artifact_store, bundle_path, runtime_id=runtime_id)
 
     def import_bundle(self, bundle_path: Path, artifact_store: Any | None = None) -> dict[str, Any]:
         from .bundle import import_bundle as _import_bundle
-
         return _import_bundle(self, artifact_store, bundle_path)
+
 
 
 

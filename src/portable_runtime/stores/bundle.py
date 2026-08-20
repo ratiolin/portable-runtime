@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import gzip
+import hashlib
 import io
 import json
 import re
@@ -36,6 +37,13 @@ _KIND_TO_FILENAME: dict[str, str] = {
     "outcome": "outcomes.jsonl",
     "knowledge": "knowledge.jsonl",
     "event": "events.jsonl",
+    "step": "steps.jsonl",
+    "attempt": "attempts.jsonl",
+    "checkpoint": "checkpoints.jsonl",
+    "compensation": "compensations.jsonl",
+    "record": "records.jsonl",
+    "relation": "relations.jsonl",
+    "authorization": "authorizations.jsonl",
 }
 
 _FILENAME_TO_KIND: dict[str, str] = {v: k for k, v in _KIND_TO_FILENAME.items()}
@@ -60,7 +68,7 @@ def _is_safe_member_name(name: str) -> bool:
     return not ("\\" in name and ":" in name)
 
 
-def _manifest(counts: dict[str, int], artifact_files: list[str], runtime_id: str) -> dict[str, Any]:
+def _manifest(counts: dict[str, int], artifact_files: list[str], runtime_id: str, checksums: dict[str, str] | None = None) -> dict[str, Any]:
     return {
         "schema_version": BUNDLE_SCHEMA_VERSION,
         "format": BUNDLE_FORMAT,
@@ -68,6 +76,7 @@ def _manifest(counts: dict[str, int], artifact_files: list[str], runtime_id: str
         "exported_at": utcnow().isoformat(),
         "counts": counts,
         "artifact_files": sorted(artifact_files),
+        "checksums": checksums or {},
     }
 
 
@@ -139,7 +148,17 @@ def export_bundle(
             try:
                 data = artifact_store.get(uri)
             except Exception:  # noqa: S112
-                continue
+                # Fallback for minimal FileStore on Windows: try direct file read from URI
+                try:
+                    from urllib.parse import unquote, urlparse
+                    import os
+                    parsed2 = urlparse(uri)
+                    raw2 = unquote(parsed2.path)
+                    if os.name == "nt" and len(raw2) >= 3 and raw2[0] == "/" and raw2[2] == ":":
+                        raw2 = raw2[1:]
+                    data = Path(raw2).read_bytes()
+                except Exception:  # noqa: S112
+                    continue
             try:
                 from urllib.parse import unquote, urlparse
 
@@ -155,9 +174,21 @@ def export_bundle(
                     artifact_files.append(basename)
             except Exception:  # noqa: S112
                 continue
+    # Pre-compute jsonl bytes and checksums for manifest
+    jsonl_blobs: dict[str, bytes] = {}
+    checksums: dict[str, str] = {}
+    for kind, filename in _KIND_TO_FILENAME.items():
+        records = state.get(kind, [])
+        data = _jsonl_bytes(records)
+        jsonl_blobs[filename] = data
+        checksums[filename] = hashlib.sha256(data).hexdigest()
+    artifact_checksums: dict[str, str] = {}
+    for basename, blob in sorted(artifact_blobs.items()):
+        artifact_checksums[f"{ARTIFACT_DIR}/{basename}"] = hashlib.sha256(blob).hexdigest()
+    all_checksums = {**checksums, **artifact_checksums}
     tar_buffer = io.BytesIO()
     with tarfile.open(fileobj=tar_buffer, mode="w", format=tarfile.PAX_FORMAT) as tar:
-        manifest = _manifest(counts, artifact_files, runtime_id)
+        manifest = _manifest(counts, artifact_files, runtime_id, checksums=all_checksums)
         manifest_bytes = json.dumps(manifest, ensure_ascii=False, indent=2).encode("utf-8")
         info = tarfile.TarInfo(name="manifest.json")
         info.size = len(manifest_bytes)
@@ -165,8 +196,7 @@ def export_bundle(
         info.mode = 0o644
         tar.addfile(info, io.BytesIO(manifest_bytes))
         for kind, filename in _KIND_TO_FILENAME.items():
-            records = state.get(kind, [])
-            data = _jsonl_bytes(records)
+            data = jsonl_blobs[filename]
             info = tarfile.TarInfo(name=filename)
             info.size = len(data)
             info.mtime = int(time.time())
@@ -198,6 +228,43 @@ def export_bundle(
     return output_path
 
 
+def _validate_state_invariants(state: dict[str, list[dict[str, object]]]) -> None:
+    """Validate lifecycle/relation invariants and refs before import. Raises ValueError on failure."""
+    from portable_runtime.records.models import BaseRecord
+    from portable_runtime.records.relations import RecordRelation, validate_relation
+    from portable_runtime.records.validation import validate_record
+    for raw in state.get("record", []):
+        try:
+            br = BaseRecord.model_validate(raw)
+        except Exception as exc:
+            raise ValueError(f"record invariant violation: {exc}") from exc
+        errs = validate_record(br)
+        if errs:
+            raise ValueError(f"record lifecycle invariant failed for {br.id}: {"; ".join(errs)}")
+    for raw in state.get("relation", []):
+        try:
+            rr = RecordRelation.model_validate(raw)
+        except Exception as exc:
+            raise ValueError(f"relation invariant violation: {exc}") from exc
+        errs = validate_relation(rr)
+        if errs:
+            raise ValueError(f"relation invariant failed for {rr.id}: {"; ".join(errs)}")
+        if not rr.subject_ref or not rr.object_ref:
+            raise ValueError(f"relation {rr.id} missing subject_ref/object_ref")
+    for raw in state.get("authorization", []):
+        try:
+            from portable_runtime.records.authorization import AuthorizationGrant
+            ag = AuthorizationGrant.model_validate(raw)
+            if not ag.principal_ref or not ag.grantee_ref:
+                raise ValueError(f"authorization {ag.id} missing principal/grantee")
+            if not ag.allowed_capabilities:
+                raise ValueError(f"authorization {ag.id} allowed_capabilities must not be empty")
+        except ValueError:
+            raise
+        except Exception as exc:
+            raise ValueError(f"authorization invariant violation: {exc}") from exc
+
+
 def import_bundle(
     state_store: Any,
     artifact_store: Any | None,
@@ -211,6 +278,7 @@ def import_bundle(
     except Exception as exc:
         raise ValueError(f"failed to decompress bundle: {exc}") from exc
     state: dict[str, list[dict[str, object]]] = {}
+    raw_blobs: dict[str, bytes] = {}
     artifact_blobs: dict[str, bytes] = {}
     manifest: dict[str, Any] | None = None
     tar_buffer = io.BytesIO(tar_bytes)
@@ -232,8 +300,10 @@ def import_bundle(
                 data = f.read()
                 if name == "manifest.json":
                     manifest = json.loads(data.decode("utf-8"))
+                    raw_blobs[name] = data
                 elif name in _FILENAME_TO_KIND:
                     kind = _FILENAME_TO_KIND[name]
+                    raw_blobs[name] = data
                     state[kind] = _parse_jsonl(data)
                 elif name.startswith(f"{ARTIFACT_DIR}/"):
                     basename = name[len(ARTIFACT_DIR) + 1 :]
@@ -241,28 +311,47 @@ def import_bundle(
                         raise ValueError(f"invalid artifact member: {name!r}")
                     if not _is_safe_member_name(basename):
                         raise ValueError(f"unsafe artifact name: {basename!r}")
+                    raw_blobs[name] = data
                     artifact_blobs[basename] = data
                 else:
-                    continue
+                    raise ValueError(f"unexpected bundle member: {name!r} (not in allowed manifest)")
     except tarfile.TarError as exc:
         raise ValueError(f"invalid tar bundle: {exc}") from exc
     if manifest is None:
         raise ValueError("bundle missing manifest.json")
     if manifest.get("schema_version") != BUNDLE_SCHEMA_VERSION:
         raise ValueError(f"unsupported bundle schema_version: {manifest.get('schema_version')}")
+    checksums = manifest.get("checksums") or {}
+    if isinstance(checksums, dict) and checksums:
+        for fname, expected in checksums.items():
+            if not isinstance(expected, str):
+                continue
+            actual_data = raw_blobs.get(fname)
+            if actual_data is None:
+                raise ValueError(f"checksum entry {fname!r} missing from bundle")
+            actual = hashlib.sha256(actual_data).hexdigest()
+            if actual != expected:
+                raise ValueError(f"checksum mismatch for {fname!r}: expected {expected}, got {actual}")
+    counts = manifest.get("counts") or {}
+    if isinstance(counts, dict):
+        for kind, expected_count in counts.items():
+            if kind in _KIND_TO_FILENAME:
+                actual_count = len(state.get(kind, []))
+                if actual_count != expected_count:
+                    raise ValueError(f"count mismatch for {kind!r}: manifest {expected_count} vs actual {actual_count}")
     for kind in _KIND_TO_FILENAME:
         state.setdefault(kind, [])
+    _validate_state_invariants(state)
     state_store.import_state(state)
     if artifact_store is not None and artifact_blobs:
         root = getattr(artifact_store, "root", None)
         if isinstance(root, Path):
             for basename, blob in artifact_blobs.items():
-                # Sanitize basename: whitelist alphanumeric + dot/underscore/hyphen, no separators
                 if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]*", basename):
                     raise ValueError(f"invalid artifact basename: {basename!r}")
                 if "/" in basename or "\\" in basename or ".." in basename:
                     raise ValueError(f"unsafe artifact basename: {basename!r}")
-                sanitized = basename  # validated above
+                sanitized = basename
                 target = (Path(root) / sanitized).resolve()
                 try:
                     target.relative_to(Path(root).resolve())
@@ -271,7 +360,6 @@ def import_bundle(
                 target.parent.mkdir(parents=True, exist_ok=True)
                 if not target.exists() or target.read_bytes() != blob:
                     target.write_bytes(blob)
-            # Rewrite artifact URIs to new root for portability (Windows -> Linux)
             try:
                 for rec in state.get("artifact", []):
                     old_uri = rec.get("uri")
@@ -291,19 +379,19 @@ def import_bundle(
                             if existing is not None and getattr(existing, "uri", None) != new_uri:
                                 try:
                                     updated = existing.model_copy(update={"uri": new_uri})
-                                except Exception:  # noqa: S112
+                                except Exception:
                                     continue
                                 state_store.save_artifact(updated)
-            except Exception:  # noqa: S110
+            except Exception:
                 pass
         else:
             for _basename, blob in artifact_blobs.items():
                 try:
                     artifact_store.put(blob)
-                except Exception:  # noqa: S112
+                except Exception:
                     try:
                         artifact_store.put(blob, media_type="application/octet-stream")
-                    except Exception:  # noqa: S112
+                    except Exception:
                         continue
     return manifest
 
@@ -325,6 +413,12 @@ def bundle_contains_absolute_paths(bundle_path: Path) -> bool:
     except Exception:
         return False
     return False
+
+
+
+
+
+
 
 
 

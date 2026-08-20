@@ -70,3 +70,6 @@ class FilesystemArtifactStore:
 
     def list_artifact_uris(self) -> list[str]:
         return [(self.root / name).as_uri() for name in self.export_artifacts()]
+
+FileSystemArtifactStore = FilesystemArtifactStore
+

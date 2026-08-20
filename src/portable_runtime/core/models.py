@@ -67,6 +67,11 @@ class Run(RuntimeModel):
     ended_at: datetime | None = None
     current_step: str | None = None
     provider_invocation_refs: list[str] = Field(default_factory=list)
+    # V1.1 lease/fencing for recovery
+    lease_owner: str | None = None
+    lease_generation: int = 0
+    lease_expires_at: datetime | None = None
+    heartbeat_at: datetime | None = None
 
 
 class Artifact(RuntimeModel):
@@ -135,3 +140,68 @@ class Event(RuntimeModel):
     type: str
     subject_ref: str
     payload: dict[str, Any] = Field(default_factory=dict)
+
+
+# V1.1 Execution Integrity models
+
+class Step(RuntimeModel):
+    """Durable step within a Run; crash-recoverable."""
+
+    run_id: str
+    step_key: str
+    kind: str = "generic"
+    status: Literal[
+        "pending",
+        "ready",
+        "running",
+        "waiting",
+        "succeeded",
+        "failed",
+        "cancelled",
+        "compensating",
+        "compensated",
+        "unknown",
+    ] = "pending"
+    input_digest: str | None = None
+    side_effect_class: Literal["pure", "idempotent", "deduplicatable", "reconcilable", "irreversible-opaque"] = "pure"
+    effect_semantics: Literal["pure", "idempotent", "deduplicatable", "reconcilable", "irreversible-opaque"] = "pure"
+    reversibility: Literal["reversible", "compensatable", "irreversible", "unknown"] = "unknown"
+    current_attempt: int = 0
+    version: int = 0
+    updated_at: datetime = Field(default_factory=utcnow)
+    lease_owner: str | None = None
+    lease_generation: int = 0
+    lease_expires_at: datetime | None = None
+
+
+class StepAttempt(RuntimeModel):
+    step_id: str
+    attempt_no: int = 1
+    provider_id: str | None = None
+    request_ref: str | None = None
+    idempotency_key: str | None = None
+    external_operation_ref: str | None = None
+    started_at: datetime | None = Field(default_factory=utcnow)
+    ended_at: datetime | None = None
+    status: Literal["running", "succeeded", "failed", "cancelled", "unknown"] = "running"
+    result_ref: str | None = None
+    error: dict[str, Any] | None = None
+    lease_generation: int = 0
+
+
+class Checkpoint(RuntimeModel):
+    run_id: str
+    step_id: str | None = None
+    state_digest: str | None = None
+    payload_ref: str | None = None
+    payload: dict[str, Any] | None = None
+
+
+class Compensation(RuntimeModel):
+    action_ref: str
+    compensation_capability: str
+    status: Literal["pending", "running", "succeeded", "failed", "cancelled"] = "pending"
+    started_at: datetime | None = Field(default_factory=utcnow)
+    ended_at: datetime | None = None
+    result_ref: str | None = None
+
