@@ -308,7 +308,18 @@ def test_procedure_gates_completeness_and_waiver_and_hard_boundary():
 def test_procedure_gate_invariance_and_expired_invalidated():
     w = Work(id=new_id("work"), title="t", description="d", kind="incident", metadata={"purpose":"x","execution_boundary":"y"})
     r = Run(id=new_id("run"), work_id=w.id, status="succeeded", metadata={"result_confirmed":True, "authorization_grant_id":"g1","evidence_refs":["e1"],"verified":True,"recovery_path":"r","reviewed":True,"candidate":True})
-    std = check_procedure(w, r, "standard"); assert any(s.obligation=="authorization" and s.status=="satisfied" for s in std)
+    from portable_runtime.records.authorization import AuthorizationGrant as _AG2
+    from datetime import UTC as _UTC2, datetime as _DT2
+    _g2 = _AG2(principal_ref="human:owner", grantee_ref="agent:test", allowed_capabilities=["*"], valid_from=_DT2.now(_UTC2))
+    from portable_runtime.records.models import BaseRecord as _BR2
+    _ev2 = _BR2(record_type="EvidenceArtifact", lifecycle_status="current", data={"uri": "file://e1"})
+    from portable_runtime.records.relations import RecordRelation as _RR2
+    _rel2 = _RR2(relation_type="supports", subject_ref=_ev2.id, object_ref=w.id)
+    from portable_runtime.records.open_validation import ClosedVerificationResult as _CVR2
+    _cv2 = _CVR2(result="pass")
+    from portable_runtime.core.models import Checkpoint as _CP2
+    _cp2 = _CP2(run_id=r.id, step_id=None)
+    std = check_procedure(w, r, "standard", grants=[_g2], evidence_artifacts=[_ev2], relations=[_rel2], verification_results=[_cv2], checkpoints=[_cp2], decisions=[{"id": "d1"}]); assert any(s.obligation=="authorization" and s.status=="satisfied" for s in std)
     r2 = Run(id=new_id("run"), work_id=w.id, status="running", metadata={"authorization_expired":True})
     res2 = check_procedure(w, r2, ProcedureProfile.standard); assert any(s.obligation=="authorization" and s.status=="expired" for s in res2)
     r3 = Run(id=new_id("run"), work_id=w.id, status="running", metadata={"invalidated_gates":["verification"]})

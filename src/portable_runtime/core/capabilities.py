@@ -17,11 +17,9 @@ class ProviderDescriptor(BaseModel):
     tags: set[str] = Field(default_factory=set)
     constraints: dict[str, Any] = Field(default_factory=dict)
     metadata: dict[str, Any] = Field(default_factory=dict)
-    # V1.1 effect contract
     effect_semantics: Literal["pure", "idempotent", "deduplicatable", "reconcilable", "irreversible-opaque"] = "pure"
     side_effect_class: Literal["pure", "idempotent", "deduplicatable", "reconcilable", "irreversible-opaque"] = "pure"
     reversibility: Literal["reversible", "compensatable", "irreversible", "unknown"] = "unknown"
-    # V1.6 failure domains
     provider_family: str | None = None
     model_family: str | None = None
     operator: str | None = None
@@ -47,9 +45,11 @@ class InvocationContext(BaseModel):
     work_id: str | None = None
     run_id: str | None = None
     metadata: dict[str, Any] = Field(default_factory=dict)
-    # V1.1 fencing
     lease_generation: int = 0
     idempotency_key: str | None = None
+
+
+EffectClass = Literal["read", "write-local", "write-remote", "deploy", "admin", "irreversible"]
 
 
 class CapabilityRequest(BaseModel):
@@ -67,9 +67,14 @@ class CapabilityRequest(BaseModel):
     excluded_provider_ids: list[str] = Field(default_factory=list)
     timeout_seconds: float | None = None
     metadata: dict[str, Any] = Field(default_factory=dict)
-    # V1.1 idempotency
     idempotency_key: str | None = None
     step_key: str | None = None
+    actor_ref: str | None = None
+    resource_ref: str | None = None
+    subject_version_refs: list[str] = Field(default_factory=list)
+    effect_class: EffectClass = "read"
+    lease_generation: int = 0
+    lease_owner: str | None = None
 
 
 class CapabilityResult(BaseModel):
@@ -81,6 +86,5 @@ class CapabilityResult(BaseModel):
     message: str | None = None
     error: dict[str, Any] | None = None
     metadata: dict[str, Any] = Field(default_factory=dict)
-    # V1.1 reconcile hint
     external_operation_ref: str | None = None
     reconciled: bool = False

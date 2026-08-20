@@ -130,7 +130,7 @@ def test_property_random_graph_no_full_pollution():
         # generate 30 random relations, some point to change_ref, some not
         relation_types = ["validated-under","evaluated-by","executed-with","measured-by","authorized-under","scoped-to","depends-on","supports","produces","revises","supersedes"]
         relations: list[RecordRelation] = []
-        target_typed_count = 0
+        target_typed_subjects: set[str] = set()
         for _ in range(30):
             subj = random.choice(record_ids)
             # 40% point to change_ref, 60% random other
@@ -140,7 +140,7 @@ def test_property_random_graph_no_full_pollution():
                 # count if this rt would be in environment watch set
                 env_watch = {"validated-under","executed-with","measured-by","depends-on"}
                 if rt in env_watch:
-                    target_typed_count += 1
+                    target_typed_subjects.add(subj)
             else:
                 obj = _rand_id("other")
                 rt = random.choice(relation_types)
@@ -152,7 +152,7 @@ def test_property_random_graph_no_full_pollution():
 
         result = assess_revalidation(change_ref, "environment", relations)
         # must equal direct typed matches only
-        assert len(result) == target_typed_count, f"expected {target_typed_count} typed matches, got {len(result)}"
+        assert len(result) == len(target_typed_subjects), f"expected {len(target_typed_subjects)} typed matches, got {len(result)}"
         # ensure not full graph polluted: affected set size <= record count and strictly less than total relations when not all match
         assert len(result) <= len(record_ids)
         # verify no transitive leakage: all affected_ref must be direct subjects of matching relations

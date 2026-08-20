@@ -34,9 +34,9 @@ def test_knowledge_projection():
     assert is_negative_knowledge(p2)
 
 def test_open_validation():
-    r = open_validate("struct1", ["e1"], [])
+    r = open_validate(judgment="supports", assertion_refs=["struct1"], evidence_refs=["e1"], provider_id="test-provider", scope={"domain": "test"})
     assert r.result == "supports"
-    r2 = open_validate("struct1", [], ["counter"])
+    r2 = open_validate(judgment="weakens", assertion_refs=["struct1"], evidence_refs=["e1"], provider_id="test-provider", counterevidence_refs=["counter"], scope={"domain": "test"})
     assert r2.result == "weakens"
     r3 = closed_verify_http(200, [200])
     assert r3.result == "pass"

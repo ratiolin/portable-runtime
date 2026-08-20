@@ -1,6 +1,9 @@
-"""KnowledgeProjection — V1.5 Selective Consolidation.
+"""KnowledgeProjection — V1.8 strict (P0-3).
 
 Replaces KnowledgeItem=truth object with derived projection view.
+Promotion to official is fail-closed: requires explicit epistemic judgment refs
++ authorization/governance refs + validity_scope (scope) + environment version context.
+Evidence existence alone MUST NOT imply official.
 """
 
 from __future__ import annotations
@@ -29,6 +32,10 @@ class KnowledgeProjection(BaseModel):
     reopen_conditions: list[str] = Field(default_factory=list)
     usage_refs: list[str] = Field(default_factory=list)
     history_refs: list[str] = Field(default_factory=list)
+    # P0-3 explicit promotion prerequisites (fail-closed):
+    epistemic_judgment_refs: list[str] = Field(default_factory=list, description="explicit epistemic judgment refs")
+    authorization_refs: list[str] = Field(default_factory=list, description="governance/authorization refs")
+    scope_version_refs: list[str] = Field(default_factory=list, description="version context refs")
     lifecycle_status: Literal["candidate", "official", "deprecated", "archived"] = "candidate"
     created_at: datetime = Field(default_factory=utcnow)
     updated_at: datetime = Field(default_factory=utcnow)
@@ -50,3 +57,34 @@ def consolidate(projections: list[KnowledgeProjection], new_assertions: list[str
         counterexample_refs=sorted(all_counters),
         lifecycle_status="candidate",
     )
+
+
+def validate_projection_for_official(proj: KnowledgeProjection) -> list[str]:
+    """Validate promotion prerequisites — evidence alone does NOT imply official."""
+    errors: list[str] = []
+    if not proj.current_assertion_refs:
+        errors.append("current_assertion_refs required for official")
+    if not proj.epistemic_judgment_refs:
+        errors.append("epistemic_judgment_refs required (explicit judgment, not evidence existence)")
+    if not proj.authorization_refs:
+        errors.append("authorization_refs required (governance/approval)")
+    if not isinstance(proj.validity_scope, dict) or not proj.validity_scope:
+        errors.append("validity_scope required non-empty scope for official")
+    if not isinstance(proj.environment_bindings, dict) or not proj.environment_bindings:
+        errors.append("environment_bindings required non-empty version context for official")
+    # also require evidence summary refs? keep strict but not block legacy empty — require at least assertion present
+    return errors
+
+
+def can_promote_to_official(proj: KnowledgeProjection) -> bool:
+    return not validate_projection_for_official(proj)
+
+
+def promote_to_official(proj: KnowledgeProjection) -> KnowledgeProjection:
+    """Promote to official only if explicit judgment + authorization + scope + version present. Fail-closed."""
+    errs = validate_projection_for_official(proj)
+    if errs:
+        raise ValueError("cannot promote to official: " + "; ".join(errs))
+    if proj.lifecycle_status not in ("candidate", "official"):
+        raise ValueError(f"cannot promote from status {proj.lifecycle_status!r}")
+    return proj.model_copy(update={"lifecycle_status": "official", "updated_at": utcnow()})

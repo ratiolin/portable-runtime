@@ -75,9 +75,11 @@ def test_revoked_and_capability_and_scope():
         resource_scope=["repo/myapp"],
         ttl_seconds=3600,
     )
-    # wildcard capability
-    assert is_authorized_for({"capability": "verify.http"}, grant) is True
-    assert is_authorized_for({"capability": "deploy.prod"}, grant) is False
+    # wildcard capability — with typed resource matching, must provide resource within scope
+    assert is_authorized_for({"capability": "verify.http", "resource": "repo/myapp/check"}, grant) is True
+    assert is_authorized_for({"capability": "deploy.prod", "resource": "repo/myapp/check"}, grant) is False
+    # also without resource should fail closed (I-005) — verify that
+    assert is_authorized_for({"capability": "verify.http"}, grant) is False
     # scope matching
     assert is_authorized_for({"capability": "code.edit", "resource": "repo/myapp/src/foo.py"}, grant) is True
     assert is_authorized_for({"capability": "code.edit", "resource": "repo/other/file"}, grant) is False
@@ -220,7 +222,19 @@ def test_procedure_minimal_standard_enhanced():
     # with authorization present, satisfied
     work2 = Work(id=new_id("work"), title="fix bug", description="repair", kind="incident", metadata={"purpose": "fix", "execution_boundary": "x", "authorization_grant_id": "g1", "evidence_refs": ["e1"], "verified": True, "recovery_path": "rollback", "reviewed": True, "candidate": True})
     run2 = Run(id=new_id("run"), work_id=work2.id, status="succeeded", metadata={"result_confirmed": True})
-    standard2 = check_procedure(work2, run2, ProcedureProfile.standard)
+    # provide typed proofs to satisfy strict gates
+    from portable_runtime.records.authorization import AuthorizationGrant as _AG
+    from datetime import UTC as _UTC, datetime as _DT
+    _dummy_grant = _AG(principal_ref="human:owner", grantee_ref="agent:test", allowed_capabilities=["*"], subject_version_refs=[], valid_from=_DT.now(_UTC))
+    from portable_runtime.records.models import BaseRecord as _BR
+    _ev = _BR(record_type="EvidenceArtifact", lifecycle_status="current", data={"uri": "file://e1"})
+    from portable_runtime.records.relations import RecordRelation as _RR
+    _rel = _RR(relation_type="supports", subject_ref=_ev.id, object_ref=work2.id)
+    from portable_runtime.records.open_validation import ClosedVerificationResult as _CVR
+    _cv = _CVR(result="pass")
+    from portable_runtime.core.models import Checkpoint as _CP
+    _cp = _CP(run_id=run2.id, step_id=None)
+    standard2 = check_procedure(work2, run2, ProcedureProfile.standard, grants=[_dummy_grant], evidence_artifacts=[_ev], relations=[_rel], verification_results=[_cv], checkpoints=[_cp], decisions=[{"id": "d1"}])
     # authorization should be satisfied now
     assert [s for s in standard2 if str(s.obligation) == "authorization"][0].status == "satisfied"
 

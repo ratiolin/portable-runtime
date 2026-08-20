@@ -170,14 +170,57 @@ class SQLiteStateStore:
     def get_checkpoint(self, checkpoint_id: str) -> Checkpoint | None: return self._get("checkpoint", Checkpoint, checkpoint_id)
     def save_compensation(self, value: Compensation) -> None: self._save("compensation", value)
     def compare_and_swap(self, kind: str, identifier: str, expected_version: int, new_value) -> bool:
-        existing = self._get(kind, self._types.get(kind, object), identifier)
-        if existing is None:
-            return False
-        cur = getattr(existing, "version", 0) if hasattr(existing, "version") else 0
-        if cur != expected_version:
-            return False
-        self._save(kind, new_value)
-        return True
+        # Atomic conditional update: verify version inside transaction and check rowcount
+        import json as _json
+
+        data = new_value.model_dump(mode="json")  # type: ignore[attr-defined]
+        raw = _json.dumps(data, ensure_ascii=False)
+        created_at = data.get("created_at", "") if isinstance(data, dict) else ""
+        with self._lock:
+            # Use transaction for atomicity
+            cur = self._connection.cursor()
+            try:
+                cur.execute("BEGIN IMMEDIATE")
+                # Verify current version via json_extract for atomic check
+                row = cur.execute(
+                    "SELECT data FROM runtime_records WHERE kind=? AND id=?",
+                    (kind, identifier),
+                ).fetchone()
+                if row is None:
+                    cur.execute("ROLLBACK")
+                    return False
+                try:
+                    existing_data = _json.loads(row["data"])
+                    cur_ver = existing_data.get("version", 0) if isinstance(existing_data, dict) else 0
+                except Exception:
+                    cur_ver = 0
+                if cur_ver != expected_version:
+                    cur.execute("ROLLBACK")
+                    return False
+                cur.execute(
+                    "UPDATE runtime_records SET data=?, created_at=? WHERE kind=? AND id=? AND json_extract(data, ''$.version'') = ?",
+                    (raw, created_at, kind, identifier, expected_version),
+                )
+                # Fallback: if json_extract not matching due to missing version field, try alternative where clause
+                if cur.rowcount == 0:
+                    # Try direct update with version check via previous read (still within transaction)
+                    cur.execute(
+                        "INSERT INTO runtime_records(kind, id, data, created_at) VALUES (?, ?, ?, ?) ON CONFLICT(kind, id) DO UPDATE SET data=excluded.data, created_at=excluded.created_at WHERE json_extract(data, ''$.version'') = ? OR json_extract(excluded.data, ''$.version'') = ?",
+                        (kind, identifier, raw, created_at, str(expected_version), str(expected_version)),
+                    )
+                    # If still 0, check if we successfully wrote via conditional
+                    if cur.rowcount == 0:
+                        # Final fallback: ensure version matches by re-reading after write attempt
+                        cur.execute("ROLLBACK")
+                        return False
+                cur.execute("COMMIT")
+                return True
+            except Exception:
+                try:
+                    cur.execute("ROLLBACK")
+                except Exception:
+                    pass
+                return False
     def transaction(self):
         from contextlib import contextmanager
         @contextmanager
@@ -332,6 +375,7 @@ class SQLiteStateStore:
     def import_bundle(self, bundle_path: Path, artifact_store: Any | None = None) -> dict[str, Any]:
         from .bundle import import_bundle as _import_bundle
         return _import_bundle(self, artifact_store, bundle_path)
+
 
 
 

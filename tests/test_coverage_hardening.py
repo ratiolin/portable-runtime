@@ -55,7 +55,7 @@ def test_memory_store_crud():
     art = Artifact(id="art_1", kind="doc", uri="file:///tmp/x")
     store.save_artifact(art)
     assert store.get_artifact("art_1") is not None
-    ki = KnowledgeItem(id="k1", kind="doc", title="t", content_ref="ref", status="candidate")
+    ki = KnowledgeItem(id="k1", kind="doc", title="t", content_ref="ref", status="candidate", evidence_refs=["e1"], valid_scope={"domain": "test"}, metadata={"epistemic_judgment_refs": ["j1"], "authorization_refs": ["a1"], "environment_versions": {"env": "v1"}})
     store.save_knowledge(ki)
     assert store.get_knowledge("k1") is not None
     assert len(store.list_knowledge("candidate")) == 1

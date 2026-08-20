@@ -102,6 +102,7 @@ def assess_revalidation(
     severity: Severity = _SEVERITY_RULES.get(ct, "medium")  # type: ignore[assignment]
 
     affected: list[AffectedAssessment] = []
+    seen: set[str] = set()
     for rel in relations:
         rt = getattr(rel, "relation_type", None) or getattr(rel, "type", "") or ""
         obj = getattr(rel, "object_ref", None)
@@ -115,6 +116,9 @@ def assess_revalidation(
             continue
         if not subj:
             continue
+        if subj in seen:
+            continue
+        seen.add(subj)
         required: ImpactType = _resolve_required_action(ct, rt)
         # impact_type mirrors required_action for now; spec allows separate but keep consistent
         affected.append(
