@@ -58,3 +58,12 @@ exclude = ["tests/"]
 
 [tool.coverage.run]
 omit = ["tests/*", ".venv/*"]
+
+[[tool.mypy.overrides]]
+module = "control_plane.*"
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = "control_plane"
+ignore_missing_imports = true
+

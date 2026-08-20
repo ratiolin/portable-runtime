@@ -118,4 +118,5 @@ uv run pytest
 
 ---
 
-Originated from `ratiolin/control-plane`'"'"'s `portable_runtime`, now standalone.
+Standalone portable runtime for durable execution.
+

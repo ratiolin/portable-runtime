@@ -48,7 +48,7 @@ class LogsVerifierProvider:
                 return CapabilityResult(request_id=request.id, provider_id=self.descriptor.id, status="failed", error={"type": type(exc).__name__, "message": str(exc)[:1500]})  # noqa: E501
         # Placeholder: scan local logs directory or delegate to control_plane.tools
         try:
-            from control_plane.tools import check_logs  # type: ignore[attr-defined]
+            from control_plane.tools import check_logs
 
             ok, message, ref = await check_logs(target, since_minutes=since_minutes, patterns=patterns)  # noqa: E501
             return CapabilityResult(request_id=request.id, provider_id=self.descriptor.id, status="succeeded" if ok else "failed", message=message, metadata={"evidence_ref": ref})  # noqa: E501
@@ -129,3 +129,6 @@ class GitDiffVerifierProvider:
 
     async def cancel(self, request_id: str) -> None:
         return None
+
+
+

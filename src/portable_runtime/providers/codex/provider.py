@@ -232,3 +232,5 @@ def create_codex_provider_from_toml(path: Path, provider_id: str = "codex-primar
     cli = cfg.get("cli") or agent.get("codex_cli") or ""
     gateway = cfg.get("gateway_base_url") or agent.get("gateway_base_url") or ""
     return CodexProvider(provider_id=provider_id, model=model, cli=cli, gateway_base_url=gateway)
+
+
