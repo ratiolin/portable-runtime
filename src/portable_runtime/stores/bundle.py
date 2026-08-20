@@ -11,6 +11,18 @@ from typing import Any
 
 from portable_runtime.core.models import utcnow
 
+
+def _safe_output_path(p: Path) -> Path:
+    if not str(p).strip():
+        raise ValueError("output path must not be empty")
+    if ".." in p.parts:
+        cwd = Path.cwd().resolve()
+        resolved = p.resolve()
+        if not (resolved.is_relative_to(cwd) or resolved.is_relative_to(cwd.parent)):
+            raise ValueError(f"output path escapes allowed base: {p}")
+    return p
+
+
 BUNDLE_SCHEMA_VERSION = "1"
 BUNDLE_FORMAT = "portable-runtime-bundle-v1"
 
@@ -112,7 +124,7 @@ def export_bundle(
     output_path: Path,
     runtime_id: str = "runtime",
 ) -> Path:
-    output_path.parent.mkdir(parents=True, exist_ok=True)
+    _safe_output_path(output_path).parent.mkdir(parents=True, exist_ok=True)
     state = state_store.export_state()
     counts: dict[str, int] = {k: len(v) for k, v in state.items()}
     artifact_files: list[str] = []
@@ -313,6 +325,7 @@ def bundle_contains_absolute_paths(bundle_path: Path) -> bool:
     except Exception:
         return False
     return False
+
 
 
 
