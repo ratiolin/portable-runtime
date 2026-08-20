@@ -4,7 +4,7 @@ import pytest
 
 from portable_runtime.api.cli import _safe_state_path
 from portable_runtime.stores.bundle import _safe_output_path
-from portable_runtime.stores.sqlite import _safe_db_path, SQLiteStateStore
+from portable_runtime.stores.sqlite import SQLiteStateStore, _safe_db_path
 
 
 def test_safe_state_path_valid():
