@@ -1,9 +1,12 @@
 from __future__ import annotations
-import hashlib, json
-from typing import Any
+
+import hashlib
+import json
+
 from portable_runtime.core.capabilities import CapabilityRequest
 from portable_runtime.core.capability_contract import CapabilityContractRegistry, compute_effective_impact
 from portable_runtime.core.models import new_id
+
 _IMPACT_ORDER = {"read": 0, "write-local": 1, "write-remote": 2, "deploy": 3, "admin": 4, "irreversible": 5}
 def _hash_params(capability, instruction, parameters):
     payload = json.dumps({"cap": capability, "inst": instruction, "params": parameters}, sort_keys=True, default=str)

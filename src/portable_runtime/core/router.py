@@ -123,7 +123,8 @@ class CapabilityService:
         return await self.boundary.execute(request)  # type: ignore
 
     def _digest(self, request: CapabilityRequest) -> str:
-        import hashlib, json
+        import hashlib
+        import json
         payload = json.dumps({"cap": request.capability, "inst": request.instruction, "params": request.parameters}, sort_keys=True, default=str)
         return hashlib.sha256(payload.encode()).hexdigest()[:16]
 
