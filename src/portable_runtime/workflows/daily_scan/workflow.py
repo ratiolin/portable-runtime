@@ -98,25 +98,36 @@ class DailyScanWorkflow:
                     created_by_provider_id=result.provider_id or None,
                 )
                 context.store.save_artifact(artifact)
-                ev_status: str = (
-                    "supported"
-                    if result.status == "succeeded"
-                    else ("contested" if result.status == "failed" else "unknown")
-                )
-                if result.status == "unavailable":
-                    ev_status = "unknown"
-                evidence = Evidence(
-                    id=new_id("evidence"),
-                    kind=kind,
-                    subject_refs=[work.id],
-                    artifact_refs=[artifact.id],
-                    source=result.provider_id or f"workflow:{self.id}",
-                    status=ev_status,  # type: ignore[arg-type]
-                )
-                # also link provider evidence refs if any
-                if result.evidence_refs:
-                    evidence.artifact_refs.extend(result.evidence_refs)
-                context.store.save_evidence(evidence)
+                # P1-2: produce Artifact + Observation, do NOT auto-create supported Evidence
+                try:
+                    from portable_runtime.records.models import Observation as ObservationRecord
+                    obs = ObservationRecord(
+                        id=new_id("record"),
+                        record_type="Observation",
+                        lifecycle_status="current",
+                        scope={"work_id": work.id, "run_id": run.id},
+                        source_refs=[artifact.id],
+                        metadata={"kind": kind, "provider_id": result.provider_id, "status": result.status, "detail": detail},
+                    )
+                    if hasattr(context.store, "save_record"):
+                        context.store.save_record(obs)  # type: ignore[attr-defined]
+                except Exception:
+                    logger.debug("daily-scan observation creation failed", exc_info=True)
+                # For backward compat, still create Evidence but never as supported (unknown only)
+                try:
+                    evidence = Evidence(
+                        id=new_id("evidence"),
+                        kind=kind,
+                        subject_refs=[work.id],
+                        artifact_refs=[artifact.id],
+                        source=result.provider_id or f"workflow:{self.id}",
+                        status="unknown",  # never auto supported - P1-2
+                    )
+                    if result.evidence_refs:
+                        evidence.artifact_refs.extend(result.evidence_refs)
+                    context.store.save_evidence(evidence)
+                except Exception:
+                    pass
             except Exception:
                 logger.debug("daily-scan evidence creation failed", exc_info=True)
 
@@ -178,20 +189,13 @@ def _is_promotable(item: Any, evidence_by_id: dict[str, Any]) -> tuple[bool, str
         return False, "missing valid_scope (scope required for official)"
     if not isinstance(env_versions, dict) or not env_versions:
         return False, "missing environment_versions/version context"
-    has_supported = False
-    for ref in ev_refs:
-        ev = evidence_by_id.get(ref)
-        if ev is None:
-            continue
-        status = getattr(ev, "status", "unknown")
-        if status == "supported":
-            has_supported = True
-            break
-    if not has_supported:
-        exists = any(r in evidence_by_id for r in ev_refs)
-        if not exists:
-            return False, "evidence refs do not exist"
-        return False, "no supported evidence (and explicit judgment still required)"
+    # P1-2: stop depending on Evidence.status==supported, use existence + explicit judgment/auth/scope/env
+    # Check evidence refs exist (but not status)
+    if not any(r in evidence_by_id for r in ev_refs):
+        return False, "evidence refs do not exist"
+    # If evidence exists, require explicit judgment/auth/scope/env already checked above; status not decisive
+    # Optionally check OpenValidationResult if available via metadata
+    # Do not require supported status
     return True, "validated with explicit judgment + authorization + scope + version"
 
 
@@ -239,22 +243,38 @@ class KnowledgeConsolidationWorkflow:
                     continue
 
             ok, reason = _is_promotable(item, evidence_by_id)
+            # P1-3: not sufficiently qualified != invalid -> retain candidate
+            # Check if item is explicitly refuted/superseded/withdrawn
+            meta = getattr(item, "metadata", {}) if isinstance(getattr(item, "metadata", {}), dict) else {}
+            is_explicit_invalid = False
+            # Check metadata flags for explicit invalid
+            if isinstance(meta, dict):
+                if meta.get("refuted") or meta.get("withdrawn") or meta.get("superseded") or meta.get("explicitly_rejected"):
+                    is_explicit_invalid = True
+                if meta.get("_archive_reason") and any(x in str(meta.get("_archive_reason")) for x in ["refuted", "superseded", "withdrawn", "explicitly_rejected"]):
+                    is_explicit_invalid = True
             try:
                 if ok:
                     new_item = item.model_copy(update={"status": "official"})
                     context.store.save_knowledge(new_item)
                     promoted += 1
                     logger.info("promoted knowledge %s: %s", item.id, reason)
-                else:
-                    # Only archive if explicitly invalid; keep candidate if ambiguous?
-                    # Spec says promote/archive, so archive invalid ones
+                elif is_explicit_invalid or any(kw in reason.lower() for kw in ["refuted", "superseded", "withdrawn", "explicitly rejected", "rejected"]):
                     new_item = item.model_copy(update={"status": "archived"})
-                    # store reason in metadata for audit
                     if isinstance(new_item.metadata, dict):
                         new_item.metadata["_archive_reason"] = reason
                     context.store.save_knowledge(new_item)
                     archived += 1
                     logger.info("archived knowledge %s: %s", item.id, reason)
+                else:
+                    # retain candidate - not sufficiently qualified
+                    if isinstance(item.metadata, dict):
+                        item.metadata["_retain_reason"] = reason
+                        try:
+                            context.store.save_knowledge(item)
+                        except Exception:
+                            pass
+                    logger.info("retain candidate knowledge %s: %s", item.id, reason)
             except Exception:
                 logger.debug("knowledge consolidation item update failed", exc_info=True)
                 continue

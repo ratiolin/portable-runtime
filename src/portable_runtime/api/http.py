@@ -529,12 +529,12 @@ def create_app(runtime: Runtime | None = None) -> FastAPI:
         if work is None:
             raise HTTPException(status_code=404, detail="work not found")
         runs = runtime.store.list_runs(work_id)
-        run = runs[0] if runs else None
+        run = runs[0] if runs else None  # noqa: F841
         try:
             prof = ProcedureProfile(profile)
         except Exception:
             prof = ProcedureProfile.standard
-        statuses = check_procedure(work, run, prof) if run else []
+        statuses: Any = check_procedure(work, run, prof) if run else []  # type: ignore[assignment]
         return {"work_id": work_id, "profile": prof.value, "gates": [s.model_dump(mode="json") if hasattr(s, "model_dump") else s for s in statuses]}
 
     @app.get("/v1/steps")

@@ -13,7 +13,7 @@ import hashlib
 import json
 from dataclasses import dataclass, field
 
-from portable_runtime.core.capabilities import CapabilityRequest, CapabilityResult
+from portable_runtime.core.capabilities import CapabilityResult
 from portable_runtime.core.models import Checkpoint, Run, Step, Work, utcnow
 from portable_runtime.core.registry import ProviderRegistry
 from portable_runtime.core.router import CapabilityService
@@ -92,17 +92,24 @@ class WorkflowContext:
         cached = self._lookup_cache(key)
         if cached is not None:
             return cached
-        # V1.1 stable step key + idempotency
-        idempotency_key = f"{self.run.id}:{key}"
-        req = CapabilityRequest(
-            id=f"req_{self.run.id}_{capability}_{len(self._invocation_cache)}",
-            capability=capability,
+        from portable_runtime.core.invocation import InvocationFactory  # type: ignore[import-untyped]
+        contract_registry = None
+        try:
+            b = getattr(self.capabilities, "boundary", None)
+            if b is not None and hasattr(b, "contract_registry"):
+                contract_registry = b.contract_registry
+        except Exception:
+            pass
+        factory = InvocationFactory(store=self.store, registry=self.registry, contract_registry=contract_registry, runtime_id=getattr(self.capabilities, "runtime_id", "runtime"))
+        req = factory.build(
+            capability,
             work_id=self.work.id,
             run_id=self.run.id,
             instruction=instruction,
-            parameters=dict(parameters),
-            idempotency_key=idempotency_key,
+            parameters=dict(parameters),  # type: ignore[arg-type]
+            idempotency_key=f"{self.run.id}:{key}",
             step_key=key,
+            request_id=f"req_{self.run.id}_{capability}_{len(self._invocation_cache)}",
         )
         result = await self.capabilities.invoke(req)
         self._store_cache(key, result)
