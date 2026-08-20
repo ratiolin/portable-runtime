@@ -1,4 +1,3 @@
-import tempfile
 from pathlib import Path
 
 import pytest
@@ -17,7 +16,7 @@ def test_safe_state_path_valid():
 
 def test_safe_state_path_empty():
     with pytest.raises(ValueError):
-        _safe_state_path(Path(""))
+        _safe_state_path(Path("   "))
 
 
 def test_safe_state_path_traversal_rejected():
@@ -39,7 +38,7 @@ def test_safe_output_path_valid():
 
 def test_safe_output_path_empty():
     with pytest.raises(ValueError):
-        _safe_output_path(Path(""))
+        _safe_output_path(Path("   "))
 
 
 def test_safe_db_path_valid(tmp_path: Path):
