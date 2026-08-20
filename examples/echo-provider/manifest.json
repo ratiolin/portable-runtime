@@ -1,0 +1,9 @@
+{
+  "id": "echo",
+  "name": "Example Echo Provider",
+  "version": "1.0.0",
+  "protocol_version": "1",
+  "transport": "stdio-jsonl",
+  "command": ["python", "provider.py"],
+  "capabilities": ["text.echo"]
+}

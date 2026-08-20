@@ -1,0 +1,16 @@
+{
+  "schema_version": "1",
+  "id": "codex-primary",
+  "name": "Codex Provider",
+  "version": "1.0.0",
+  "runtime_version": ">=0.1,<1.0",
+  "components": [
+    {
+      "type": "provider",
+      "transport": "python",
+      "entrypoint": "portable_runtime.providers.codex:CodexProvider"
+    }
+  ],
+  "capabilities": ["reason.generate","code.read","code.edit","code.test","shell.exec","git.diff"],
+  "description": "Wraps codex exec as a portable CapabilityProvider; health checks codex --version."
+}
