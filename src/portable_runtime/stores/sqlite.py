@@ -68,6 +68,7 @@ class SQLiteStateStore:
         with self._lock:
             self._connection.execute("PRAGMA journal_mode=WAL")
             self._connection.execute("PRAGMA synchronous=FULL")
+            self._connection.execute("PRAGMA busy_timeout=5000")
             self._connection.execute(
                 "CREATE TABLE IF NOT EXISTS runtime_records ("
                 "kind TEXT NOT NULL, id TEXT NOT NULL, data TEXT NOT NULL, "
@@ -180,7 +181,7 @@ class SQLiteStateStore:
             # Use transaction for atomicity
             cur = self._connection.cursor()
             try:
-                cur.execute("BEGIN IMMEDIATE")
+                cur.execute("BEGIN EXCLUSIVE")
                 # Verify current version via json_extract for atomic check
                 row = cur.execute(
                     "SELECT data FROM runtime_records WHERE kind=? AND id=?",
