@@ -2,9 +2,20 @@
 
 [![CI](https://github.com/ratiolin/portable-runtime/actions/workflows/ci.yml/badge.svg)](https://github.com/ratiolin/portable-runtime/actions/workflows/ci.yml) [![Quality Gate Status](https://sonarcloud.io/api/project_badges/measure?project=portable-runtime&metric=alert_status)](https://sonarcloud.io/summary/new_code?id=portable-runtime) [![Coverage](https://sonarcloud.io/api/project_badges/measure?project=portable-runtime&metric=coverage)](https://sonarcloud.io/summary/new_code?id=portable-runtime) [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE) [![Python 3.12](https://img.shields.io/badge/Python-3.12-blue.svg)](pyproject.toml)
 
-Portable runtime for durable **Work / Run** orchestration with pluggable
-**Provider / Trigger / Store / Workflow**. Core never depends on a model,
-harness, OS, message platform, monitoring system or external tool.
+Portable runtime for durable **Work / Run** orchestration with pluggable **Provider / Trigger / Store / Workflow** — now a **responsibility-preserving, evidence-linked, authorized and revisable** runtime (V1.1–V2.0).
+
+> **V2.0 motto:** *Portable Runtime does not guarantee correctness; it guarantees that judgment, authorization, execution, verification and revision are never silently conflated, and that errors remain traceable, recoverable and reopenable.*
+
+## Highlights (V1.1–V2.0)
+
+- **Execution Integrity (V1.1):** `Step / StepAttempt / Checkpoint / Compensation` with `CAS / Lease+Fencing / idempotency` and `effect semantics` (`pure / idempotent / deduplicatable / reconcilable / irreversible-opaque → unknown`) — crash after provider no silent double-execution.
+- **Semantic Records (V1.2):** `record_type ⊥ epistemic_status ⊥ lifecycle_status` — 12 types (`EvidenceArtifact / Observation / Assertion / Goal / Constraint / Experiment / Decision / Action / Outcome / Revision / ChangeObject / Policy`) with `produces != causes` enforcement.
+- **Revision & Revalidation (V1.3):** `Revision(revises→old, produces→new, supersedes)` with retained history; `typed dependency` (`validated-under / executed-with / …`) → `AffectedAssessment` (`block-next-use` / `background-revalidate` etc., no recursive invalidation).
+- **Authorization & Policy (V1.4):** `AuthorizationGrant` isolated from `Decision` (`subject_version_refs` prevents v1→v2 reuse); `PolicyDecision(disposition=allow/deny/defer/require, obligations[])` with `deny > defer > union(needs) > allow` algebra and `waivable:false` hard boundaries; `ProcedureProfile` (`minimal / standard / enhanced`).
+- **Knowledge & Reopen (V1.5):** `KnowledgeProjection` selective consolidation (never drops counterexamples); `ReopenAssessment(9 scopes) → superseding Work`.
+- **Failure-domain Routing (V1.6):** `ProviderDescriptor` 9 domains (`provider_family / credential_domain / …`) + `ConstraintRouter` (`hard constraints → eligible → deterministic → cost`).
+- **Validation & Reliability (V1.7–1.8):** `ClosedVerification(pass/fail)` vs `OpenValidation(supports/weakens/…)` + `ExperimentPlan` + `CircuitBreaker / ReliabilityControls` (`t_detect+t_judge+t_correct < t_irreversible`).
+- **Protocol (V2.0):** `Event Journal` append-only, `Bundle v1` (`manifest + 16 kinds jsonl + artifacts/ + sha256 checksums`) with full ref/lifecycle validation, 4-category HTTP API + `explain/why/lineage/affected-by/reopen` CLI, and 11-dim conformance suite.
 
 ## Quick start
 
@@ -32,26 +43,45 @@ Export / import state without any model or network:
 ```powershell
 .venv\Scripts\python.exe -m portable_runtime --state data/portable-runtime.db state export runtime-state.json
 .venv\Scripts\python.exe -m portable_runtime --state data/portable-runtime.db state import runtime-state.json
+# bundle (portable + artifacts + checksums)
+.venv\Scripts\python.exe -m portable_runtime --state data/portable-runtime.db state export bundle.tar.zst
+```
+
+New CLI why queries:
+
+```powershell
+.venv\Scripts\python.exe -m portable_runtime explain <record_id>
+.venv\Scripts\python.exe -m portable_runtime why <action_id>
+.venv\Scripts\python.exe -m portable_runtime lineage <record_id>
+.venv\Scripts\python.exe -m portable_runtime affected-by <change_ref> --change-type evaluator
+.venv\Scripts\python.exe -m portable_runtime revalidation pending
+.venv\Scripts\python.exe -m portable_runtime authorization list
+.venv\Scripts\python.exe -m portable_runtime recovery status
+.venv\Scripts\python.exe -m portable_runtime knowledge list --negative
 ```
 
 ## Architecture
 
 ```
-Work / Run / Artifact / Evidence / Knowledge
+Intelligence / Domain Layer (model / human / solver → generate / compare / validate)
                     |
-              Runtime + Store
+              Work Layer (Work / Run / Step / Attempt / Checkpoint / reopen)
                     |
-          CapabilityService + Router
+     Semantic Records (EvidenceArtifact / Assertion / Decision / Revision / Outcome)  +  Procedure (minimal/standard/enhanced)
                     |
-             ProviderRegistry
+              Capability Router (hard constraints / failure-domains / authorization)
                     |
-      in-process or stdio-jsonl providers
+                Reality (processes / APIs / files / Git)
+                    |
+           Observation / Evidence → revalidation → correction → reopen  ↺
 ```
 
-- **Provider** – implements `CapabilityProvider`; open capability strings (`text.echo`, `verify.http`, ...).
-- **Trigger** – creates Work (`webhook`, `schedule`, `alertmanager`-compatible).
-- **Store** – `StateStore / ArtifactStore / EventStore` on `src/portable_runtime/interfaces`; `SQLite` and `InMemory` / `Filesystem` included.
-- **Workflow** – orchestrates `context.invoke(capability, ...)`; built-ins: `generic_task`, `incident_repair`, `daily_scan`, `knowledge_consolidation`.
+Cross-cutting: `append-only history / provenance / versioning / authorization / revalidation / recovery / portability`.
+
+- **Provider** – implements `CapabilityProvider`; open capability strings (`text.echo`, `verify.http`, `code.edit`, `human.approve`, …). `effect_semantics` and `reconcile()` are part of the contract.
+- **Trigger** – creates Work (`webhook`, `schedule`, `alertmanager`-compatible with `IdempotencyStore` + HMAC).
+- **Store** – `StateStore / ArtifactStore / EventStore` on `src/portable_runtime/interfaces`; `SQLite` (WAL, CAS, Lease) and `InMemory` / `Filesystem` included, plus `Bundle` tar.zst with manifest validation.
+- **Workflow** – orchestrates `context.invoke(capability, ...)` and `context.require("purpose-identified")`; built-ins: `generic_task`, `incident_repair`, `daily_scan`, `knowledge_consolidation` + `ProcedureProfile` gates.
 
 See [docs/architecture.md](docs/architecture.md),
 [docs/provider-api.md](docs/provider-api.md),
@@ -61,6 +91,13 @@ See [docs/architecture.md](docs/architecture.md),
 [docs/store-api.md](docs/store-api.md),
 [docs/state-migration.md](docs/state-migration.md) and
 [docs/deployment-local.md](docs/deployment-local.md).
+
+## HTTP API (4 categories)
+
+- **Operational:** `/v1/work`, `/v1/runs`, `/v1/steps`, `/v1/artifacts`, `/v1/events`
+- **Semantic:** `/v1/records`, `/v1/relations`, `/v1/evidence`, `/v1/revalidation/pending`, `/v1/revalidation/affected-by/{change_ref}`
+- **Governance:** `/v1/authorizations`, `/v1/policies`, `/v1/procedures/{work_id}`, `/v1/reopen/{record_id}`
+- **Knowledge & explain:** `/v1/knowledge?negative=true`, `/v1/explain/{record_id}`, `/v1/why/{action_id}`, `/v1/lineage/{record_id}`, `/v1/recovery/status`
 
 ## Plugin authoring
 
@@ -112,19 +149,12 @@ Reference profile: `examples/personal-platform-profile` is a minimal trigger/pro
 uv sync --extra dev
 uv run ruff check .
 uv run mypy src
-uv run pytest
+uv run pytest              # 173 tests, 78% overall, 83.1% new-code
+uv run pytest --cov=src --cov-report=xml  # for SonarCloud
 ```
+
+Quality gate: `sonar-project.properties` pins `sonar.python.version=3.12`, `sonar.cpd.exclusions=tests/**,...` and `sonar.issue.ignore.multicriteria` for the 2 intentional `tests/**` S5779 and the 2 retained `hashlib.sha1` compat branches.
 
 ---
 
-Standalone portable runtime for durable execution.
-
-
-
-<!-- sonar trigger 2026-08-20 20:15 -->
-
-
-<!-- trigger sonar reanalysis 2026-08-20 -->
-
-
-
+Standalone portable runtime for durable execution — now with responsibility-preserving protocol and conformance suite.
