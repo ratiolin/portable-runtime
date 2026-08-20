@@ -103,3 +103,25 @@ def test_sqlite_store_path_validation_extra(tmp_path: Path):
         pass
 
 
+
+def test_safe_helpers_comprehensive(tmp_path: Path):
+    from pathlib import Path
+
+    from portable_runtime.api.cli import _safe_state_path
+    from portable_runtime.stores.bundle import _safe_output_path
+    from portable_runtime.stores.sqlite import _safe_db_path
+
+    # Test valid without ..
+    assert _safe_state_path(Path("data/a.db")) == Path("data/a.db")
+    # Test with .. that stays within cwd.parent (should not raise)
+    p_inside = Path("a/../b.db")
+    assert _safe_state_path(p_inside) == p_inside
+    # Test empty and whitespace
+    try:
+        _safe_state_path(Path("   "))
+        assert False
+    except ValueError:
+        pass
+    # Test bundle and sqlite similarly
+    assert _safe_output_path(Path("out/bundle.tar")) == Path("out/bundle.tar")
+    assert _safe_db_path(tmp_path / "x.db") == tmp_path / "x.db"
