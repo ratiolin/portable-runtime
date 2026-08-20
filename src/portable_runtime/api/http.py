@@ -154,7 +154,7 @@ def create_app(runtime: Runtime | None = None) -> FastAPI:
             return {"total": total, "limit": limit, "offset": offset, "items": dumped}
         return dumped
 
-    @app.get("/v1/work/{work_id}")
+    @app.get("/v1/work/{work_id}", responses={404: {"description": "Not found"}})
     async def get_work(work_id: str) -> dict[str, Any]:
         work = runtime.get_work(work_id)
         if work is None:
@@ -201,7 +201,7 @@ def create_app(runtime: Runtime | None = None) -> FastAPI:
             return {"total": total, "limit": limit, "offset": offset, "items": dumped}
         return dumped
 
-    @app.get("/v1/runs/{run_id}")
+    @app.get("/v1/runs/{run_id}", responses={404: {"description": "Not found"}})
     async def get_run(run_id: str) -> dict[str, Any]:
         run = runtime.store.get_run(run_id)
         if run is None:
@@ -242,7 +242,7 @@ def create_app(runtime: Runtime | None = None) -> FastAPI:
             return {"total": total, "limit": limit, "offset": offset, "items": dumped}
         return dumped
 
-    @app.get("/v1/knowledge/{knowledge_id}")
+    @app.get("/v1/knowledge/{knowledge_id}", responses={404: {"description": "Not found"}})
     async def get_knowledge(knowledge_id: str) -> dict[str, Any]:
         item = runtime.store.get_knowledge(knowledge_id)
         if item is None:
@@ -274,7 +274,7 @@ def create_app(runtime: Runtime | None = None) -> FastAPI:
             return {"total": total, "limit": limit, "offset": offset, "items": dumped}
         return dumped
 
-    @app.get("/v1/evidence/{evidence_id}")
+    @app.get("/v1/evidence/{evidence_id}", responses={404: {"description": "Not found"}})
     async def get_evidence(evidence_id: str) -> dict[str, Any]:
         getter = getattr(runtime.store, "get_evidence", None)
         if callable(getter):
@@ -309,7 +309,7 @@ def create_app(runtime: Runtime | None = None) -> FastAPI:
             return {"total": total, "limit": limit, "offset": offset, "items": dumped}
         return dumped
 
-    @app.get("/v1/events/{event_id}")
+    @app.get("/v1/events/{event_id}", responses={404: {"description": "Not found"}})
     async def get_event(event_id: str) -> dict[str, Any]:
         getter = getattr(runtime.store, "get_event", None)
         if callable(getter):
@@ -323,7 +323,7 @@ def create_app(runtime: Runtime | None = None) -> FastAPI:
                     return ev.model_dump(mode="json")
         raise HTTPException(status_code=404, detail="event not found")
 
-    @app.get("/v1/artifacts/{artifact_id}")
+    @app.get("/v1/artifacts/{artifact_id}", responses={404: {"description": "Not found"}})
     async def get_artifact(artifact_id: str) -> dict[str, Any]:
         artifact = runtime.store.get_artifact(artifact_id)
         if artifact is None:
@@ -425,7 +425,7 @@ def create_app(runtime: Runtime | None = None) -> FastAPI:
             items = []
         return [i.model_dump(mode="json") if hasattr(i, "model_dump") else i for i in _paginate(items, limit, offset)]
 
-    @app.get("/v1/records/{record_id}")
+    @app.get("/v1/records/{record_id}", responses={404: {"description": "Not found"}})
     async def get_record(record_id: str) -> Any:
         try:
             rec = runtime.store.get_record(record_id)  # type: ignore[assignment]
@@ -508,7 +508,7 @@ def create_app(runtime: Runtime | None = None) -> FastAPI:
             items = []
         return [i.model_dump(mode="json") if hasattr(i, "model_dump") else i for i in _paginate(items, limit, offset)]
 
-    @app.get("/v1/authorizations/{auth_id}")
+    @app.get("/v1/authorizations/{auth_id}", responses={404: {"description": "Not found"}})
     async def get_authorization(auth_id: str) -> dict[str, Any]:
         try:
             rec = runtime.store.get_record(auth_id)  # type: ignore
@@ -522,7 +522,7 @@ def create_app(runtime: Runtime | None = None) -> FastAPI:
     async def list_policies() -> list[dict[str, Any]]:
         return [{"id": "allow-all"}, {"id": "sensitive-path"}, {"id": "external-side-effect"}]
 
-    @app.get("/v1/procedures/{work_id}")
+    @app.get("/v1/procedures/{work_id}", responses={404: {"description": "Not found"}})
     async def get_procedure(work_id: str, profile: str = "standard") -> dict[str, Any]:
         from portable_runtime.workflows.procedure import ProcedureProfile, check_procedure
         work = runtime.get_work(work_id)
@@ -588,3 +588,4 @@ def create_app(runtime: Runtime | None = None) -> FastAPI:
             return {"error": str(exc), "stale_steps": []}
 
     return app
+
