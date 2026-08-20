@@ -14,6 +14,18 @@ from portable_runtime.stores.sqlite import SQLiteStateStore
 def runtime_from_path(path: Path) -> Runtime:  # NOSONAR
     return Runtime(store=SQLiteStateStore(path))  # NOSONAR
 
+def _safe_state_path(p: Path) -> Path:
+    """Validate --state path does not escape via traversal."""
+    if not str(p).strip():
+        raise ValueError("state path must not be empty")
+    if ".." in p.parts:
+        cwd = Path.cwd().resolve()
+        resolved = p.resolve()
+        if not (resolved.is_relative_to(cwd) or resolved.is_relative_to(cwd.parent)):
+            raise ValueError(f"state path escapes allowed base: {p}")
+    return p
+
+
 
 def run_cli(args: list[str]) -> int:
     import argparse
@@ -94,15 +106,17 @@ def run_cli(args: list[str]) -> int:
         print(json.dumps(triggers, ensure_ascii=False))
         return 0
     if parsed.command in {"init", "start"}:
-        parsed.state.parent.mkdir(parents=True, exist_ok=True)
-        runtime = runtime_from_path(parsed.state)  # NOSONAR
+        validated_state = _safe_state_path(parsed.state)
+        validated_state.parent.mkdir(parents=True, exist_ok=True)
+        runtime = runtime_from_path(validated_state)  # NOSONAR
         try:
             payload = {"runtime_id": runtime.runtime_id, "work": len(runtime.list_work()), "status": "ok"}
             print(json.dumps(payload, ensure_ascii=False))
         finally:
             runtime.store.close() if isinstance(runtime.store, SQLiteStateStore) else None
         return 0
-    runtime = runtime_from_path(parsed.state)
+    validated_state = _safe_state_path(parsed.state)
+    runtime = runtime_from_path(validated_state)
     try:
         if parsed.command == "status":
             print(json.dumps({"runtime_id": runtime.runtime_id, "work": len(runtime.list_work())}, ensure_ascii=False))
@@ -258,3 +272,4 @@ def run_cli(args: list[str]) -> int:
     finally:
         runtime.store.close() if isinstance(runtime.store, SQLiteStateStore) else None
     return 0
+

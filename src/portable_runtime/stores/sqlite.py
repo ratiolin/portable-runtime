@@ -19,6 +19,18 @@ from portable_runtime.core.models import (
 )
 
 
+def _safe_db_path(p: Path) -> Path:
+    if not str(p).strip():
+        raise ValueError("db path must not be empty")
+    if ".." in p.parts:
+        cwd = Path.cwd().resolve()
+        resolved = p.resolve()
+        if not (resolved.is_relative_to(cwd) or resolved.is_relative_to(cwd.parent)):
+            raise ValueError(f"db path escapes allowed base: {p}")
+    return p
+
+
+
 class SQLiteStateStore:
     """Portable JSON-record store with stable IDs and atomic import/export."""
 
@@ -36,9 +48,9 @@ class SQLiteStateStore:
 
     def __init__(self, path: Path) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
-        self.path = path
+        self.path = _safe_db_path(path)
         self._lock = threading.RLock()
-        self._connection = sqlite3.connect(path, check_same_thread=False, isolation_level=None)  # NOSONAR
+        self._connection = sqlite3.connect(_safe_db_path(path), check_same_thread=False, isolation_level=None)  # NOSONAR  # noqa: E501
         self._connection.row_factory = sqlite3.Row
         with self._lock:
             self._connection.execute("PRAGMA journal_mode=WAL")
@@ -149,4 +161,6 @@ class SQLiteStateStore:
         from .bundle import import_bundle as _import_bundle
 
         return _import_bundle(self, artifact_store, bundle_path)
+
+
 
