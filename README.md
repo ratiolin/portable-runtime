@@ -1,6 +1,7 @@
 # portable-runtime
 
 [![CI](https://github.com/ratiolin/portable-runtime/actions/workflows/ci.yml/badge.svg)](https://github.com/ratiolin/portable-runtime/actions/workflows/ci.yml) [![Quality Gate Status](https://sonarcloud.io/api/project_badges/measure?project=metratio_portable-runtime&metric=alert_status)](https://sonarcloud.io/summary/new_code?id=metratio_portable-runtime) [![Coverage](https://sonarcloud.io/api/project_badges/measure?project=metratio_portable-runtime&metric=coverage)](https://sonarcloud.io/summary/new_code?id=metratio_portable-runtime) [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE) [![Python 3.12](https://img.shields.io/badge/Python-3.12-blue.svg)](pyproject.toml)
+- [Code of conduct](CODE_OF_CONDUCT.md) - [Contributing](CONTRIBUTING.md) - [MIT license](LICENSE) - [Security](SECURITY.md)
 
 Portable runtime for durable **Work / Run** orchestration with pluggable
 **Provider / Trigger / Store / Workflow**. Core never depends on a model,
