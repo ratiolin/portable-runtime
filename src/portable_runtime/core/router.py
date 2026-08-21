@@ -56,7 +56,7 @@ class DeterministicPriorityRouting:
         )[0]
 
 class ConstraintRouter(DeterministicPriorityRouting):
-    """V1.6 Constraint Router: hard constraints > eligible > deterministic > cost."""
+    """R1.6 Constraint Router: hard constraints > eligible > deterministic > cost."""
 
     def __init__(self, registry: Any | None = None, *args: Any, **kwargs: Any) -> None:
         super().__init__(*args, **kwargs)  # type: ignore[call-arg]

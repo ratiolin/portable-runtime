@@ -334,7 +334,7 @@ class SQLiteStateStore:
             if subject_ref is None or value.subject_ref == subject_ref
         ]
 
-    # V1.1 Execution Integrity
+    # R1.1 Execution Integrity
     def save_step(self, value: Step) -> None: self._save("step", value)
     def get_step(self, step_id: str) -> Step | None: return self._get("step", Step, step_id)
     def list_steps(self, run_id: str | None = None) -> list[Step]:
@@ -630,7 +630,7 @@ class SQLiteStateStore:
                     self._rollback(cur)
                 raise LeaseExecutionError(f"SQLite lease release failed for {run_id!r}") from exc
 
-    # Records V1.2
+    # Records R1.2 implementation milestone
     def save_record(self, value: BaseRecord) -> None:
         try:
             from portable_runtime.records.authorization import AuthorizationGrant

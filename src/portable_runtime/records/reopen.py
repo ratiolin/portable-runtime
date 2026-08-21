@@ -1,4 +1,4 @@
-"""Reopen — V1.5 first-class reopen semantics."""
+"""Reopen — R1.5 implementation milestone."""
 
 from __future__ import annotations
 

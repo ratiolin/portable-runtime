@@ -265,7 +265,7 @@ class InMemoryStateStore:
                 self._records["run"][run_id] = run_obj
             return True
 
-    # Records V1.2
+    # Records R1.2 implementation milestone
     def save_record(self, value: BaseRecord) -> None:
         try:
             from portable_runtime.records.authorization import AuthorizationGrant

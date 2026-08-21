@@ -1,4 +1,4 @@
-"""KnowledgeProjection — V1.8 strict (P0-3).
+"""KnowledgeProjection — R1.5 implementation milestone.
 
 Replaces KnowledgeItem=truth object with derived projection view.
 Promotion to official is fail-closed: requires explicit epistemic judgment refs

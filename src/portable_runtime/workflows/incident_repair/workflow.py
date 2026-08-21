@@ -166,7 +166,7 @@ class IncidentRepairWorkflow:
             with contextlib.suppress(Exception):
                 context.set_step("approval")
             approval = await context.invoke("human.approve", instruction=f"approve repair for {work.title}")
-            # V1.4 HOOK: human.approve must generate Decision + AuthorizationGrant, not just approved=True
+            # R1.4 HOOK: human.approve must generate Decision + AuthorizationGrant, not just approved=True
             if approval.status == "succeeded":
                 try:
                     from portable_runtime.records.authorization import record_human_approval

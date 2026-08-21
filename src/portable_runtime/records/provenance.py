@@ -1,4 +1,4 @@
-"""Provenance helpers V1.2."""
+"""Provenance helpers — R1.2 implementation milestone."""
 
 from __future__ import annotations
 

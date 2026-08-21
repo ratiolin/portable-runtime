@@ -1,4 +1,4 @@
-"""Open vs Closed validation — V1.8 strict (P0-3).
+"""Open vs Closed validation — R1.7/R1.8 implementation milestones.
 
 Runtime does NOT synthesize epistemic judgment. OpenValidationResult is a
 record of an *external* judgment; Runtime only validates schema / refs / scope.

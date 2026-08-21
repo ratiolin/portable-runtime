@@ -3,7 +3,7 @@
 Hardened: idempotent invoke deduplication + Run state-machine with explicit
 transition contract. Same (run, capability, params) re-invoked is deduped;
 waiting/blocked states are resumable with validated transitions.
-V1.1: Step/Checkpoint/Lease + fencing support.
+R1.1: Step/Checkpoint/Lease + fencing support.
 """
 
 from __future__ import annotations
@@ -148,7 +148,7 @@ class WorkflowContext:
         self._store_cache(key, result)
         return result
 
-    # --- Step helpers V1.1 ---
+    # --- Step helpers R1.1 ---
 
     def step(self, step_key: str, kind: str = "generic") -> Step:
         """Get or create durable Step; ensures stable key."""

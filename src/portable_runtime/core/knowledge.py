@@ -1,4 +1,4 @@
-"""KnowledgeItem helpers and lifecycle — V1.8 strict (P0-3).
+"""KnowledgeItem helpers and lifecycle — R1.5 compatibility surface.
 
 Evidence existence alone MUST NOT imply official. Promotion requires
 explicit epistemic judgment refs + authorization refs + scope + version context.

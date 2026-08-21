@@ -1,4 +1,4 @@
-"""One-class RecordRelation — first-class relations V1.2."""
+"""One-class RecordRelation — R1.2 implementation milestone."""
 
 from __future__ import annotations
 

@@ -67,7 +67,7 @@ class Run(RuntimeModel):
     ended_at: datetime | None = None
     current_step: str | None = None
     provider_invocation_refs: list[str] = Field(default_factory=list)
-    # V1.1 lease/fencing for recovery
+    # R1.1 lease/fencing for recovery
     lease_owner: str | None = None
     lease_generation: int = 0
     lease_expires_at: datetime | None = None
@@ -142,7 +142,7 @@ class Event(RuntimeModel):
     payload: dict[str, Any] = Field(default_factory=dict)
 
 
-# V1.1 Execution Integrity models
+# R1.1 Execution Integrity models
 
 class Step(RuntimeModel):
     """Durable step within a Run; crash-recoverable."""

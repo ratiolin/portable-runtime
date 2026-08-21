@@ -66,7 +66,8 @@ def test_reliability_separates_policy_profile_risk_and_disposition() -> None:
     assert isinstance(controls.last_risk_assessment, ReliabilityRiskAssessment)
     assert isinstance(controls.last_disposition, ReliabilityDisposition)
     assert controls.last_disposition.policy_ref == "test-policy@9"
-    assert "blast_radius_limit" in controls.last_risk_assessment.reason_refs
+    assert controls.last_risk_assessment.reason_refs == ()
+    assert controls.last_disposition.reason == "blast_radius 3 exceeds limit 2"
 
 
 def test_enhanced_profile_requires_fast_recovery_loop() -> None:
@@ -107,14 +108,13 @@ def test_risk_evaluator_and_policy_decision_are_independent() -> None:
     evaluator = ReliabilityRiskEvaluator()
     risk = evaluator.evaluate(
         observation,
-        ReliabilityLimits(blast_radius=2),
         side_effect=True,
         irreversible=False,
         procedure_profile=None,
         timing=None,
     )
     policy = DefaultLocalReliabilityPolicy(profile_id="split", version="1", blast_radius=2)
-    disposition = policy.decide(observation, risk)
-    assert risk.reason_refs == ("blast_radius_limit",)
+    disposition = policy.decide(observation, risk, ReliabilityLimits(blast_radius=2))
+    assert risk.reason_refs == ()
     assert disposition.action == "deny"
     assert disposition.reason == "blast_radius 4 exceeds limit 2"

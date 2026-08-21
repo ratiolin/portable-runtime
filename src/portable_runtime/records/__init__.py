@@ -1,4 +1,4 @@
-"""Records package V1.2."""
+"""Runtime records package — R1.2 implementation milestone."""
 
 from .models import (
     ActionRecord,
