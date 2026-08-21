@@ -26,6 +26,7 @@ from portable_runtime.core.models import (
     Work,
 )
 from portable_runtime.records.authorization import create_grant_for_approval
+from portable_runtime.records.knowledge import KnowledgeProjection
 from portable_runtime.records.relations import RecordRelation
 from portable_runtime.stores.bundle import BUNDLE_SCHEMA_VERSION, export_bundle, import_bundle
 from portable_runtime.stores.filesystem import FileSystemArtifactStore
@@ -152,6 +153,28 @@ def test_bundle_export_import_semantic_equivalence(tmp_path: Path):
     import_bundle(mem2, None, out2)
     assert len(mem2.export_state()["record"]) == len(s2.export_state()["record"])
     s2.close()
+
+
+def test_bundle_roundtrips_canonical_knowledge_projection(tmp_path: Path):
+    store = InMemoryStateStore()
+    work = Work(id="projection_work", title="projection source")
+    store.save_work(work)
+    projection = KnowledgeProjection(
+        id="projection_1",
+        title="canonical projection",
+        source_work_refs=[work.id],
+        current_assertion_refs=["external:assertion:v1"],
+        evidence_summary_refs=["external:evidence:v1"],
+    )
+    store.save_knowledge_projection(projection)
+
+    bundle = tmp_path / "projection.tar"
+    export_bundle(store, None, bundle, runtime_id="projection-test")
+    fresh = InMemoryStateStore()
+    manifest = import_bundle(fresh, None, bundle)
+
+    assert manifest["counts"]["knowledge_projection"] == 1
+    assert fresh.get_knowledge_projection(projection.id) == projection
 
 
 def test_bundle_cross_machine_history_explainable(tmp_path: Path):

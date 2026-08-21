@@ -10,7 +10,7 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from portable_runtime.core.models import new_id
 
@@ -20,6 +20,29 @@ Severity = Literal["low", "medium", "high", "critical"]
 
 REQUIRED_ACTIONS: set[str] = {"none", "warn", "background-revalidate", "block-next-use", "require-human-review", "reopen"}
 CHANGE_TYPES: set[str] = {"evaluator", "model", "code", "dataset", "permission", "classification", "state_space", "environment"}
+
+
+class DependencyImpact(BaseModel):
+    """Observed dependency impact; it does not prescribe runtime action."""
+
+    model_config = ConfigDict(extra="allow")
+
+    change_ref: str
+    affected_ref: str
+    relation_type: str
+    impact_type: ImpactType = "warn"
+    severity: Severity = "medium"
+    reason_refs: list[str] = Field(default_factory=list)
+
+
+class RevalidationDisposition(BaseModel):
+    """Policy decision derived from an impact under an explicit profile."""
+
+    model_config = ConfigDict(extra="allow")
+
+    action: ImpactType = "warn"
+    policy_ref: str = "default-revalidation-policy"
+    rationale_refs: list[str] = Field(default_factory=list)
 
 
 class AffectedAssessment(BaseModel):
@@ -33,6 +56,35 @@ class AffectedAssessment(BaseModel):
     required_action: ImpactType = "warn"
     reason_refs: list[str] = Field(default_factory=list)
     created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+    dependency_impact: DependencyImpact | None = None
+    revalidation_disposition: RevalidationDisposition | None = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def _sync_layers(self) -> AffectedAssessment:
+        """Keep legacy flat fields readable while exposing separated layers."""
+        if self.dependency_impact is None:
+            self.dependency_impact = DependencyImpact(
+                change_ref=self.change_ref,
+                affected_ref=self.affected_ref,
+                relation_type=str(getattr(self, "metadata", {}).get("relation_type", "depends-on")),
+                impact_type=self.impact_type,
+                severity=self.severity,
+                reason_refs=list(self.reason_refs),
+            )
+        else:
+            if self.impact_type == "warn" and self.dependency_impact.impact_type != "warn":
+                self.impact_type = self.dependency_impact.impact_type
+            self.severity = self.dependency_impact.severity
+            self.reason_refs = list(self.dependency_impact.reason_refs)
+        if self.revalidation_disposition is None:
+            self.revalidation_disposition = RevalidationDisposition(
+                action=self.required_action,
+                rationale_refs=list(self.reason_refs),
+            )
+        else:
+            self.required_action = self.revalidation_disposition.action
+        return self
 
 
 _TYPED_DEPENDENCY_RULES: dict[str, set[str]] = {
@@ -82,6 +134,53 @@ def _resolve_required_action(change_type: str, relation_type: str) -> ImpactType
     return "background-revalidate"
 
 
+def detect_dependency_impacts(
+    change_ref: str,
+    change_type: str,
+    relations: list[Any],
+) -> list[DependencyImpact]:
+    """Detect direct typed dependency impacts without selecting an action."""
+    if not change_ref:
+        raise ValueError("change_ref must be non-empty")
+    ct = change_type.strip().lower()
+    watch = _TYPED_DEPENDENCY_RULES.get(ct, {"depends-on", "validated-under"})
+    severity: Severity = _SEVERITY_RULES.get(ct, "medium")  # type: ignore[assignment]
+    affected: list[DependencyImpact] = []
+    seen: set[str] = set()
+    for rel in relations:
+        rt = getattr(rel, "relation_type", None) or getattr(rel, "type", "") or ""
+        obj = getattr(rel, "object_ref", None)
+        subj = getattr(rel, "subject_ref", None)
+        rid = getattr(rel, "id", "")
+        if not isinstance(rt, str) or not isinstance(obj, str) or not isinstance(subj, str):
+            continue
+        if rt not in watch or obj != change_ref or not subj or subj in seen:
+            continue
+        seen.add(subj)
+        affected.append(
+            DependencyImpact(
+                change_ref=change_ref,
+                affected_ref=subj,
+                relation_type=rt,
+                impact_type="warn",
+                severity=severity,
+                reason_refs=[rid] if rid else [],
+            )
+        )
+    return affected
+
+
+def derive_revalidation_disposition(
+    impact: DependencyImpact,
+    *,
+    change_type: str,
+    policy_ref: str = "default-revalidation-policy",
+) -> RevalidationDisposition:
+    """Apply an explicit policy profile to one observed impact."""
+    action = _resolve_required_action(change_type.strip().lower(), impact.relation_type)
+    return RevalidationDisposition(action=action, policy_ref=policy_ref, rationale_refs=list(impact.reason_refs))
+
+
 def assess_revalidation(
     change_ref: str,
     change_type: str,
@@ -95,55 +194,43 @@ def assess_revalidation(
     """
     if not change_ref:
         raise ValueError("change_ref must be non-empty")
-    # normalize change_type
     ct = change_type.strip().lower()
-    # allow unknown types but fallback to generic depends-on handling
-    watch = _TYPED_DEPENDENCY_RULES.get(ct, {"depends-on", "validated-under"})
-    severity: Severity = _SEVERITY_RULES.get(ct, "medium")  # type: ignore[assignment]
-
-    affected: list[AffectedAssessment] = []
-    seen: set[str] = set()
-    for rel in relations:
-        rt = getattr(rel, "relation_type", None) or getattr(rel, "type", "") or ""
-        obj = getattr(rel, "object_ref", None)
-        subj = getattr(rel, "subject_ref", None)
-        rid = getattr(rel, "id", "")
-        if not isinstance(rt, str) or not isinstance(obj, str) or not isinstance(subj, str):
-            continue
-        if rt not in watch:
-            continue
-        if obj != change_ref:
-            continue
-        if not subj:
-            continue
-        if subj in seen:
-            continue
-        seen.add(subj)
-        required: ImpactType = _resolve_required_action(ct, rt)
-        # impact_type mirrors required_action for now; spec allows separate but keep consistent
-        affected.append(
-            AffectedAssessment(
-                change_ref=change_ref,
-                affected_ref=subj,
-                impact_type=required,
-                severity=severity,
-                required_action=required,
-                reason_refs=[rid] if rid else [],
-            )
+    return [
+        AffectedAssessment(
+            change_ref=impact.change_ref,
+            affected_ref=impact.affected_ref,
+            # Flat fields are retained for read compatibility; the two
+            # explicit nested objects are authoritative for new callers.
+            # Legacy flat ``impact_type`` historically mirrored the chosen
+            # action; keep that view stable while nested ``dependency_impact``
+            # carries the observation independently.
+            impact_type=derive_revalidation_disposition(impact, change_type=ct).action,
+            severity=impact.severity,
+            required_action=derive_revalidation_disposition(impact, change_type=ct).action,
+            reason_refs=list(impact.reason_refs),
+            metadata={"relation_type": impact.relation_type},
+            dependency_impact=impact,
+            revalidation_disposition=derive_revalidation_disposition(impact, change_type=ct),
         )
-    return affected
+        for impact in detect_dependency_impacts(change_ref, ct, relations)
+    ]
 
 
 def should_block(affected: AffectedAssessment) -> bool:
-    return affected.required_action in {"block-next-use", "require-human-review", "reopen"}
+    action = affected.revalidation_disposition.action if affected.revalidation_disposition is not None else affected.required_action
+    return action in {"block-next-use", "require-human-review", "reopen"}
 
 
 __all__ = [
     "AffectedAssessment",
+    "DependencyImpact",
+    "RevalidationDisposition",
     "ChangeType",
     "ImpactType",
     "Severity",
     "assess_revalidation",
+    "detect_dependency_impacts",
+    "derive_revalidation_disposition",
     "should_block",
     "CHANGE_TYPES",
     "REQUIRED_ACTIONS",

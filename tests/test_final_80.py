@@ -31,7 +31,9 @@ async def test_http_promql_timeout_and_auth():
     prov2 = HttpVerifierProvider(http_client=mock_client)
     req2 = CapabilityRequest(id="t2", capability="verify.http", parameters={"url":"http://example.com"})
     res2 = await prov2.invoke(req2, InvocationContext(runtime_id="t"))
-    assert res2.status == "failed"
+    assert res2.status == "succeeded"
+    assert res2.verification_result is not None
+    assert res2.verification_result.result == "fail"
     mock_client2 = MagicMock(spec=httpx.AsyncClient)
     mock_client2.get = AsyncMock(side_effect=httpx.TimeoutException("timeout"))
     prov3 = PromqlVerifierProvider(http_client=mock_client2)

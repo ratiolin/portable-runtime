@@ -8,14 +8,18 @@ Portable runtime for durable **Work / Run** orchestration with pluggable **Provi
 
 ## Strict enforcement status
 
-The focused P0 closure scope for the RealityBoundary and SQLite Store is closed and backed by executable evidence. The current release proof is:
+The RealityBoundary, SQLite Store, semantic-plane P1 work and protocol P2 work are locally closed with executable evidence. The current pre-push proof is:
 
-- `uv run pytest -q` — `223 passed` (two existing collection/deprecation warnings only);
-- strict conformance — E001–E020 (21 cases) plus S001–S006 (6 atomicity cases);
-- [main CI run](https://github.com/ratiolin/portable-runtime/actions/runs/32432839060) — lint/test, strict-conformance and SonarCloud all green;
-- [SonarCloud quality gate](https://sonarcloud.io/project/overview?id=portable-runtime) — `OK` for commit `bdec663509ab7d6ad4e5bf7740838f6f6f852179`.
+- `uv run ruff check .` and `uv run mypy src` — both clean;
+- `uv run pytest -q` — `242 passed` (two existing collection/deprecation warnings only);
+- strict-conformance — `45 passed`: E001–E023, S001–S006, P1 semantic, P2 protocol, routing and reliability gates;
+- canonical `KnowledgeProjection` state is bundle-portable; legacy `KnowledgeItem` remains read-compatible but is not a new workflow write target;
+- HTTP mutating control routes are loopback-only and explicitly not an authenticated multi-user boundary;
+- the CI `strict-conformance` job runs the same focused suite and is a prerequisite for SonarCloud analysis.
 
-This status covers the focused P0 closure plan only. The broader semantic hardening backlog remains tracked separately; its P1/P2 items are not implied to be complete by this release.
+Remote CI and SonarCloud are the final post-push checks for this change; their links and commit SHA are recorded here after the remote run completes.
+
+The control-plane HTTP API is local-only and is not an authenticated multi-user boundary. Mutating governance routes (state import, provider enable/disable/reload, capability execution and reopen) reject non-loopback callers; remote deployments must place an authenticated, authorized deployment boundary in front of the process.
 
 ## Highlights (V1.1–V2.0)
 
@@ -26,7 +30,8 @@ This status covers the focused P0 closure plan only. The broader semantic harden
 - **Knowledge & Reopen (V1.5):** `KnowledgeProjection` selective consolidation (never drops counterexamples); `ReopenAssessment(9 scopes) → superseding Work`.
 - **Failure-domain Routing (V1.6):** `ProviderDescriptor` 9 domains (`provider_family / credential_domain / …`) + `ConstraintRouter` (`hard constraints → eligible → deterministic → cost`).
 - **Validation & Reliability (V1.7–1.8):** `ClosedVerification(pass/fail)` vs `OpenValidation(supports/weakens/…)` + `ExperimentPlan` + `CircuitBreaker / ReliabilityControls` (`t_detect+t_judge+t_correct < t_irreversible`).
-- **Protocol (V2.0):** `Event Journal` append-only, `Bundle v1` (`manifest + 16 kinds jsonl + artifacts/ + sha256 checksums`) with full ref/lifecycle validation, 4-category HTTP API + `explain/why/lineage/affected-by/reopen` CLI, and 11-dim conformance suite.
+- **Protocol (V2.0):** `Event Journal` append-only, `Bundle v1` (`manifest + 17 kinds jsonl + artifacts/ + sha256 checksums`) with full ref/lifecycle validation, 4-category HTTP API + `explain/why/lineage/affected-by/reopen` CLI, and strict negative-path conformance.
+- **P1/P2 strict semantics:** qualification facts resolve from typed store references into an immutable assessment/permit; derivation and verification judgment remain distinct; deep reopen reroutes to reframing without auto-rerunning the original workflow; dependency impact is separate from revalidation disposition; state/bundle imports are graph-validated atomically.
 
 ## Quick start
 
@@ -163,7 +168,7 @@ Reference profile: `examples/personal-platform-profile` is a minimal trigger/pro
 uv sync --extra dev
 uv run ruff check .
 uv run mypy src
-uv run pytest              # 223 tests; current local verification
+uv run pytest              # 242 tests; current local verification
 uv run pytest --cov=src --cov-report=xml  # for SonarCloud
 ```
 

@@ -5,7 +5,14 @@
 
 本方案定义的 P0 RealityBoundary / SQLite Store 闭合范围已完成，并由可执行证据和主分支远端检查共同确认：
 
-- 全量本地验证：`uv run pytest -q` → `223 passed`，仅保留两个既有 collection/deprecation warnings；
+同日追加的 P1/P2 严格改进也已在本地完成并纳入待推送变更：
+
+- qualification 只接受 typed refs，边界创建 AssessmentContext/InvocationPermit 并在现实出口前做 TOCTOU digest recheck；
+- KnowledgeProjection、Derivation、独立 verification judgment、deep ReopenPackage/HandoffEnvelope、impact/disposition 分层均有 canonical 路径；
+- Event Journal、bundle/state graph validation、projection bundle portability、HTTP loopback governance 均有执行路径和负路径测试；
+- fresh local proof: `uv run ruff check .`, `uv run mypy src`, `uv run pytest -q` → `242 passed`，strict-conformance selection → `45 passed`。
+
+- 全量本地验证（P0 基线记录）：`uv run pytest -q` → `223 passed`，仅保留两个既有 collection/deprecation warnings；
 - 严格一致性验证：E001–E020（21 cases）与 S001–S006（6 cases）；
 - [主分支 CI](https://github.com/ratiolin/portable-runtime/actions/runs/32432839060)：lint/test、strict-conformance、SonarCloud 全部通过；
 - [SonarCloud](https://sonarcloud.io/project/overview?id=portable-runtime)：commit `bdec663509ab7d6ad4e5bf7740838f6f6f852179` 的 quality gate 为 `OK`。

@@ -11,7 +11,8 @@ import contextlib
 import logging
 from typing import Any
 
-from portable_runtime.core.models import Artifact, Evidence, Run, Work, new_id
+from portable_runtime.core.models import Artifact, Run, Work, new_id
+from portable_runtime.records.knowledge import KnowledgeProjection, promote_to_official
 from portable_runtime.workflows.context import WorkflowContext
 
 logger = logging.getLogger(__name__)
@@ -113,19 +114,27 @@ class DailyScanWorkflow:
                         context.store.save_record(obs)  # type: ignore[attr-defined]
                 except Exception:
                     logger.debug("daily-scan observation creation failed", exc_info=True)
-                # For backward compat, still create Evidence but never as supported (unknown only)
+                # Canonical write path: EvidenceArtifact carries observation
+                # provenance; the store's list_evidence API exposes a
+                # read-only legacy view for old callers.
                 try:
-                    evidence = Evidence(
-                        id=new_id("evidence"),
+                    from portable_runtime.records.models import EvidenceArtifact
+
+                    evidence = EvidenceArtifact(
+                        id=new_id("record"),
                         kind=kind,
-                        subject_refs=[work.id],
-                        artifact_refs=[artifact.id],
-                        source=result.provider_id or f"workflow:{self.id}",
-                        status="unknown",  # never auto supported - P1-2
+                        source_refs=[artifact.id],
+                        metadata={
+                            "work_id": work.id,
+                            "run_id": run.id,
+                            "provider_id": result.provider_id,
+                            "execution_status": result.status,
+                            "verification_result": result.verification_result.model_dump(mode="json") if result.verification_result else None,
+                        },
+                        lifecycle_status="current",
                     )
-                    if result.evidence_refs:
-                        evidence.artifact_refs.extend(result.evidence_refs)
-                    context.store.save_evidence(evidence)
+                    if hasattr(context.store, "save_record"):
+                        context.store.save_record(evidence)  # type: ignore[attr-defined]
                 except Exception:
                     pass
             except Exception:
@@ -157,9 +166,20 @@ def _is_promotable(item: Any, evidence_by_id: dict[str, Any]) -> tuple[bool, str
 
     Requires explicit epistemic judgment refs + authorization refs + valid_scope + version context.
     """
-    if not getattr(item, "title", "") or not getattr(item, "content_ref", ""):
+    is_projection = isinstance(item, KnowledgeProjection)
+    title = getattr(item, "title", "")
+    content_refs = (
+        list(getattr(item, "current_assertion_refs", []) or [])
+        if is_projection
+        else [getattr(item, "content_ref", "")]
+    )
+    if not title or not any(content_refs):
         return False, "missing title or content_ref"
-    ev_refs: list[str] = list(getattr(item, "evidence_refs", []) or [])
+    ev_refs: list[str] = list(
+        getattr(item, "evidence_summary_refs", [])
+        if is_projection
+        else getattr(item, "evidence_refs", [])
+    )
     if not ev_refs:
         return False, "no evidence_refs"
     meta: dict[str, Any] = getattr(item, "metadata", {}) if isinstance(getattr(item, "metadata", {}), dict) else {}
@@ -174,9 +194,15 @@ def _is_promotable(item: Any, evidence_by_id: dict[str, Any]) -> tuple[bool, str
         or getattr(item, "authorization_refs", None)
         or []
     )
-    valid_scope = getattr(item, "valid_scope", None) or meta.get("valid_scope") or {}
+    valid_scope = (
+        getattr(item, "validity_scope", None)
+        if is_projection
+        else getattr(item, "valid_scope", None)
+    ) or meta.get("valid_scope") or meta.get("validity_scope") or {}
     env_versions = (
-        getattr(item, "environment_versions", None)
+        getattr(item, "environment_bindings", None)
+        if is_projection
+        else getattr(item, "environment_versions", None)
         or meta.get("environment_versions")
         or meta.get("environment_bindings")
         or {}
@@ -199,6 +225,28 @@ def _is_promotable(item: Any, evidence_by_id: dict[str, Any]) -> tuple[bool, str
     return True, "validated with explicit judgment + authorization + scope + version"
 
 
+def _append_projection_event(context: WorkflowContext, projection: KnowledgeProjection, status: str) -> None:
+    """Journal a canonical projection transition without writing legacy state."""
+    store = context.store
+    if not hasattr(store, "append_event") and not hasattr(store, "save_event"):
+        return
+    from portable_runtime.core.models import Event, new_id
+
+    event = Event(
+        id=new_id("event"),
+        type="KnowledgeProjected",
+        subject_ref=projection.id,
+        payload={"lifecycle_status": status, "source_work_refs": list(projection.source_work_refs)},
+    )
+    try:
+        if hasattr(store, "append_event"):
+            store.append_event(event)
+        else:
+            store.save_event(event)  # type: ignore[attr-defined]
+    except Exception:
+        logger.debug("knowledge projection journal append failed", exc_info=True)
+
+
 class KnowledgeConsolidationWorkflow:
     id = "knowledge-consolidation"
     version = "1.0.0"
@@ -216,7 +264,24 @@ class KnowledgeConsolidationWorkflow:
         except ValueError:
             pass
 
-        candidates = context.store.list_knowledge(status="candidate")
+        candidates: list[KnowledgeProjection] = []
+        seen_projection_ids: set[str] = set()
+        if hasattr(context.store, "list_knowledge_projections"):
+            for projection in context.store.list_knowledge_projections(status="candidate"):  # type: ignore[attr-defined]
+                candidates.append(projection)
+                seen_projection_ids.add(projection.id)
+        try:
+            from portable_runtime.compat.legacy_records import legacy_knowledge_to_projection
+
+            for legacy_item in context.store.list_knowledge(status="candidate"):
+                projection = legacy_knowledge_to_projection(legacy_item)
+                if projection.id in seen_projection_ids:
+                    continue
+                projection.metadata["legacy_id"] = legacy_item.id
+                candidates.append(projection)
+                seen_projection_ids.add(projection.id)
+        except Exception:
+            pass
         if not candidates:
             with contextlib.suppress(ValueError):
                 context.transition_run("succeeded", current_step="kc-done-empty")
@@ -238,7 +303,7 @@ class KnowledgeConsolidationWorkflow:
             scope_filter = work.metadata.get("knowledge_scope")
             if scope_filter and isinstance(scope_filter, dict):
                 # simple scope check: valid_scope must contain filter keys
-                valid_scope = getattr(item, "valid_scope", {}) or {}
+                valid_scope = getattr(item, "validity_scope", {}) or {}
                 if any(valid_scope.get(k) != v for k, v in scope_filter.items()):
                     continue
 
@@ -255,25 +320,24 @@ class KnowledgeConsolidationWorkflow:
                     is_explicit_invalid = True
             try:
                 if ok:
-                    new_item = item.model_copy(update={"status": "official"})
-                    context.store.save_knowledge(new_item)
+                    new_item = promote_to_official(item)
+                    context.store.save_knowledge_projection(new_item)  # type: ignore[attr-defined]
+                    _append_projection_event(context, new_item, "official")
                     promoted += 1
                     logger.info("promoted knowledge %s: %s", item.id, reason)
                 elif is_explicit_invalid or any(kw in reason.lower() for kw in ["refuted", "superseded", "withdrawn", "explicitly rejected", "rejected"]):
-                    new_item = item.model_copy(update={"status": "archived"})
+                    new_item = item.model_copy(update={"lifecycle_status": "archived"})
                     if isinstance(new_item.metadata, dict):
                         new_item.metadata["_archive_reason"] = reason
-                    context.store.save_knowledge(new_item)
+                    context.store.save_knowledge_projection(new_item)  # type: ignore[attr-defined]
+                    _append_projection_event(context, new_item, "archived")
                     archived += 1
                     logger.info("archived knowledge %s: %s", item.id, reason)
                 else:
                     # retain candidate - not sufficiently qualified
-                    if isinstance(item.metadata, dict):
-                        item.metadata["_retain_reason"] = reason
-                        try:
-                            context.store.save_knowledge(item)
-                        except Exception:
-                            pass
+                    retained = item.model_copy(update={"metadata": {**item.metadata, "_retain_reason": reason}})
+                    context.store.save_knowledge_projection(retained)  # type: ignore[attr-defined]
+                    _append_projection_event(context, retained, "candidate")
                     logger.info("retain candidate knowledge %s: %s", item.id, reason)
             except Exception:
                 logger.debug("knowledge consolidation item update failed", exc_info=True)
@@ -289,15 +353,23 @@ class KnowledgeConsolidationWorkflow:
                 created_by_run_id=run.id,
             )
             context.store.save_artifact(artifact)
-            evidence = Evidence(
-                id=new_id("evidence"),
+            from portable_runtime.records.models import Observation
+
+            observation = Observation(
+                id=new_id("record"),
                 kind="knowledge-consolidation",
-                subject_refs=[work.id],
-                artifact_refs=[artifact.id],
-                source=f"workflow:{self.id}",
-                status="supported",
+                source_refs=[artifact.id],
+                scope={"work_id": work.id, "run_id": run.id},
+                metadata={
+                    "workflow": self.id,
+                    "promoted": promoted,
+                    "archived": archived,
+                    "total": len(candidates),
+                },
+                lifecycle_status="current",
             )
-            context.store.save_evidence(evidence)
+            if hasattr(context.store, "save_record"):
+                context.store.save_record(observation)  # type: ignore[attr-defined]
         except Exception:
             pass
 

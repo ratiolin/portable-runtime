@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import inspect
 import json
 from datetime import UTC, datetime
 from typing import Any, Literal
@@ -19,6 +20,11 @@ from portable_runtime.core.capability_contract import (
     compute_effective_impact,
 )
 from portable_runtime.core.models import Action, Event, Outcome, Step, StepAttempt, new_id, utcnow
+from portable_runtime.core.qualification import (
+    AssessmentContext,
+    InvocationPermit,
+    QualificationResolutionError,
+)
 from portable_runtime.core.reliability import CircuitBreaker, ReliabilityControls
 from portable_runtime.core.router import ConstraintRouter
 
@@ -46,6 +52,8 @@ CODE_PRECOMMIT_FAILED = "PrecommitFailed"
 CODE_POST_FENCING_REJECTED = "PostFencingRejected"
 CODE_RESULT_COMMIT_FAILED = "ResultCommitFailed"
 CODE_STALE_RESULT = "StaleResult"
+CODE_QUALIFICATION_UNAVAILABLE = "QualificationUnavailable"
+CODE_QUALIFICATION_CHANGED = "QualificationChanged"
 BOUNDARY_ERROR_CODES = {
     CODE_FENCING_REJECTED,
     CODE_FENCING_UNAVAILABLE,
@@ -71,6 +79,8 @@ BOUNDARY_ERROR_CODES = {
     CODE_POST_FENCING_REJECTED,
     CODE_RESULT_COMMIT_FAILED,
     CODE_STALE_RESULT,
+    CODE_QUALIFICATION_UNAVAILABLE,
+    CODE_QUALIFICATION_CHANGED,
 }
 
 _EffectClass = Literal["pure", "idempotent", "deduplicatable", "reconcilable", "irreversible-opaque"]
@@ -128,15 +138,51 @@ def validate_fencing(request: CapabilityRequest, run: Any | None, *, now: dateti
         return False, f"fencing: lease expired at {run.lease_expires_at.isoformat()}"
     return True, "fencing ok"
 
-def _append_event(store: Any, event_type: str, subject_ref: str, payload: dict[str, Any]) -> None:
+def _append_event(store: Any, event_type: str, subject_ref: str, payload: dict[str, Any]) -> bool:
+    """Append a durable transition event and report journal availability.
+
+    A transition event is evidence, not a best-effort log line.  Callers keep
+    their typed fail-closed result when the journal is unavailable, while the
+    boolean lets critical paths/tests distinguish durable evidence from a
+    swallowed logging failure.
+    """
+    if store is None:
+        return False
     try:
         ev = Event(id=new_id("event"), type=event_type, subject_ref=subject_ref, payload=payload)
         if hasattr(store, "append_event"):
             store.append_event(ev)
         elif hasattr(store, "save_event"):
             store.save_event(ev)
+        else:
+            return False
+        return True
     except Exception:
-        pass
+        return False
+
+
+def _call_supported(method: Any, **kwargs: Any) -> Any:
+    """Call an additive controller API without hiding controller failures."""
+
+    try:
+        signature = inspect.signature(method)
+        parameters = signature.parameters
+        if any(p.kind == inspect.Parameter.VAR_KEYWORD for p in parameters.values()):
+            return method(**kwargs)
+        accepted = {name: value for name, value in kwargs.items() if name in parameters}
+        return method(**accepted)
+    except (TypeError, ValueError):
+        return method(**kwargs)
+
+
+def _int_or_none(value: Any) -> int | None:
+    if isinstance(value, bool):
+        return None
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return None
+    return parsed if parsed >= 1 else None
 
 class RealityBoundary:
     def __init__(self, store: Any | None = None, registry: Any | None = None, *, routing: Any | None = None, policy_engine: Any | None = None, reliability: ReliabilityControls | None = None, runtime_id: str = "runtime", contract_registry: CapabilityContractRegistry | None = None, effect_registry: CapabilityEffectRegistry | None = None) -> None:
@@ -228,7 +274,14 @@ class RealityBoundary:
         }
         return mapping.get(str(getattr(descriptor, "side_effect_class", "pure")), "irreversible")
 
-    def check_authorization(self, request: CapabilityRequest, *, contract: Any | None = None, provider_minimum: str | None = None) -> tuple[bool, str]:
+    def check_authorization(
+        self,
+        request: CapabilityRequest,
+        *,
+        contract: Any | None = None,
+        provider_minimum: str | None = None,
+        grants: list[Any] | None = None,
+    ) -> tuple[bool, str]:
         try:
             contract = contract or self.contract_registry.resolve(request.capability)
             rule = self.effect_registry.resolve(request.capability) if self.effect_registry is not None else None
@@ -242,13 +295,17 @@ class RealityBoundary:
         req_level = "required" if req_required else getattr(contract, "authorization_requirement", "none")
         if req_level == "none" or req_level == "optional":
             return True, "authorization not required by contract"
-        grants: list[any] | None = None
-        if self.store is None or not hasattr(self.store, "list_authorizations"):
-            return False, "AuthorizationUnavailable: authorization store unavailable"
-        try:
-            grants = self.store.list_authorizations()  # type: ignore[attr-defined]
-        except Exception as exc:
-            return False, f"AuthorizationUnavailable: authorization store failure: {exc}"
+        # When qualification refs were supplied, callers are restricted to
+        # that authoritative snapshot.  Without refs retain the historical
+        # store-backed lookup (the store, never request metadata, remains the
+        # source of truth).
+        if grants is None:
+            if self.store is None or not hasattr(self.store, "list_authorizations"):
+                return False, "AuthorizationUnavailable: authorization store unavailable"
+            try:
+                grants = self.store.list_authorizations()  # type: ignore[attr-defined]
+            except Exception as exc:
+                return False, f"AuthorizationUnavailable: authorization store failure: {exc}"
         if not grants:
             return False, "AuthorizationRequired: no grants for capability requiring authorization"
         actor = self._extract_actor(request)
@@ -329,12 +386,23 @@ class RealityBoundary:
             return bool(value.get("satisfied") is True)
         return False
 
-    def _policy_obligations_satisfied(self, request: CapabilityRequest, decision: Any) -> tuple[bool, str]:
+    def _policy_obligations_satisfied(
+        self,
+        request: CapabilityRequest,
+        decision: Any,
+        assessment: AssessmentContext | None = None,
+    ) -> tuple[bool, str]:
         obligations = list(getattr(decision, "obligations", None) or [])
         if not obligations:
             return True, "no policy obligations"
         metadata = request.metadata if isinstance(request.metadata, dict) else {}
-        proofs = metadata.get("obligation_proofs") or metadata.get("policy_obligations") or metadata.get("obligations")
+        # Inline obligation facts are rejected while resolving AssessmentContext.
+        # Only the immutable authoritative snapshot can satisfy this gate.
+        proofs: Any = None
+        if assessment is not None:
+            proofs = assessment.proofs.get("obligation_proofs")
+        if proofs is None:
+            proofs = metadata.get("obligation_refs") or metadata.get("policy_obligation_refs")
         # Accept explicit proof maps/lists only.  A bare ``requires_approval``
         # flag is a policy input, not proof that the obligation was met.
         for obligation in obligations:
@@ -355,7 +423,11 @@ class RealityBoundary:
                 contract = self.contract_registry.resolve(request.capability)
                 auth_required = bool(getattr(rule, "authorization_required", False)) or getattr(contract, "authorization_requirement", "none") == "required"
                 if auth_required:
-                    auth_ok, auth_reason = self.check_authorization(request, contract=contract)
+                    auth_ok, auth_reason = self.check_authorization(
+                        request,
+                        contract=contract,
+                        grants=(assessment.proofs.get("grants") if assessment and assessment.has_authorization_refs else None),
+                    )
                     if auth_ok:
                         continue
                     value = False
@@ -430,6 +502,8 @@ class RealityBoundary:
         if capability_service is not None and getattr(capability_service, "routing", None) is not None:
             routing = capability_service.routing
 
+        assessment: AssessmentContext | None = None
+
         # Resolve the runtime-owned effect contract before any provider can be
         # selected.  Unknown action-critical capabilities never default to a
         # harmless read.
@@ -485,7 +559,22 @@ class RealityBoundary:
         fence_ok, fence_reason, fence_code = self._read_fencing(request, store)
         if not fence_ok:
             _append_event(store, fence_code, request.id, {"reason": fence_reason, "phase": "pre"})
+            _append_event(store, "InvocationBlocked", request.id, {"code": fence_code, "reason": fence_reason, "phase": "pre"})
             return self._error_result(request, fence_code, fence_reason)
+
+        # Resolve all qualification facts once, after fencing but before any
+        # gate is evaluated. Metadata is an untrusted transport: proof objects
+        # are rejected and only references are dereferenced from the
+        # authoritative store.
+        if store is not None:
+            try:
+                assessment = AssessmentContext.resolve(store, request)
+            except QualificationResolutionError as exc:
+                _append_event(store, CODE_QUALIFICATION_UNAVAILABLE, request.id, {"reason": str(exc)})
+                return self._error_result(request, CODE_QUALIFICATION_UNAVAILABLE, str(exc))
+            except Exception as exc:  # noqa: BLE001
+                _append_event(store, CODE_QUALIFICATION_UNAVAILABLE, request.id, {"reason": str(exc)})
+                return self._error_result(request, CODE_QUALIFICATION_UNAVAILABLE, f"qualification resolution failed: {exc}")
 
         # Policy failures and exceptions are always STOP.  ``require`` is not
         # a log-only decision: every mandatory obligation needs explicit proof.
@@ -505,40 +594,57 @@ class RealityBoundary:
                 _append_event(store, CODE_POLICY_UNAVAILABLE, request.id, {"reason": str(exc)})
                 return self._error_result(request, CODE_POLICY_UNAVAILABLE, f"policy evaluation failed: {exc}")
             if not hasattr(decision, "disposition") or not hasattr(decision, "obligations"):
+                _append_event(store, "PolicyEvaluated", request.id, {"status": "invalid"})
                 return self._error_result(request, CODE_POLICY_UNAVAILABLE, "policy engine returned malformed decision")
             disposition = getattr(decision, "disposition", None)
             status = getattr(decision, "status", None)
+            _append_event(
+                store,
+                "PolicyEvaluated",
+                request.id,
+                {"disposition": disposition, "status": status, "obligations": len(getattr(decision, "obligations", []) or [])},
+            )
             if disposition == "deny" or status == "deny":
                 reason = f"policy denied: {getattr(decision, 'reason', '') or 'deny'}"
                 _append_event(store, CODE_POLICY_DENIED, request.id, {"reason": reason})
+                _append_event(store, "InvocationBlocked", request.id, {"code": CODE_POLICY_DENIED, "reason": reason})
                 return self._error_result(request, CODE_POLICY_DENIED, reason)
             if disposition == "defer":
                 reason = f"policy deferred: {getattr(decision, 'reason', '') or 'defer'}"
                 _append_event(store, CODE_POLICY_DENIED, request.id, {"reason": reason, "disposition": "defer"})
+                _append_event(store, "InvocationBlocked", request.id, {"code": CODE_POLICY_DENIED, "reason": reason})
                 return self._error_result(request, CODE_POLICY_DENIED, reason)
             if disposition == "require":
                 try:
-                    obligations_ok, obligations_reason = self._policy_obligations_satisfied(request, decision)
+                    obligations_ok, obligations_reason = self._policy_obligations_satisfied(request, decision, assessment)
                 except Exception as exc:
                     _append_event(store, CODE_POLICY_UNAVAILABLE, request.id, {"reason": str(exc), "phase": "obligations"})
                     return self._error_result(request, CODE_POLICY_UNAVAILABLE, f"policy obligation evaluation failed: {exc}")
                 if not obligations_ok:
                     code = CODE_AUTHORIZATION_UNAVAILABLE if obligations_reason.startswith(CODE_AUTHORIZATION_UNAVAILABLE) else CODE_OBLIGATION_UNSATISFIED
                     _append_event(store, code, request.id, {"reason": obligations_reason})
+                    _append_event(store, "InvocationBlocked", request.id, {"code": code, "reason": obligations_reason})
                     return self._error_result(request, code, obligations_reason)
 
         # Authorization is driven by the capability rule, not by whether the
         # store happens to contain grants.  Missing/invalid state is a typed
         # denial and never a permissive fallback.
         try:
-            auth_ok, auth_reason = self.check_authorization(request, contract=contract, provider_minimum=None)
+            auth_ok, auth_reason = self.check_authorization(
+                request,
+                contract=contract,
+                provider_minimum=None,
+                grants=(assessment.proofs.get("grants") if assessment and assessment.has_authorization_refs else None),
+            )
         except Exception as exc:
             _append_event(store, CODE_AUTHORIZATION_UNAVAILABLE, request.id, {"reason": str(exc)})
             return self._error_result(request, CODE_AUTHORIZATION_UNAVAILABLE, f"authorization evaluation failed: {exc}")
         if not auth_ok:
             code = self._authorization_code(auth_reason)
             _append_event(store, code, request.id, {"reason": auth_reason, "actor": self._extract_actor(request)})
+            _append_event(store, "AuthorizationEvaluated", request.id, {"allowed": False, "code": code, "reason": auth_reason})
             return self._error_result(request, code, auth_reason)
+        _append_event(store, "AuthorizationEvaluated", request.id, {"allowed": True, "actor": self._extract_actor(request)})
 
         # Procedure assessment is executable only when every gate is
         # satisfied, waived with authority, or demonstrably handed off.
@@ -546,31 +652,40 @@ class RealityBoundary:
             try:
                 if store is None or not hasattr(store, "get_work") or not hasattr(store, "get_run"):
                     raise RuntimeError("procedure store unavailable")
-                work = store.get_work(request.work_id)
-                run = store.get_run(request.run_id)
+                work = assessment.work if assessment is not None else store.get_work(request.work_id)
+                run = assessment.run if assessment is not None else store.get_run(request.run_id)
                 if work is None or run is None:
                     raise RuntimeError("work/run not found for procedure assessment")
                 from portable_runtime.workflows.procedure import check_procedure
 
-                work_metadata = getattr(work, "metadata", {}) if isinstance(getattr(work, "metadata", {}), dict) else {}
-                run_metadata = getattr(run, "metadata", {}) if isinstance(getattr(run, "metadata", {}), dict) else {}
                 effect_rule = self.effect_registry.resolve(request.capability) if self.effect_registry is not None else None
                 contract_profile = getattr(contract, "minimum_procedure_profile", "minimal")
                 if effect_rule is not None and getattr(effect_rule, "authorization_required", False) and contract_profile == "minimal":
                     contract_profile = "standard"
+                work_metadata = getattr(work, "metadata", {}) if isinstance(getattr(work, "metadata", {}), dict) else {}
+                run_metadata = getattr(run, "metadata", {}) if isinstance(getattr(run, "metadata", {}), dict) else {}
                 profile = metadata.get("procedure_profile") or work_metadata.get("procedure_profile") or run_metadata.get("procedure_profile") or contract_profile
-                proof_data: dict[str, Any] = {}
-                for source in (work_metadata.get("procedure_proofs"), run_metadata.get("procedure_proofs"), metadata.get("procedure_proofs")):
-                    if isinstance(source, dict):
-                        proof_data.update(source)
-                grants = store.list_authorizations() if hasattr(store, "list_authorizations") else None
-                statuses = check_procedure(work, run, profile, proofs=proof_data, grants=grants)
+                proof_data = assessment.procedure_proofs() if assessment is not None else {}
+                procedure_grants = (
+                    assessment.proofs.get("grants")
+                    if assessment and assessment.has_authorization_refs
+                    else (store.list_authorizations() if hasattr(store, "list_authorizations") else None)
+                )
+                statuses = check_procedure(
+                    work,
+                    run,
+                    profile,
+                    proofs=proof_data,
+                    grants=procedure_grants,
+                )
                 blocked, procedure_reason = self._procedure_blocked(statuses)
             except Exception as exc:
                 _append_event(store, CODE_PROCEDURE_UNAVAILABLE, request.id, {"reason": str(exc)})
                 return self._error_result(request, CODE_PROCEDURE_UNAVAILABLE, f"procedure evaluation failed: {exc}")
             if blocked:
                 _append_event(store, CODE_PROCEDURE_INCOMPLETE, request.id, {"reason": procedure_reason})
+                _append_event(store, "ProcedureBlocked", request.id, {"reason": procedure_reason})
+                _append_event(store, "InvocationBlocked", request.id, {"code": CODE_PROCEDURE_INCOMPLETE, "reason": procedure_reason})
                 return self._error_result(request, CODE_PROCEDURE_INCOMPLETE, procedure_reason)
 
         # Reliability checks are governance state.  Controller exceptions
@@ -579,14 +694,54 @@ class RealityBoundary:
         # descriptor that is non-pure is not allowed to downgrade an explicit
         # read rule; it only triggers EffectContractMissing when no rule exists.
         side_effect = _IMPACT_ORDER.get(effective, 0) > _IMPACT_ORDER["read"]
+        effect_rule = self.effect_registry.resolve(request.capability) if self.effect_registry is not None else None
+        procedure_profile = str(
+            metadata.get("procedure_profile")
+            or getattr(contract, "minimum_procedure_profile", "minimal")
+        )
+        requested_blast_radius = _int_or_none(metadata.get("blast_radius"))
+        if requested_blast_radius is None:
+            requested_blast_radius = _int_or_none(getattr(effect_rule, "blast_radius", None))
+        if requested_blast_radius is None:
+            requested_blast_radius = _int_or_none(getattr(contract, "blast_radius", None))
+        high_impact = effective in {"deploy", "admin", "irreversible"}
+        if side_effect and high_impact and requested_blast_radius is None:
+            reason = "high-impact capability has no declared blast_radius"
+            _append_event(store, CODE_RELIABILITY_BLOCKED, request.id, {"side_effect": True, "reason": reason})
+            _append_event(store, "InvocationBlocked", request.id, {"code": CODE_RELIABILITY_BLOCKED, "reason": reason})
+            return self._error_result(request, CODE_RELIABILITY_BLOCKED, reason)
+        requested_blast_radius = requested_blast_radius or 1
+        requested_exposure = _int_or_none(metadata.get("exposure"))
+        if requested_exposure is None:
+            requested_exposure = _int_or_none(getattr(effect_rule, "exposure", None))
+        if requested_exposure is None:
+            requested_exposure = _int_or_none(getattr(contract, "exposure", None))
+        recovery_timing = metadata.get("recovery_timing")
+        if not isinstance(recovery_timing, dict):
+            recovery_timing = getattr(effect_rule, "recovery_timing", None) or getattr(contract, "recovery_timing", None)
+        irreversible = effective in {"admin", "irreversible"}
+        reliability_kwargs = {
+            "side_effect": side_effect,
+            "action_blast_radius": requested_blast_radius,
+            "exposure": requested_exposure,
+            "irreversible": irreversible,
+            "procedure_profile": procedure_profile,
+            "timing": recovery_timing,
+        }
         try:
-            allowed = self.reliability.can_execute(side_effect=side_effect)
+            if hasattr(self.reliability, "assess"):
+                allowed, reliability_reason = _call_supported(self.reliability.assess, **reliability_kwargs)
+            else:
+                allowed = _call_supported(self.reliability.can_execute, **reliability_kwargs)
+                reliability_reason = getattr(self.reliability, "last_block_reason", None) or "reliability budget exhausted"
         except Exception as exc:
             _append_event(store, CODE_RELIABILITY_UNAVAILABLE, request.id, {"reason": str(exc)})
             return self._error_result(request, CODE_RELIABILITY_UNAVAILABLE, f"reliability evaluation failed: {exc}")
         if not allowed:
-            _append_event(store, CODE_RELIABILITY_BLOCKED, request.id, {"side_effect": side_effect})
-            return self._error_result(request, CODE_RELIABILITY_BLOCKED, "reliability budget exhausted")
+            reason = str(reliability_reason or "reliability budget exhausted")
+            _append_event(store, CODE_RELIABILITY_BLOCKED, request.id, {"side_effect": side_effect, "reason": reason})
+            _append_event(store, "InvocationBlocked", request.id, {"code": CODE_RELIABILITY_BLOCKED, "reason": reason})
+            return self._error_result(request, CODE_RELIABILITY_BLOCKED, reason)
 
         # Provider health, circuit state, independence and hard constraints all
         # run before selection.  Any evaluator exception is RoutingUnavailable.
@@ -607,14 +762,50 @@ class RealityBoundary:
             _append_event(store, CODE_ROUTING_UNAVAILABLE, request.id, {"reason": str(exc)})
             return self._error_result(request, CODE_ROUTING_UNAVAILABLE, f"routing evaluation failed: {exc}")
         if selected is None:
+            if healthy and isinstance(request.constraints, dict):
+                if request.constraints.get("required_failure_domains") or request.constraints.get("independence_constraints"):
+                    _append_event(
+                        store,
+                        "ProviderRejectedByFailureDomain",
+                        request.id,
+                        {
+                            "capability": request.capability,
+                            "required_failure_domains": request.constraints.get("required_failure_domains"),
+                            "independence_constraints": request.constraints.get("independence_constraints"),
+                        },
+                    )
             _append_event(store, CODE_NO_ELIGIBLE_PROVIDER, request.id, {"capability": request.capability})
+            _append_event(store, "InvocationBlocked", request.id, {"code": CODE_NO_ELIGIBLE_PROVIDER, "capability": request.capability})
             return self._error_result(request, CODE_NO_ELIGIBLE_PROVIDER, f"no eligible provider for {request.capability}")
 
         provider_id = selected.id
+        _append_event(store, "ProviderSelected", request.id, {"provider_id": provider_id, "capability": request.capability})
         side_effect_class: _EffectClass = getattr(selected, "side_effect_class", "pure")  # type: ignore[assignment]
         effect_semantics = getattr(selected, "effect_semantics", side_effect_class)
         if _IMPACT_ORDER.get(effective, 0) > _IMPACT_ORDER["read"]:
             side_effect = True
+
+        # Re-read the same authoritative refs immediately before durable
+        # precommit/provider selection is consumed.  This closes the gap
+        # between qualification assessment and the sole reality exit.
+        if assessment is not None and store is not None:
+            try:
+                if not assessment.refresh_matches(store, request):
+                    reason = "authoritative qualification facts changed during assessment"
+                    _append_event(store, CODE_QUALIFICATION_CHANGED, request.id, {"reason": reason, "provider_id": provider_id})
+                    return self._error_result(request, CODE_QUALIFICATION_CHANGED, reason, provider_id=provider_id)
+            except QualificationResolutionError as exc:
+                _append_event(store, CODE_QUALIFICATION_CHANGED, request.id, {"reason": str(exc), "provider_id": provider_id})
+                return self._error_result(request, CODE_QUALIFICATION_CHANGED, str(exc), provider_id=provider_id)
+            except Exception as exc:  # noqa: BLE001
+                _append_event(store, CODE_QUALIFICATION_CHANGED, request.id, {"reason": str(exc), "provider_id": provider_id})
+                return self._error_result(request, CODE_QUALIFICATION_CHANGED, f"qualification revalidation failed: {exc}", provider_id=provider_id)
+        permit = InvocationPermit(
+            request_digest=_digest_request(request),
+            qualification_digest=assessment.digest if assessment is not None else "",
+            provider_id=provider_id,
+            lease_generation=_extract_lease_generation(request) or 0,
+        )
 
         # Precommit is mandatory for all action-critical effects.  A missing
         # durable store or identity is itself a STOP, never a bypass.
@@ -657,6 +848,12 @@ class RealityBoundary:
                     store.save_step(step)
                     store.save_attempt(attempt)
                     store.save_action(action)
+                _append_event(
+                    store,
+                    "StepPrecommitted",
+                    request.id,
+                    {"step_id": step_id, "attempt_id": attempt_id, "action_id": action_id, "provider_id": provider_id},
+                )
             except Exception as exc:
                 _append_event(store, CODE_PRECOMMIT_FAILED, request.id, {"reason": str(exc)})
                 return self._error_result(request, CODE_PRECOMMIT_FAILED, f"precommit failed: {exc}", provider_id=provider_id)
@@ -685,18 +882,36 @@ class RealityBoundary:
                     step_id = None
                     attempt_id = None
 
+        reliability_started = False
         try:
-            self.reliability.record_action(side_effect=side_effect)
+            _call_supported(
+                self.reliability.record_action,
+                side_effect=side_effect,
+                action_blast_radius=requested_blast_radius,
+                exposure=requested_exposure,
+            )
+            reliability_started = side_effect
         except Exception as exc:
             return self._error_result(request, CODE_RELIABILITY_UNAVAILABLE, f"reliability accounting failed: {exc}", provider_id=provider_id)
 
         try:
             provider = registry.get(provider_id)
         except Exception as exc:
+            if reliability_started and hasattr(self.reliability, "complete_action"):
+                _call_supported(self.reliability.complete_action, side_effect=True)
             return self._error_result(request, CODE_ROUTING_UNAVAILABLE, f"provider lookup failed: {exc}", provider_id=provider_id)
         context = InvocationContext(runtime_id=self.runtime_id, work_id=request.work_id, run_id=request.run_id, lease_generation=_extract_lease_generation(request) or 0, idempotency_key=request.idempotency_key)
         context.metadata.update(request.metadata or {})
+        context.metadata.update(
+            {
+                "qualification_digest": permit.qualification_digest,
+                "invocation_permit_provider": permit.provider_id,
+                "invocation_permit_request": permit.request_digest,
+            }
+        )
         breaker = _circuit_for(provider_id)
+        _append_event(store, "InvocationStarted", request.id, {"provider_id": provider_id, "capability": request.capability})
+        breaker_state_before = breaker.state
         try:
             result = await provider.invoke(request, context)
         except Exception as exc:
@@ -707,6 +922,17 @@ class RealityBoundary:
                 breaker.record_failure()
             elif result.status == "succeeded":
                 breaker.record_success()
+        finally:
+            if reliability_started and hasattr(self.reliability, "complete_action"):
+                _call_supported(self.reliability.complete_action, side_effect=True)
+        if breaker.state == "open" and breaker_state_before != "open":
+            _append_event(store, "CircuitOpened", request.id, {"provider_id": provider_id, "capability": request.capability})
+        _append_event(
+            store,
+            "InvocationCompleted",
+            request.id,
+            {"provider_id": provider_id, "status": result.status, "capability": request.capability},
+        )
 
         # Fencing is re-read after every run-bound provider call.  A changed
         # generation/owner/expiry demotes the result to unknown, even when the
@@ -753,6 +979,7 @@ class RealityBoundary:
                     store.save_action(action)
                     store.save_outcome(outcome)
                 _append_event(store, "CapabilitySucceeded" if projected_status == "succeeded" else "CapabilityCompleted", request.id, {"provider_id": provider_id, "status": projected_status, "capability": request.capability})
+                _append_event(store, "OutcomeRecorded", request.id, {"outcome_id": outcome.id, "status": projected_status, "provider_id": provider_id})
             except Exception as exc:
                 # The provider may have changed the world even though the
                 # runtime could not persist the projection.  Preserve the

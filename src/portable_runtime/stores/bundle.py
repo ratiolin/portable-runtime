@@ -36,6 +36,7 @@ _KIND_TO_FILENAME: dict[str, str] = {
     "action": "actions.jsonl",
     "outcome": "outcomes.jsonl",
     "knowledge": "knowledge.jsonl",
+    "knowledge_projection": "knowledge_projections.jsonl",
     "event": "events.jsonl",
     "step": "steps.jsonl",
     "attempt": "attempts.jsonl",
@@ -263,6 +264,12 @@ def _validate_state_invariants(state: dict[str, list[dict[str, object]]]) -> Non
             raise
         except Exception as exc:
             raise ValueError(f"authorization invariant violation: {exc}") from exc
+    # P2-2: object-level validation is not enough for a portable snapshot.
+    # Resolve the complete graph before touching the destination store so a
+    # malformed import cannot leave a partially imported state behind.
+    from portable_runtime.protocol.validation import assert_valid_state_graph
+
+    assert_valid_state_graph(state)
 
 
 def import_bundle(

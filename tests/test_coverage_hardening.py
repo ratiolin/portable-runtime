@@ -302,7 +302,9 @@ async def test_verifiers_http_promql_logs():
     assert res_tests.status == "succeeded"
     req_tests_fail = CapabilityRequest(id="r9", capability="verify.tests", parameters={"command": ["python", "-c", "import sys; sys.exit(1)"]})
     res_tests_fail = await tests_ver.invoke(req_tests_fail, InvocationContext(runtime_id="rt"))
-    assert res_tests_fail.status == "failed"
+    assert res_tests_fail.status == "succeeded"
+    assert res_tests_fail.verification_result is not None
+    assert res_tests_fail.verification_result.result == "fail"
     git_ver = GitDiffVerifierProvider()
     req_git_bad = CapabilityRequest(id="r10", capability="verify.git_diff", parameters={})
     res_git_bad = await git_ver.invoke(req_git_bad, InvocationContext(runtime_id="rt"))

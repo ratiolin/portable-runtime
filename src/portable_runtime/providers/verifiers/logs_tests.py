@@ -14,6 +14,7 @@ from portable_runtime.core.capabilities import (
     ProviderDescriptor,
     ProviderHealth,
 )
+from portable_runtime.records.open_validation import ClosedVerificationResult
 
 logger = logging.getLogger(__name__)
 
@@ -43,7 +44,7 @@ class LogsVerifierProvider:
         if self._check_fn is not None:
             try:
                 ok, message, ref = await self._check_fn(target, since_minutes=since_minutes, patterns=tuple(patterns) if patterns else ("Traceback", "panic:", "FATAL"))  # noqa: E501
-                return CapabilityResult(request_id=request.id, provider_id=self.descriptor.id, status="succeeded" if ok else "failed", message=message, metadata={"evidence_ref": ref})  # noqa: E501
+                return CapabilityResult(request_id=request.id, provider_id=self.descriptor.id, status="succeeded", message=message, metadata={"evidence_ref": ref}, verification_result=ClosedVerificationResult(result="pass" if ok else "fail", message=message))  # noqa: E501
             except Exception as exc:  # noqa: BLE001
                 return CapabilityResult(request_id=request.id, provider_id=self.descriptor.id, status="failed", error={"type": type(exc).__name__, "message": str(exc)[:1500]})  # noqa: E501
         # Placeholder: scan local logs directory or delegate to control_plane.tools
@@ -51,12 +52,13 @@ class LogsVerifierProvider:
             from control_plane.tools import check_logs
 
             ok, message, ref = await check_logs(target, since_minutes=since_minutes, patterns=patterns)  # noqa: E501
-            return CapabilityResult(request_id=request.id, provider_id=self.descriptor.id, status="succeeded" if ok else "failed", message=message, metadata={"evidence_ref": ref})  # noqa: E501
+            return CapabilityResult(request_id=request.id, provider_id=self.descriptor.id, status="succeeded", message=message, metadata={"evidence_ref": ref}, verification_result=ClosedVerificationResult(result="pass" if ok else "fail", message=message))  # noqa: E501
         except Exception as exc:  # noqa: BLE001
             # Fallback: check file existence
             p = Path(target)
             if p.exists():
-                return CapabilityResult(request_id=request.id, provider_id=self.descriptor.id, status="succeeded", message=f"logs target {target} exists")  # noqa: E501
+                message = f"logs target {target} exists"
+                return CapabilityResult(request_id=request.id, provider_id=self.descriptor.id, status="succeeded", message=message, verification_result=ClosedVerificationResult(result="pass", message=message))  # noqa: E501
             return CapabilityResult(request_id=request.id, provider_id=self.descriptor.id, status="failed", error={"type": type(exc).__name__, "message": str(exc)[:1500]})  # noqa: E501
 
     async def cancel(self, request_id: str) -> None:
@@ -91,9 +93,13 @@ class TestsVerifierProvider:
             return CapabilityResult(
                 request_id=request.id,
                 provider_id=self.descriptor.id,
-                status="succeeded" if ok else "failed",
+                status="succeeded",
                 message=(stdout.decode(errors="replace")[-4000:] or stderr.decode(errors="replace")[-4000:]),
                 metadata={"exit_code": proc.returncode},
+                verification_result=ClosedVerificationResult(
+                    result="pass" if ok else "fail",
+                    message=(stdout.decode(errors="replace")[-4000:] or stderr.decode(errors="replace")[-4000:]),
+                ),
             )
         except Exception as exc:  # noqa: BLE001
             return CapabilityResult(request_id=request.id, provider_id=self.descriptor.id, status="failed", error={"type": type(exc).__name__, "message": str(exc)[:2000]})  # noqa: E501
@@ -123,7 +129,7 @@ class GitDiffVerifierProvider:
             from control_plane.verifier import Verifier
 
             ok, message = Verifier.diff_allowed("", diff)
-            return CapabilityResult(request_id=request.id, provider_id=self.descriptor.id, status="succeeded" if ok else "failed", message=message)  # noqa: E501
+            return CapabilityResult(request_id=request.id, provider_id=self.descriptor.id, status="succeeded", message=message, verification_result=ClosedVerificationResult(result="pass" if ok else "fail", message=message))  # noqa: E501
         except Exception as exc:  # noqa: BLE001
             return CapabilityResult(request_id=request.id, provider_id=self.descriptor.id, status="failed", error={"type": type(exc).__name__, "message": str(exc)[:1500]})  # noqa: E501
 

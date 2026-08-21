@@ -2,13 +2,14 @@
 
 ## Current status
 
-As of commit `bdec663509ab7d6ad4e5bf7740838f6f6f852179` on `main`, the focused P0 enforcement kernel is closed. The authoritative remote proof is the [green main CI run](https://github.com/ratiolin/portable-runtime/actions/runs/32432839060), including the strict-conformance and SonarCloud jobs; the [SonarCloud project](https://sonarcloud.io/project/overview?id=portable-runtime) reports quality gate `OK` for the same commit.
+The P0 RealityBoundary/SQLite kernel plus the P1 semantic and P2 protocol hardening are locally closed on 2026-08-21. Fresh evidence is `ruff` clean, `mypy src` clean, `uv run pytest -q` → `242 passed`, and the CI-equivalent strict-conformance selection → `45 passed`. Remote CI and SonarCloud evidence for the pending push will be recorded here with the resulting commit SHA and run URL.
 
 The P0 enforcement kernel is implemented and has executable evidence in:
 
-- `tests/conformance/test_authoritative.py` — E001–E020 (21 cases)
-- `tests/conformance/test_sqlite_atomicity.py` — S001–S006 (6 cases)
-- `.github/workflows/ci.yml` — independent `strict-conformance` job
+- `tests/conformance/test_authoritative.py` — E001–E023
+- `tests/conformance/test_sqlite_atomicity.py` — S001–S006
+- `tests/conformance/test_p1_semantic.py` and `tests/conformance/test_p2_protocol.py`
+- `.github/workflows/ci.yml` — independent `strict-conformance` job covering all focused gates
 
 | Claim | Code path | Negative test | Provider invoke asserted? |
 |---|---|---|---|
@@ -18,7 +19,7 @@ The P0 enforcement kernel is implemented and has executable evidence in:
 | SQLite CAS/Lease are atomic | `SQLiteStateStore` CAS/lease transactions | S001–S006 | n/a |
 
 The strict-conformance command and the repository-wide suite both pass. The
-latest local verification is `223 passed` with the two existing collection/
+latest local verification is `242 passed` with the two existing collection/
 deprecation warnings only. The fresh coverage run reports 76% overall coverage.
 Legacy workflow fixtures now carry explicit typed
 authorization, resource/version, and procedure evidence; the runtime boundary
@@ -26,9 +27,9 @@ itself remains fail-closed when those proofs are absent.
 
 SonarCloud is configured as a hard CI gate (`sonar.qualitygate.wait=true`) and
 the workflow waits for both the full suite and strict-conformance before
-analysis. This status is limited to the P0 scope described here; broader P1/P2
-semantic hardening remains tracked in
-`docs/portable-runtime-strict-enforcement-plan.md`.
+analysis. The broader P1/P2 semantic hardening is now represented by the
+canonical qualification, projection, reopen, revalidation and graph-validation
+paths described in `docs/portable-runtime-strict-enforcement-plan.md`.
 
 The authoritative boundary remains the only runtime `provider.invoke` exit;
 recovery reconciliation and plugin probes route through the same boundary.

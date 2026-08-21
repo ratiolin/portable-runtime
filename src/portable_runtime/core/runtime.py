@@ -23,6 +23,7 @@ class Runtime:
         runtime_id: str = "runtime",
         policy_engine: Any | None = None,
         contract_registry: Any | None = None,
+        reliability: Any | None = None,
     ) -> None:
         from portable_runtime.core.boundary import RealityBoundary
         from portable_runtime.core.capability_contract import CapabilityContractRegistry
@@ -39,6 +40,7 @@ class Runtime:
             registry=self.registry,
             routing=self.routing,
             policy_engine=self.policy_engine,
+            reliability=reliability,
             runtime_id=self.runtime_id,
             contract_registry=self.contract_registry,  # type: ignore[call-arg]
         )
@@ -206,19 +208,48 @@ class Runtime:
         return run
 
     def acquire_lease(self, run_id: str, owner: str, ttl_seconds: float = 30) -> bool:
+        previous_owner = None
         try:
-            return self.store.acquire_lease(run_id, owner, ttl_seconds)  # type: ignore
+            current = self.store.get_run(run_id)
+            previous_owner = getattr(current, "lease_owner", None) if current is not None else None
+        except Exception:
+            previous_owner = None
+        try:
+            acquired = self.store.acquire_lease(run_id, owner, ttl_seconds)  # type: ignore
         except Exception:
             return False
+        try:
+            from portable_runtime.core.models import Event, new_id
+            event_type = "LeaseTakenOver" if acquired and previous_owner not in (None, owner) else "LeaseAcquired"
+            if not acquired:
+                event_type = "FencingRejected"
+            self.store.append_event(Event(id=new_id("event"), type=event_type, subject_ref=run_id, payload={"owner": owner, "previous_owner": previous_owner, "acquired": acquired}))  # type: ignore[attr-defined]
+        except Exception:
+            # Lease state remains authoritative; journal availability is
+            # surfaced by boundary transitions and conformance evidence.
+            pass
+        return acquired
 
     def renew_lease(self, run_id: str, owner: str, ttl_seconds: float = 30) -> bool:
         try:
-            return self.store.renew_lease(run_id, owner, ttl_seconds)  # type: ignore
+            renewed = self.store.renew_lease(run_id, owner, ttl_seconds)  # type: ignore
         except Exception:
             return False
+        try:
+            from portable_runtime.core.models import Event, new_id
+            self.store.append_event(Event(id=new_id("event"), type="LeaseRenewed" if renewed else "FencingRejected", subject_ref=run_id, payload={"owner": owner, "renewed": renewed}))  # type: ignore[attr-defined]
+        except Exception:
+            pass
+        return renewed
 
     def release_lease(self, run_id: str, owner: str) -> bool:
         try:
-            return self.store.release_lease(run_id, owner)  # type: ignore
+            released = self.store.release_lease(run_id, owner)  # type: ignore
         except Exception:
             return False
+        try:
+            from portable_runtime.core.models import Event, new_id
+            self.store.append_event(Event(id=new_id("event"), type="LeaseReleased" if released else "FencingRejected", subject_ref=run_id, payload={"owner": owner, "released": released}))  # type: ignore[attr-defined]
+        except Exception:
+            pass
+        return released

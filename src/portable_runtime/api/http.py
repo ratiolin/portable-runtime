@@ -6,7 +6,7 @@ from typing import Any
 from fastapi import FastAPI, HTTPException, Request, Response
 from pydantic import BaseModel, Field
 
-from portable_runtime.core.models import utcnow
+from portable_runtime.core.models import Event, new_id, utcnow
 from portable_runtime.core.runtime import Runtime
 
 
@@ -37,6 +37,31 @@ def _paginate(items: list[Any], limit: int, offset: int) -> list[Any]:
 def _should_paginate(request: Request) -> bool:
     keys = set(request.query_params.keys())
     return bool(keys & {"limit", "offset", "q", "kind", "type", "subject_ref"})
+
+
+def _require_local_control(request: Request) -> None:
+    """Enforce the documented local-only control-plane boundary.
+
+    The HTTP surface intentionally does not pretend to be an authenticated
+    multi-user API.  Mutating governance operations therefore accept only
+    loopback callers (plus Starlette's in-process test clients).  Deployments
+    that need remote control must put an authenticated reverse proxy in front
+    of this app and keep that boundary explicit.
+    """
+    client = request.client
+    host = client.host if client is not None else None
+    if host not in {None, "127.0.0.1", "::1", "localhost", "testclient", "testserver"}:
+        raise HTTPException(status_code=403, detail="control-plane HTTP API is local-only")
+
+
+def _append_control_event(runtime: Runtime, event_type: str, subject_ref: str, payload: dict[str, Any]) -> None:
+    store = getattr(runtime, "store", None)
+    if store is None or not hasattr(store, "append_event"):
+        return
+    try:
+        store.append_event(Event(id=new_id("event"), type=event_type, subject_ref=subject_ref, payload=payload))
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=503, detail=f"event journal unavailable: {exc}") from exc
 
 
 def create_app(runtime: Runtime | None = None) -> FastAPI:
@@ -99,23 +124,32 @@ def create_app(runtime: Runtime | None = None) -> FastAPI:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
 
     @app.post("/v1/providers/{provider_id}/enable")
-    async def enable_provider(provider_id: str) -> dict[str, Any]:
+    async def enable_provider(request: Request, provider_id: str) -> dict[str, Any]:
+        _require_local_control(request)
         try:
-            return runtime.registry.enable(provider_id).model_dump(mode="json")
+            descriptor = runtime.registry.enable(provider_id)
+            _append_control_event(runtime, "ProviderEnabled", provider_id, {"provider_id": provider_id})
+            return descriptor.model_dump(mode="json")
         except KeyError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
 
     @app.post("/v1/providers/{provider_id}/disable")
-    async def disable_provider(provider_id: str) -> dict[str, Any]:
+    async def disable_provider(request: Request, provider_id: str) -> dict[str, Any]:
+        _require_local_control(request)
         try:
-            return runtime.registry.disable(provider_id).model_dump(mode="json")
+            descriptor = runtime.registry.disable(provider_id)
+            _append_control_event(runtime, "ProviderDisabled", provider_id, {"provider_id": provider_id})
+            return descriptor.model_dump(mode="json")
         except KeyError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
 
     @app.post("/v1/providers/{provider_id}/reload")
-    async def reload_provider(provider_id: str) -> dict[str, Any]:
+    async def reload_provider(request: Request, provider_id: str) -> dict[str, Any]:
+        _require_local_control(request)
         try:
-            return runtime.registry.reload(provider_id).model_dump(mode="json")
+            descriptor = runtime.registry.reload(provider_id)
+            _append_control_event(runtime, "ProviderReloaded", provider_id, {"provider_id": provider_id})
+            return descriptor.model_dump(mode="json")
         except KeyError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
 
@@ -162,7 +196,8 @@ def create_app(runtime: Runtime | None = None) -> FastAPI:
         return work.model_dump(mode="json")
 
     @app.post("/v1/work/{work_id}/run")
-    async def run_work(work_id: str, body: RunCapabilityRequest) -> dict[str, Any]:
+    async def run_work(request: Request, work_id: str, body: RunCapabilityRequest) -> dict[str, Any]:
+        _require_local_control(request)
         if runtime.get_work(work_id) is None:
             raise HTTPException(status_code=404, detail="work not found")
         result = await runtime.run_capability(
@@ -213,8 +248,10 @@ def create_app(runtime: Runtime | None = None) -> FastAPI:
         return runtime.export_state()
 
     @app.post("/v1/state/import")
-    async def import_state(body: dict[str, list[dict[str, object]]]) -> dict[str, str]:
+    async def import_state(request: Request, body: dict[str, list[dict[str, object]]]) -> dict[str, str]:
+        _require_local_control(request)
         runtime.import_state(body)
+        _append_control_event(runtime, "StateImported", runtime.runtime_id, {"kinds": sorted(body)})
         return {"status": "imported"}
 
     @app.get("/v1/knowledge")
@@ -468,12 +505,24 @@ def create_app(runtime: Runtime | None = None) -> FastAPI:
         try:
             relations = runtime.store.list_relations()  # type: ignore
             affected = assess_revalidation(change_ref, change_type, relations)
+            for item in affected:
+                _append_control_event(
+                    runtime,
+                    "RevalidationRequired",
+                    item.affected_ref,
+                    {
+                        "change_ref": change_ref,
+                        "change_type": change_type,
+                        "required_action": item.required_action,
+                    },
+                )
             return [a.model_dump(mode="json") for a in affected]
         except Exception as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     @app.post("/v1/reopen/{record_id}")
-    async def reopen_record(record_id: str, payload: dict[str, Any] | None = None) -> dict[str, Any]:
+    async def reopen_record(request: Request, record_id: str, payload: dict[str, Any] | None = None) -> dict[str, Any]:
+        _require_local_control(request)
         from portable_runtime.records.reopen import ReopenAssessment, create_reopen_work
         payload = payload or {}
         scope = payload.get("revision_scope", "other")
@@ -498,6 +547,14 @@ def create_app(runtime: Runtime | None = None) -> FastAPI:
             runtime.store.save_relation(rel)  # type: ignore
         except Exception:
             pass
+        _append_control_event(runtime, "ReopenCreated", new_work.id, {"record_id": record_id, "assessment_id": assess.id, "supersedes": work.id})
+        if bool(new_work.metadata.get("deep_reopen")):
+            _append_control_event(
+                runtime,
+                "ReopenRerouted",
+                new_work.id,
+                {"record_id": record_id, "kind": new_work.kind, "auto_rerun_original_work": False},
+            )
         return {"assessment": assess.model_dump(mode="json"), "work": new_work.model_dump(mode="json")}
 
     @app.get("/v1/authorizations")

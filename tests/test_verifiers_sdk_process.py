@@ -38,7 +38,9 @@ async def test_http_verifier_body_contains_fail():
     prov = HttpVerifierProvider(http_client=mock_client)
     req = CapabilityRequest(id="h2", capability="verify.http", parameters={"url":"http://example.com","expected_status":[200],"body_contains":"missing"})
     res = await prov.invoke(req, InvocationContext(runtime_id="t"))
-    assert res.status == "failed"
+    assert res.status == "succeeded"
+    assert res.verification_result is not None
+    assert res.verification_result.result == "fail"
 
 @pytest.mark.asyncio
 async def test_http_verifier_status_mismatch():
@@ -50,7 +52,9 @@ async def test_http_verifier_status_mismatch():
     prov = HttpVerifierProvider(http_client=mock_client)
     req = CapabilityRequest(id="h3", capability="verify.http", parameters={"url":"http://example.com","expected_status":[200]})
     res = await prov.invoke(req, InvocationContext(runtime_id="t"))
-    assert res.status == "failed"
+    assert res.status == "succeeded"
+    assert res.verification_result is not None
+    assert res.verification_result.result == "fail"
 
 @pytest.mark.asyncio
 async def test_promql_verifier_http_client_success():
@@ -74,7 +78,9 @@ async def test_promql_verifier_no_result():
     prov = PromqlVerifierProvider(http_client=mock_client)
     req = CapabilityRequest(id="p2", capability="verify.promql", parameters={"query":"up==1"})
     res = await prov.invoke(req, InvocationContext(runtime_id="t"))
-    assert res.status == "failed"
+    assert res.status == "succeeded"
+    assert res.verification_result is not None
+    assert res.verification_result.result == "fail"
 
 @pytest.mark.asyncio
 async def test_promql_verifier_expected_mismatch():
@@ -86,7 +92,9 @@ async def test_promql_verifier_expected_mismatch():
     prov = PromqlVerifierProvider(http_client=mock_client)
     req = CapabilityRequest(id="p3", capability="verify.promql", parameters={"query":"up","expected":1})
     res = await prov.invoke(req, InvocationContext(runtime_id="t"))
-    assert res.status == "failed"
+    assert res.status == "succeeded"
+    assert res.verification_result is not None
+    assert res.verification_result.result == "fail"
 
 @pytest.mark.asyncio
 async def test_container_verifier_with_check_fn():

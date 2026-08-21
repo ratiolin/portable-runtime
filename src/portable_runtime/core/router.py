@@ -28,12 +28,21 @@ class DeterministicPriorityRouting:
         if not candidates:
             return None
         preferred = {provider_id: index for index, provider_id in enumerate(request.preferred_provider_ids)}
+        # ``required_failure_domains`` and independence are evaluated below
+        # by the typed router; they are not ordinary descriptor key/value
+        # constraints and must not make every otherwise eligible provider
+        # disappear during deterministic tie-breaking.
+        hard_constraints = {
+            key: value
+            for key, value in request.constraints.items()
+            if key not in {"required_failure_domains", "independence_constraints"}
+        }
         matching = [
             descriptor
             for descriptor in candidates
-            if all(descriptor.constraints.get(key) == value for key, value in request.constraints.items())
+            if all(descriptor.constraints.get(key) == value for key, value in hard_constraints.items())
         ]
-        if not request.constraints:
+        if not hard_constraints:
             matching = candidates
         if not matching:
             return None
@@ -78,10 +87,13 @@ class ConstraintRouter(DeterministicPriorityRouting):
                         except Exception:
                             pass
             else:
-                meta = getattr(request, "metadata", {}) if isinstance(getattr(request, "metadata", None), dict) else {}
-                ref_descs = meta.get("reference_descriptors") if isinstance(meta, dict) else None
-                if isinstance(ref_descs, list):
-                    reference_descriptors.extend([d for d in ref_descs if hasattr(d, "id")])
+                # Provider descriptors are authoritative registry state.  A
+                # caller-supplied ``reference_descriptors`` payload is only a
+                # proof-shaped hint and must never establish independence.
+                # Leave the reference set empty so the fail-closed branch
+                # below marks every candidate ineligible when refs are
+                # required but the registry cannot resolve them.
+                reference_descriptors = []
         eligible: list[ProviderDescriptor] = []
         for c in candidates:
             if ind_ctx and ind_ctx.independent_on and reference_descriptors:

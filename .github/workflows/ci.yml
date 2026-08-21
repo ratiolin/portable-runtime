@@ -60,6 +60,10 @@ jobs:
           uv run pytest -q
           tests/conformance/test_authoritative.py
           tests/conformance/test_sqlite_atomicity.py
+          tests/conformance/test_p1_semantic.py
+          tests/conformance/test_p2_protocol.py
+          tests/test_p1_routing.py
+          tests/test_reliability_controls_p2.py
 
   sonarcloud:
     runs-on: ubuntu-latest

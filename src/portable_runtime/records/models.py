@@ -27,6 +27,7 @@ RecordType = Literal[
     "Revision",
     "ChangeObject",
     "Policy",
+    "Derivation",
 ]
 
 EpistemicStatus = Literal["unverified", "supported", "contested", "refuted", "unknown", "revalidation-required"]
@@ -64,6 +65,7 @@ _ALLOWED_LIFECYCLE: dict[str, set[str]] = {
     "Revision": {"proposed", "authorized", "applied", "verified", "accepted", "rejected", "rolled-back"},
     "ChangeObject": {"draft", "candidate", "official", "deprecated", "archived"},
     "Policy": {"draft", "candidate", "official", "deprecated", "archived"},
+    "Derivation": {"draft", "current", "superseded", "archived"},
 }
 
 # Which types may carry epistemic_status
@@ -218,6 +220,31 @@ class PolicyRecord(BaseRecord):
     policy_type: str = "generic"
     rules: list[dict[str, Any]] = Field(default_factory=list)
     lifecycle_status: LifecycleStatus = "draft"
+
+
+class Derivation(BaseRecord):
+    """Minimal canonical inference provenance record.
+
+    A Derivation records how a conclusion was produced; it does not own the
+    conclusion's epistemic status.  That status remains on the referenced
+    Assertion (or other proposition record).
+    """
+
+    record_type: RecordType = "Derivation"
+    premise_refs: list[str] = Field(default_factory=list)
+    evidence_refs: list[str] = Field(default_factory=list)
+    rule_or_method_refs: list[str] = Field(default_factory=list)
+    conclusion_ref: str | None = None
+    provider_id: str | None = None
+    domain: str | None = None
+    evaluator_version: str | None = None
+    assumptions: list[str] = Field(default_factory=list)
+    limitations: list[str] = Field(default_factory=list)
+    lifecycle_status: LifecycleStatus = "draft"
+
+
+# Explicit descriptive alias used by callers that prefer the *Record suffix.
+DerivationRecord = Derivation
 
 
 # Convenience: KnowledgeProjection is not a record_type but a derived view (Batch5), kept here for import convenience
