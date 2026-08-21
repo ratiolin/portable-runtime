@@ -57,17 +57,18 @@ class RecordRelation(BaseModel):
     def is_stable(self) -> bool:
         return self.relation_type in _STABLE_RELATIONS
 
-# Invariant: produces != causes
-# Runtime must never auto-create "causes"; only "produces" is allowed.
+# Runtime must never create a canonical ``causes`` edge.  Domain attribution
+# may be represented in an Assertion/Derivation or an external domain record,
+# but it is not part of the portable canonical relation set.
 ALLOWED_RELATIONS = set(RelationType.__args__) if hasattr(RelationType, "__args__") else _STABLE_RELATIONS
 
 def validate_relation(rel: RecordRelation) -> list[str]:
-    errors = []
+    errors: list[str] = []
     if not rel.subject_ref or not rel.object_ref:
         errors.append("subject_ref and object_ref required")
-    if rel.relation_type == "causes":
-        errors.append("causes relation must be created by domain attribution, not Runtime (produces != causes)")
-    if rel.relation_type not in ALLOWED_RELATIONS and rel.relation_type != "causes":
-        # still allow typed dependency edges beyond stable set
-        pass
+    if rel.relation_type not in ALLOWED_RELATIONS:
+        errors.append(
+            f"relation_type {rel.relation_type!r} is not part of the canonical Runtime relation set; "
+            "domain attribution must not be stored as causes"
+        )
     return errors

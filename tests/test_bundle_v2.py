@@ -215,7 +215,7 @@ def test_bundle_cross_machine_history_explainable(tmp_path: Path):
 def test_record_relation_roundtrip_via_bundle(tmp_path: Path):
     store = InMemoryStateStore()
     from portable_runtime.records.models import Goal, Observation
-    obs = Observation(id="obs_1", lifecycle_status="current", epistemic_status="unverified")
+    obs = Observation(id="obs_1", source_refs=["artifact:observation-input"], lifecycle_status="current", epistemic_status="unverified")
     store.save_record(obs)
     goal = Goal(id="goal_1", direction="north", lifecycle_status="proposed")
     store.save_record(goal)

@@ -158,6 +158,17 @@ def test_record_semantics_orthogonal_and_evidence_no_epistemic():
     with pytest.raises(ValueError): ActionRecord(work_id="w", run_id="r", capability="c", provider_id="p", lifecycle_status="recorded", epistemic_status="supported")  # type: ignore
     e2 = EvidenceArtifact(uri="file://b", lifecycle_status="draft"); assert e2.lifecycle_status == "draft"; assert e2.epistemic_status is None
 
+def test_derivation_does_not_own_epistemic_status_and_observation_requires_provenance():
+    from portable_runtime.records.models import Derivation, Observation
+    from portable_runtime.records.validation import validate_record
+    with pytest.raises(ValueError, match="must not carry epistemic_status"):
+        Derivation(epistemic_status="supported")  # type: ignore[arg-type]
+    assert any(
+        "source_refs or explicit acquisition provenance" in error
+        for error in validate_record(Observation(lifecycle_status="current"))
+    )
+    assert not validate_record(Observation(source_refs=["artifact:input"], lifecycle_status="current"))
+
 def test_record_invalid_lifecycle_rejected():
     with pytest.raises(ValueError): validate_lifecycle_transition("Policy", "draft", "official")
     with pytest.raises(ValueError): validate_lifecycle_transition("Revision", "proposed", "accepted")
@@ -165,7 +176,7 @@ def test_record_invalid_lifecycle_rejected():
 def test_relation_produces_not_causes_and_invalid_rejected():
     ok = RecordRelation(subject_ref="action_1", object_ref="outcome_1", relation_type="produces"); assert validate_relation(ok) == []
     bad = RecordRelation.model_construct(subject_ref="action_1", object_ref="outcome_1", relation_type="causes")  # type: ignore
-    errs = validate_relation(bad); assert any("causes" in e for e in errs)
+    errs = validate_relation(bad); assert any("canonical Runtime relation set" in e for e in errs)
     store = InMemoryStateStore()
     with pytest.raises(ValueError): store.save_relation(bad)
     missing = RecordRelation(subject_ref="", object_ref="o", relation_type="supports"); assert validate_relation(missing)
