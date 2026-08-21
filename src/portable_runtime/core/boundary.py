@@ -6,6 +6,7 @@ import json
 from datetime import UTC, datetime
 from typing import Any, Literal
 
+from portable_runtime.core.boundary_stages import BoundaryStagePlan, InvocationStagePlan, ReliabilityStageInput
 from portable_runtime.core.capabilities import (
     CapabilityRequest,
     CapabilityResult,
@@ -195,6 +196,7 @@ class RealityBoundary:
         self.runtime_id = runtime_id
         self.contract_registry = contract_registry or CapabilityContractRegistry(effect_registry=effect_registry)
         self.effect_registry = effect_registry or getattr(self.contract_registry, "effect_registry", CapabilityEffectRegistry())
+        self.stage_plan = BoundaryStagePlan()
 
     def validate_fencing(self, request: CapabilityRequest) -> tuple[bool, str]:
         if self.store is None or request.run_id is None:
@@ -342,7 +344,7 @@ class RealityBoundary:
         return False, f"AuthorizationDenied: no valid grant authorizes {request.capability} with effective_impact {effective} for actor {actor}"
 
     @staticmethod
-    def _error_result(request: CapabilityRequest, code: str, reason: str, *, provider_id: str = "", status: str = "unavailable", **metadata: Any) -> CapabilityResult:
+    def _error_result(request: CapabilityRequest, code: str, reason: str, *, provider_id: str = "", status: Literal["succeeded", "failed", "unavailable", "needs-input", "cancelled", "unknown"] = "unavailable", **metadata: Any) -> CapabilityResult:
         error: dict[str, Any] = {"code": code, "reason": reason}
         if metadata:
             error.update(metadata)
@@ -531,7 +533,7 @@ class RealityBoundary:
         # non-pure descriptor without an authoritative capability rule is an
         # effect-contract gap, not permission to continue.
         has_non_pure = any(getattr(d, "side_effect_class", "pure") != "pure" for d in descriptors)
-        if has_non_pure and not self.effect_registry.has_rule(request.capability):
+        if has_non_pure and (self.effect_registry is None or not self.effect_registry.has_rule(request.capability)):
             reason = f"{CODE_EFFECT_CONTRACT_MISSING}: non-pure provider exposes unregistered capability {request.capability!r}"
             _append_event(store, CODE_EFFECT_CONTRACT_MISSING, request.id, {"capability": request.capability, "reason": reason})
             return self._error_result(request, CODE_EFFECT_CONTRACT_MISSING, reason)
@@ -721,14 +723,15 @@ class RealityBoundary:
         if not isinstance(recovery_timing, dict):
             recovery_timing = getattr(effect_rule, "recovery_timing", None) or getattr(contract, "recovery_timing", None)
         irreversible = effective in {"admin", "irreversible"}
-        reliability_kwargs = {
-            "side_effect": side_effect,
-            "action_blast_radius": requested_blast_radius,
-            "exposure": requested_exposure,
-            "irreversible": irreversible,
-            "procedure_profile": procedure_profile,
-            "timing": recovery_timing,
-        }
+        reliability_input = ReliabilityStageInput(
+            side_effect=side_effect,
+            action_blast_radius=requested_blast_radius,
+            exposure=requested_exposure,
+            irreversible=irreversible,
+            procedure_profile=procedure_profile,
+            timing=recovery_timing,
+        )
+        reliability_kwargs = reliability_input.as_kwargs()
         try:
             if hasattr(self.reliability, "assess"):
                 allowed, reliability_reason = _call_supported(self.reliability.assess, **reliability_kwargs)
@@ -781,8 +784,9 @@ class RealityBoundary:
 
         provider_id = selected.id
         _append_event(store, "ProviderSelected", request.id, {"provider_id": provider_id, "capability": request.capability})
-        side_effect_class: _EffectClass = getattr(selected, "side_effect_class", "pure")  # type: ignore[assignment]
-        effect_semantics = getattr(selected, "effect_semantics", side_effect_class)
+        invocation_plan = InvocationStagePlan.from_descriptor(selected)
+        side_effect_class: _EffectClass = invocation_plan.side_effect_class
+        effect_semantics = invocation_plan.effect_semantics
         if _IMPACT_ORDER.get(effective, 0) > _IMPACT_ORDER["read"]:
             side_effect = True
 
@@ -831,7 +835,7 @@ class RealityBoundary:
                 step = next((candidate for candidate in existing_steps if candidate.step_key == step_key), None)
                 lease_gen = _extract_lease_generation(request) or 0
                 if step is None:
-                    step = Step(id=new_id("step"), run_id=request.run_id, step_key=step_key, kind=request.capability.split(".")[0] if "." in request.capability else "generic", status="running", effect_semantics=effect_semantics, side_effect_class=side_effect_class, reversibility=getattr(selected, "reversibility", "unknown"), input_digest=permit.request_digest, lease_generation=lease_gen)
+                        step = Step(id=new_id("step"), run_id=request.run_id, step_key=step_key, kind=request.capability.split(".")[0] if "." in request.capability else "generic", status="running", effect_semantics=effect_semantics, side_effect_class=side_effect_class, reversibility=invocation_plan.reversibility, input_digest=permit.request_digest, lease_generation=lease_gen)
                 else:
                     step = step.model_copy(update={"status": "running", "updated_at": utcnow(), "input_digest": permit.request_digest, "effect_semantics": effect_semantics, "side_effect_class": side_effect_class, "lease_generation": lease_gen, "version": (step.version or 0) + 1})
                 step_id = step.id
@@ -873,7 +877,7 @@ class RealityBoundary:
                     step_key = request.step_key or f"{request.capability}:{request.idempotency_key or request.id}"
                     step = next((candidate for candidate in existing_steps if candidate.step_key == step_key), None)
                     if step is None:
-                        step = Step(id=new_id("step"), run_id=request.run_id, step_key=step_key, kind=request.capability.split(".")[0] if "." in request.capability else "generic", status="running", effect_semantics=effect_semantics, side_effect_class=side_effect_class, reversibility=getattr(selected, "reversibility", "unknown"), input_digest=permit.request_digest, lease_generation=_extract_lease_generation(request) or 0)
+                        step = Step(id=new_id("step"), run_id=request.run_id, step_key=step_key, kind=request.capability.split(".")[0] if "." in request.capability else "generic", status="running", effect_semantics=effect_semantics, side_effect_class=side_effect_class, reversibility=invocation_plan.reversibility, input_digest=permit.request_digest, lease_generation=_extract_lease_generation(request) or 0)
                     else:
                         step = step.model_copy(update={"status": "running", "updated_at": utcnow(), "input_digest": permit.request_digest})
                     step_id = step.id
@@ -952,9 +956,9 @@ class RealityBoundary:
                         step = store.get_step(step_id) if hasattr(store, "get_step") else None
                         if step is not None:
                             store.save_step(step.model_copy(update={"status": "unknown", "updated_at": utcnow()}))
-                        attempt = store.get_attempt(attempt_id) if attempt_id and hasattr(store, "get_attempt") else None
-                        if attempt is not None:
-                            store.save_attempt(attempt.model_copy(update={"status": "unknown", "ended_at": utcnow(), "error": result.error}))
+                        attempt_record = store.get_attempt(attempt_id) if attempt_id and hasattr(store, "get_attempt") else None
+                        if attempt_record is not None:
+                            store.save_attempt(attempt_record.model_copy(update={"status": "unknown", "ended_at": utcnow(), "error": result.error}))
                     except Exception:
                         pass
                 _append_event(store, CODE_POST_FENCING_REJECTED, request.id, {"reason": post_reason, "provider_id": provider_id})
@@ -965,12 +969,12 @@ class RealityBoundary:
         if store is not None and step_id is not None:
             try:
                 step = store.get_step(step_id) if hasattr(store, "get_step") else None
-                attempt = store.get_attempt(attempt_id) if attempt_id and hasattr(store, "get_attempt") else None
+                attempt_record = store.get_attempt(attempt_id) if attempt_id and hasattr(store, "get_attempt") else None
                 projected_status = result.status if result.status in ("succeeded", "failed", "cancelled", "unknown") else "failed"
-                if step is None or attempt is None:
+                if step is None or attempt_record is None:
                     raise RuntimeError("execution projection missing precommitted records")
                 step_update = step.model_copy(update={"status": projected_status, "updated_at": utcnow()})
-                attempt_update = attempt.model_copy(update={"status": projected_status, "ended_at": utcnow(), "result_ref": result.request_id, "error": result.error})
+                attempt_update = attempt_record.model_copy(update={"status": projected_status, "ended_at": utcnow(), "result_ref": result.request_id, "error": result.error})
                 action = Action(id=action_id or new_id("action"), work_id=request.work_id or "", run_id=request.run_id or "", capability=request.capability, provider_id=provider_id, request_ref=request.id, status=projected_status)
                 outcome = Outcome(id=new_id("outcome"), action_id=action.id, artifact_refs=result.output_artifact_refs, evidence_refs=result.evidence_refs, status=projected_status)
                 if hasattr(store, "transaction"):
@@ -1046,7 +1050,7 @@ class RealityBoundary:
         return await self.execute(request, capability_service=capability_service)
 
         # CapabilityContract resolve + effective impact (never downgrade)
-        _contract: any = None
+        _contract: Any = None
         try:
             _contract = self.contract_registry.resolve(request.capability)
         except EffectContractInvalid as exc:

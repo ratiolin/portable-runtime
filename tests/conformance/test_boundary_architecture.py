@@ -66,3 +66,14 @@ def test_provider_invoke_is_boundary_owned_and_legacy_shim_is_unreachable() -> N
         legacy = next(node for node in ast.walk(tree) if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == "_execute_legacy")
         returns = [node.lineno for node in legacy.body if isinstance(node, ast.Return)]
         assert returns and min(legacy_calls) > min(returns)
+
+
+def test_boundary_stage_seam_has_explicit_order_and_no_provider_capability() -> None:
+    from portable_runtime.core.boundary_stages import BoundaryStagePlan
+
+    plan = BoundaryStagePlan()
+    assert plan.names[:4] == ("qualification", "policy", "authorization", "procedure")
+    assert plan.names[-3:] == ("invocation", "postcondition", "projection")
+    assert plan.provider_invocation_owner == "RealityBoundary"
+    stage_source = (ROOT / "src" / "portable_runtime" / "core" / "boundary_stages.py").read_text(encoding="utf-8")
+    assert "provider.invoke" not in stage_source

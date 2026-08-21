@@ -74,21 +74,17 @@ asyncio_mode = "auto"
 pythonpath = ["."]
 
 [tool.mypy]
-python_version = "3.14"
+python_version = "3.12"
 check_untyped_defs = true
 warn_redundant_casts = true
 warn_unused_ignores = false
 no_implicit_optional = true
 show_error_codes = true
-exclude = ["tests/", "src/portable_runtime/core/boundary.py", "src/portable_runtime/core/reality_boundary.py"]
+exclude = ["tests/"]
 
 [tool.coverage.run]
 omit = ["tests/*", ".venv/*"]
 
-
-[[tool.mypy.overrides]]
-module = "portable_runtime.core.reality_boundary"
-ignore_missing_imports = true
 
 [[tool.mypy.overrides]]
 module = "portable_runtime.core.independence"
@@ -105,7 +101,6 @@ ignore_missing_imports = true
 [[tool.mypy.overrides]]
 module = "portable_runtime.core.boundary"
 ignore_missing_imports = true
-ignore_errors = true
 
 [[tool.mypy.overrides]]
 module = "control_plane.*"
