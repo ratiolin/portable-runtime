@@ -28,6 +28,7 @@ from portable_runtime.core.capability_contract import (
     EffectContractInvalid,
     EffectContractMissing,
     compute_effective_impact,
+    compute_effective_procedure_profile,
 )
 from portable_runtime.core.models import Action, Event, Outcome, Step, StepAttempt, new_id, utcnow
 from portable_runtime.core.qualification import (
@@ -643,7 +644,12 @@ class RealityBoundary:
                     contract_profile = "standard"
                 work_metadata = getattr(work, "metadata", {}) if isinstance(getattr(work, "metadata", {}), dict) else {}
                 run_metadata = getattr(run, "metadata", {}) if isinstance(getattr(run, "metadata", {}), dict) else {}
-                profile = metadata.get("procedure_profile") or work_metadata.get("procedure_profile") or run_metadata.get("procedure_profile") or contract_profile
+                profile = compute_effective_procedure_profile(
+                    contract_profile,
+                    work_metadata.get("procedure_profile"),
+                    run_metadata.get("procedure_profile"),
+                    metadata.get("procedure_profile"),
+                )
                 proof_data = assessment.procedure_proofs() if assessment is not None else {}
                 procedure_grants = (
                     assessment.proofs.get("grants")
@@ -674,9 +680,9 @@ class RealityBoundary:
         # read rule; it only triggers EffectContractMissing when no rule exists.
         side_effect = _IMPACT_ORDER.get(effective, 0) > _IMPACT_ORDER["read"]
         effect_rule = self.effect_registry.resolve(request.capability) if self.effect_registry is not None else None
-        procedure_profile = str(
-            metadata.get("procedure_profile")
-            or getattr(contract, "minimum_procedure_profile", "minimal")
+        procedure_profile = compute_effective_procedure_profile(
+            getattr(contract, "minimum_procedure_profile", "minimal"),
+            metadata.get("procedure_profile"),
         )
         requested_blast_radius = _int_or_none(metadata.get("blast_radius"))
         if requested_blast_radius is None:

@@ -11,6 +11,29 @@ AuthorizationRequirement = Literal["none", "optional", "required"]
 ProcedureProfileLiteral = Literal["minimal", "standard", "enhanced"]
 Reversibility = Literal["reversible", "compensatable", "irreversible", "unknown"]
 _IMPACT_ORDER = {"read": 0, "write-local": 1, "write-remote": 2, "deploy": 3, "admin": 4, "irreversible": 5}
+_PROCEDURE_ORDER = {"minimal": 0, "standard": 1, "enhanced": 2}
+
+
+def compute_effective_procedure_profile(
+    contract_minimum: str | None = None,
+    *requested_profiles: str | None,
+) -> ProcedureProfileLiteral:
+    """Resolve a procedure profile without allowing a governance downgrade.
+
+    A contract profile is a minimum. Work, Run, and request metadata may ask
+    for a stricter profile, but a caller cannot replace ``standard`` or
+    ``enhanced`` with ``minimal``. Unknown values fail closed rather than
+    silently selecting a weaker procedure.
+    """
+
+    values = [contract_minimum or "minimal", *(value for value in requested_profiles if value is not None)]
+    try:
+        effective = max(values, key=lambda value: _PROCEDURE_ORDER[value])
+    except (KeyError, TypeError) as exc:
+        raise ValueError(f"unknown procedure profile in {values!r}; refusing to downgrade governance") from exc
+    return effective  # type: ignore[return-value]
+
+
 class EffectContractInvalid(Exception):  # noqa: N818
     def __init__(self, capability: str, message: str | None = None) -> None:
         self.capability = capability
@@ -99,7 +122,11 @@ def _builtin_effect_rules() -> list[CapabilityEffectRule]:
         CapabilityEffectRule(capability="verify.*", impact_class="read"),
         CapabilityEffectRule(capability="reason.*", impact_class="read"),
         CapabilityEffectRule(capability="human.*", impact_class="read"),
+        CapabilityEffectRule(capability="code.read", impact_class="read"),
         CapabilityEffectRule(capability="code.edit", impact_class="write-local", authorization_required=True, resource_required=True, version_required=True),
+        CapabilityEffectRule(capability="code.test", impact_class="write-local", authorization_required=True, resource_required=True, version_required=True),
+        CapabilityEffectRule(capability="shell.exec", impact_class="write-local", authorization_required=True, resource_required=True),
+        CapabilityEffectRule(capability="git.diff", impact_class="read"),
         CapabilityEffectRule(capability="deploy.*", impact_class="deploy", authorization_required=True, resource_required=True, version_required=True),
         CapabilityEffectRule(capability="test.read", impact_class="read"),
         CapabilityEffectRule(capability="test.side_effect", impact_class="write-remote", authorization_required=True),
@@ -138,10 +165,15 @@ def _is_side_effect_capability(contract, capability: str) -> bool:
     if contract is not None:
         return contract.minimum_impact_class != "read" or contract.effect_semantics != "pure"
     lower = capability.lower()
-    if lower.startswith(("test.read", "observe.", "code.", "verify.", "human.", "reason.")):
+    # Unknown action namespaces must fail closed.  Only explicit read-only
+    # compatibility prefixes are safe defaults; an unknown ``code.*`` action
+    # must not become a read merely because it shares the namespace.
+    if lower == "test.read" or lower.endswith(".read"):
         return False
-    if lower.endswith(".read"):
+    if lower.startswith(("observe.", "verify.", "human.", "reason.")):
         return False
+    if lower.startswith("code."):
+        return True
     if any(k in lower for k in ("deploy", "admin", "irreversible", "write", "side_effect")):
         return True
     return False
@@ -247,6 +279,10 @@ def _builtin_contracts():
         CapabilityContract(capability="deploy.prod", minimum_impact_class="deploy", effect_semantics="reconcilable", reversibility="compensatable", authorization_requirement="required", minimum_procedure_profile="standard", resource_required=True, subject_version_required=True, default_independence_requirements=["credential_domain", "provider_family"], blast_radius=5, exposure=5),
         CapabilityContract(capability="deploy.*", minimum_impact_class="deploy", effect_semantics="reconcilable", reversibility="compensatable", authorization_requirement="required", minimum_procedure_profile="standard", resource_required=True, subject_version_required=True, default_independence_requirements=["credential_domain", "provider_family"], blast_radius=5, exposure=5),
         CapabilityContract(capability="code.edit", minimum_impact_class="write-local", effect_semantics="idempotent", reversibility="reversible", authorization_requirement="required", minimum_procedure_profile="standard", resource_required=True, subject_version_required=True, default_independence_requirements=[], blast_radius=1, exposure=1),
+        CapabilityContract(capability="code.read", minimum_impact_class="read", effect_semantics="pure", reversibility="unknown", authorization_requirement="none", minimum_procedure_profile="minimal", resource_required=False, subject_version_required=False, default_independence_requirements=[]),
+        CapabilityContract(capability="code.test", minimum_impact_class="write-local", effect_semantics="idempotent", reversibility="reversible", authorization_requirement="required", minimum_procedure_profile="standard", resource_required=True, subject_version_required=True, default_independence_requirements=[], blast_radius=1, exposure=1),
+        CapabilityContract(capability="shell.exec", minimum_impact_class="write-local", effect_semantics="reconcilable", reversibility="unknown", authorization_requirement="required", minimum_procedure_profile="standard", resource_required=True, subject_version_required=False, default_independence_requirements=[], blast_radius=1, exposure=1),
+        CapabilityContract(capability="git.diff", minimum_impact_class="read", effect_semantics="pure", reversibility="unknown", authorization_requirement="none", minimum_procedure_profile="minimal", resource_required=False, subject_version_required=False, default_independence_requirements=[]),
         CapabilityContract(capability="test.side_effect", minimum_impact_class="write-remote", effect_semantics="reconcilable", reversibility="compensatable", authorization_requirement="required", minimum_procedure_profile="standard", resource_required=False, subject_version_required=False, default_independence_requirements=[], blast_radius=1, exposure=1),
         CapabilityContract(capability="test.deploy", minimum_impact_class="deploy", effect_semantics="reconcilable", reversibility="compensatable", authorization_requirement="required", minimum_procedure_profile="standard", resource_required=True, subject_version_required=True, default_independence_requirements=["credential_domain", "provider_family"], blast_radius=5, exposure=5),
         CapabilityContract(capability="test.read", minimum_impact_class="read", effect_semantics="pure", reversibility="unknown", authorization_requirement="none", minimum_procedure_profile="minimal", resource_required=False, subject_version_required=False, default_independence_requirements=[]),

@@ -271,6 +271,7 @@ class SQLiteStateStore:
             if subject_ref is None or subject_ref in value.subject_refs
         ]
     def save_decision(self, value: Decision) -> None: self._save("decision", value)
+    def get_decision(self, decision_id: str) -> Decision | None: return self._get("decision", Decision, decision_id)
     def save_action(self, value: Action) -> None: self._save("action", value)
     def save_outcome(self, value: Outcome) -> None: self._save("outcome", value)
     def save_knowledge(self, value: KnowledgeItem) -> None: self._save("knowledge", value)
