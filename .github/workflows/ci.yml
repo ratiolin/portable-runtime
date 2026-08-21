@@ -67,6 +67,10 @@ jobs:
           tests/test_reliability_controls_p2.py
 
   sonarcloud:
+    # SonarCloud quality-gate lookup is authorized for the configured main
+    # branch. Feature-branch analyses upload successfully but cannot query
+    # the project gate and otherwise make branch CI report a false failure.
+    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     needs: [lint-and-test, strict-conformance]
     timeout-minutes: 30
