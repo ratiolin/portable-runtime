@@ -23,15 +23,13 @@ def _closed_verification_pass(result: object) -> bool:
     """Return the closed judgment, never an epistemic inference.
 
     New verifier providers expose ``verification_result`` independently from
-    ``CapabilityResult.status``.  The status-only fallback is retained for
-    old third-party verifier providers that predate this field; it is only an
-    execution compatibility path and never creates ``supports``/``official``
-    semantic state.
+    ``CapabilityResult.status``.  A provider execution without a closed
+    judgment is not proof and therefore fails closed.
     """
     judgment = getattr(result, "verification_result", None)
     if judgment is not None:
         return getattr(judgment, "result", None) == "pass"
-    return getattr(result, "status", None) == "succeeded"
+    return False
 
 
 def _verification_policy_passes(results: Sequence[object], policy: object) -> bool:
@@ -247,9 +245,10 @@ class IncidentRepairWorkflow:
             work_metadata=dict(work.metadata) if isinstance(work.metadata, dict) else {},
             capability="verify.http",
         )
-        ver_decision = await self._policy_engine.evaluate(verification_ctx)
-        strict_required = ver_decision.status == "require-verification"
-        if not verify_ok and strict_required:
+        await self._policy_engine.evaluate(verification_ctx)
+        # A failed or missing closed judgment is never a successful repair,
+        # regardless of whether a legacy policy requested strict verification.
+        if not verify_ok:
             with contextlib.suppress(ValueError):
                 context.transition_run("blocked", current_step="verify-blocked")
             return "blocked"
@@ -345,8 +344,12 @@ class IncidentRepairWorkflow:
         except Exception:
             logger.debug("knowledge candidate creation failed", exc_info=True)
 
-        with contextlib.suppress(ValueError):
-            context.transition_run("succeeded", current_step="done")
+        try:
+            context.complete_with_proofs(verification_refs)
+        except ValueError:
+            with contextlib.suppress(ValueError):
+                context.transition_run("blocked", current_step="verify-proof-missing")
+            return "blocked"
         return "succeeded"
 
 

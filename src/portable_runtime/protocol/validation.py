@@ -16,7 +16,7 @@ import re
 from collections import defaultdict
 from collections.abc import Iterable
 
-from portable_runtime.records.authorization import AuthorizationGrant
+from portable_runtime.records.authorization import AuthorizationGrant, validate_grant
 from portable_runtime.records.lifecycle import validate_lifecycle_transition
 from portable_runtime.records.models import BaseRecord
 from portable_runtime.records.relations import RecordRelation, RelationType, validate_relation
@@ -91,7 +91,6 @@ def _iter_ref_edges(kind: str, raw: dict[str, object]) -> Iterable[tuple[str, st
         yield from many("artifact_refs", raw.get("artifact_refs"))
     elif kind == "run":
         yield from one("work_id", raw.get("work_id"))
-        yield from one("current_step", raw.get("current_step"))
     elif kind == "artifact":
         yield from one("created_by_run_id", raw.get("created_by_run_id"))
     elif kind == "evidence":
@@ -282,7 +281,9 @@ def _has_structural_authorization_proof(
         if raw.get("revoked_at"):
             continue
         try:
-            AuthorizationGrant.model_validate(raw)
+            grant = AuthorizationGrant.model_validate(raw)
+            if validate_grant(grant):
+                continue
         except ValueError:
             continue
         return True
@@ -446,6 +447,16 @@ def validate_state_graph(state: dict[str, list[dict[str, object]]], *, strict: b
                 continue
             identifier = raw.get("id", "<unknown>")
             for field, ref, event_subject in _iter_ref_edges(kind, raw):
+                if (
+                    kind == "record"
+                    and raw.get("record_type") == "Revision"
+                    and raw.get("lifecycle_status") in {"proposed", "rejected"}
+                    and field in {"subject_ref", "revises_ref", "produces_ref", "supersedes_ref"}
+                ):
+                    # A proposal may name an external version that has not
+                    # been imported into this runtime yet.  Once authorized,
+                    # endpoint existence/type compatibility is mandatory.
+                    continue
                 if ref in ids or _is_external_ref(ref, event_subject=event_subject):
                     continue
                 # Version labels (v1, commit hashes) are not local object refs;
@@ -501,11 +512,84 @@ def validate_state_graph(state: dict[str, list[dict[str, object]]], *, strict: b
         if not _has_structural_authorization_proof(raw, normalized):
             errors.append(f"record {identifier} official promotion requires a structurally bound AuthorizationGrant")
 
+    # KnowledgeProjection promotion is also a governance transition.  Non-
+    # empty strings in a projection are not proof; each judgment, evidence,
+    # scope-version and authorization ref must resolve to an authoritative
+    # local object before an official projection can be committed.
+    local_ids = set(ids)
+    for raw in normalized["knowledge_projection"]:
+        if not isinstance(raw, dict) or raw.get("lifecycle_status") != "official":
+            continue
+        identifier = str(raw.get("id", "<unknown>"))
+        for field in (
+            "current_assertion_refs",
+            "evidence_summary_refs",
+            "epistemic_judgment_refs",
+            "scope_version_refs",
+        ):
+            refs = raw.get(field)
+            if not isinstance(refs, list) or not refs:
+                errors.append(f"knowledge projection {identifier} official promotion requires {field}")
+                continue
+            for ref in refs:
+                if not isinstance(ref, str) or ref not in local_ids:
+                    errors.append(f"knowledge projection {identifier} has unresolved {field} ref {ref!r}")
+        auth_refs = raw.get("authorization_refs")
+        if not isinstance(auth_refs, list) or not auth_refs:
+            errors.append(f"knowledge projection {identifier} official promotion requires authorization_refs")
+        else:
+            for ref in auth_refs:
+                grant_raw = next(
+                    (item for item in normalized["authorization"] if isinstance(item, dict) and item.get("id") == ref),
+                    None,
+                )
+                if grant_raw is None:
+                    errors.append(f"knowledge projection {identifier} has unresolved authorization ref {ref!r}")
+                else:
+                    try:
+                        grant = AuthorizationGrant.model_validate(grant_raw)
+                        if validate_grant(grant):
+                            errors.append(f"knowledge projection {identifier} authorization ref {ref!r} is invalid")
+                    except Exception:
+                        errors.append(f"knowledge projection {identifier} authorization ref {ref!r} is invalid")
+
     # Revision endpoints must exist locally and remain type-compatible.  The
     # single-object validator cannot prove this because it has no graph.
     for record in parsed_records.values():
         if record.record_type != "Revision":
             continue
+        if record.lifecycle_status in {"authorized", "applied", "verified", "accepted"}:
+            metadata = record.metadata if isinstance(record.metadata, dict) else {}
+            raw_refs = (
+                metadata.get("authorization_ref")
+                or metadata.get("authorization_refs")
+                or metadata.get("authorization_grant_id")
+            )
+            auth_refs = (
+                [raw_refs]
+                if isinstance(raw_refs, str)
+                else list(raw_refs or [])
+                if isinstance(raw_refs, list)
+                else []
+            )
+            grants_by_id = {
+                str(raw.get("id")): raw
+                for raw in normalized["authorization"]
+                if isinstance(raw, dict) and isinstance(raw.get("id"), str)
+            }
+            if len(auth_refs) != 1 or auth_refs[0] not in grants_by_id:
+                errors.append(f"revision {record.id} {record.lifecycle_status} requires a valid authorization_ref")
+            else:
+                try:
+                    grant = AuthorizationGrant.model_validate(grants_by_id[auth_refs[0]])
+                    grant_errors = validate_grant(grant)
+                    if grant_errors:
+                        errors.extend(f"revision {record.id}: {error}" for error in grant_errors)
+                    expected_versions = {record.id, f"{record.id}:v{record.version}"}
+                    if not expected_versions.intersection(grant.subject_version_refs):
+                        errors.append(f"revision {record.id} authorization does not bind this revision version")
+                except Exception as exc:
+                    errors.append(f"revision {record.id} authorization is invalid: {exc}")
         old_ref = getattr(record, "revises_ref", None)
         new_ref = getattr(record, "produces_ref", None)
         if not old_ref or not new_ref or record.lifecycle_status in {"proposed", "rejected"}:
@@ -566,6 +650,33 @@ def assert_valid_state_graph(state: dict[str, list[dict[str, object]]]) -> None:
     errors = validate_state_graph(state)
     if errors:
         raise ValueError("state graph validation failed: " + "; ".join(errors))
+
+
+def assert_valid_candidate_write(
+    state: dict[str, list[dict[str, object]]],
+    kind: str,
+    value: object,
+) -> None:
+    """Validate one normal write against the complete candidate graph.
+
+    Import-time validation alone permits a running store to temporarily hold a
+    graph that cannot be exported and re-imported.  Every canonical semantic
+    mutation uses this merge-and-validate operation before committing.
+    """
+
+    if kind not in _KNOWN_KINDS:
+        raise ValueError(f"unknown state graph bucket {kind!r}")
+    if not hasattr(value, "model_dump") or not isinstance(getattr(value, "id", None), str):
+        raise ValueError(f"{kind} writes require a model with a string id")
+    candidate = {bucket: list(values) for bucket, values in state.items()}
+    candidate.setdefault(kind, [])
+    value_id = str(value.id)  # type: ignore[attr-defined]
+    candidate[kind] = [
+        raw for raw in candidate[kind]
+        if not isinstance(raw, dict) or raw.get("id") != value_id
+    ]
+    candidate[kind].append(value.model_dump(mode="json"))  # type: ignore[attr-defined]
+    assert_valid_state_graph(candidate)
 
 
 def validate_record_write(record: BaseRecord, existing: BaseRecord | None = None) -> list[str]:

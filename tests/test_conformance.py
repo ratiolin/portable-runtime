@@ -17,7 +17,7 @@ from portable_runtime.records.lifecycle import validate_lifecycle_transition
 from portable_runtime.records.models import Assertion, EvidenceArtifact, PolicyRecord
 from portable_runtime.records.relations import RecordRelation, validate_relation
 from portable_runtime.records.revalidation import assess_revalidation, should_block
-from portable_runtime.records.revision import create_revision, supersede
+from portable_runtime.records.revision import apply_revision, create_revision, supersede
 from portable_runtime.stores.bundle import BUNDLE_SCHEMA_VERSION, export_bundle, import_bundle
 from portable_runtime.stores.memory import InMemoryStateStore
 from portable_runtime.stores.sqlite import SQLiteStateStore
@@ -174,22 +174,23 @@ def test_record_invalid_lifecycle_rejected():
     with pytest.raises(ValueError): validate_lifecycle_transition("Revision", "proposed", "accepted")
 
 def test_relation_produces_not_causes_and_invalid_rejected():
-    ok = RecordRelation(subject_ref="action_1", object_ref="outcome_1", relation_type="produces"); assert validate_relation(ok) == []
+    ok = RecordRelation(subject_ref="action:1", object_ref="outcome:1", relation_type="produces"); assert validate_relation(ok) == []
     bad = RecordRelation.model_construct(subject_ref="action_1", object_ref="outcome_1", relation_type="causes")  # type: ignore
     errs = validate_relation(bad); assert any("canonical Runtime relation set" in e for e in errs)
     store = InMemoryStateStore()
     with pytest.raises(ValueError): store.save_relation(bad)
     missing = RecordRelation(subject_ref="", object_ref="o", relation_type="supports"); assert validate_relation(missing)
     with pytest.raises(ValueError): store.save_relation(missing)
-    rel_supports = RecordRelation(subject_ref="claim_1", object_ref="ev_1", relation_type="supports"); assert validate_relation(rel_supports) == []; store.save_relation(rel_supports); store.save_relation(ok)
+    rel_supports = RecordRelation(subject_ref="claim:1", object_ref="ev:1", relation_type="supports"); assert validate_relation(rel_supports) == []; store.save_relation(rel_supports); store.save_relation(ok)
 
 def test_lifecycle_revision_proposed_authorized_applied_verified_accepted():
     store = InMemoryStateStore()
     old = Assertion(statement="old", lifecycle_status="current"); new = Assertion(statement="new", lifecycle_status="draft")
     store.save_record(old); store.save_record(new)
     rev = create_revision(old.id, new.id); assert rev.lifecycle_status == "proposed"; store.save_record(rev)
-    validate_lifecycle_transition("Revision", "proposed", "authorized"); rev.lifecycle_status = "authorized"; store.save_record(rev)
-    validate_lifecycle_transition("Revision", "authorized", "applied"); rev.lifecycle_status = "applied"; store.save_record(rev)
+    grant = create_grant_for_approval(principal_ref="human:owner", grantee_ref="agent:revision", allowed_capabilities=["revision.apply"], subject_version_refs=[rev.id])
+    store.save_authorization(grant)
+    apply_revision(rev, store=store, authorization_ref=grant.id)
     validate_lifecycle_transition("Revision", "applied", "verified"); rev.lifecycle_status = "verified"; store.save_record(rev)
     validate_lifecycle_transition("Revision", "verified", "accepted"); rev.lifecycle_status = "accepted"; store.save_record(rev)
     assert store.get_record(rev.id).lifecycle_status == "accepted"
@@ -201,7 +202,8 @@ def test_lifecycle_policy_candidate_official_and_old_retained():
     validate_lifecycle_transition("Policy", "draft", "candidate"); pol.lifecycle_status = "candidate"; store.save_record(pol)
     validate_lifecycle_transition("Policy", "candidate", "official"); pol.lifecycle_status = "official"; store.save_record(pol)
     pol2 = PolicyRecord(policy_type="test", lifecycle_status="draft"); store.save_record(pol2)
-    rel = supersede(pol.id, pol2.id, store=store); assert rel.relation_type == "supersedes"; assert store.get_record(pol.id) is not None; assert store.get_record(pol.id).lifecycle_status == "superseded"; assert store.get_record(pol2.id) is not None
+    with pytest.raises(ValueError):
+        supersede(pol.id, pol2.id, store=store)
 
 def test_authorization_gate_expired_revoked_versioned():
     now = datetime.now(UTC)

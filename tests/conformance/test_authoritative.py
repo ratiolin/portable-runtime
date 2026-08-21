@@ -184,6 +184,7 @@ def _request(capability: str = "test.side_effect", **kwargs: Any) -> CapabilityR
         "id": new_id("request"),
         "capability": capability,
         "effect_class": "write-remote" if capability != "test.read" else "read",
+        "subject_version_refs": ["patch:v1"],
     }
     defaults.update(kwargs)
     return CapabilityRequest(**defaults)
@@ -269,7 +270,7 @@ def _grant(
             principal_ref="human:owner",
             grantee_ref=actor,
             allowed_capabilities=[capability],
-            subject_version_refs=subject_version_refs or [],
+            subject_version_refs=subject_version_refs or ["patch:v1"],
             effect_ceiling=effect_ceiling,
             resource_scope=resource_scope,
             ttl_seconds=3600,
@@ -674,6 +675,7 @@ async def test_e022_expired_authorization_reference_fails_closed() -> None:
         principal_ref="human:owner",
         grantee_ref="agent:runner",
         allowed_capabilities=["test.side_effect"],
+        subject_version_refs=["patch:v1"],
         valid_from=datetime.now(UTC) - timedelta(seconds=30),
         expires_at=datetime.now(UTC) - timedelta(seconds=1),
     )

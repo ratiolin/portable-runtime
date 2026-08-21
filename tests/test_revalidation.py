@@ -7,6 +7,7 @@ import random
 import pytest
 
 from portable_runtime.records.models import Assertion, EvidenceArtifact, Goal
+from portable_runtime.records.authorization import create_grant_for_approval
 from portable_runtime.records.relations import RecordRelation
 from portable_runtime.records.revalidation import (
     assess_revalidation,
@@ -181,7 +182,14 @@ def test_revision_create_and_apply_and_supersede():
     assert old.id != new.id
 
     # apply
-    apply_revision(rev, store=store)
+    grant = create_grant_for_approval(
+        principal_ref="human:owner",
+        grantee_ref="agent:revision",
+        allowed_capabilities=["revision.apply"],
+        subject_version_refs=[rev.id],
+    )
+    store.save_authorization(grant)
+    apply_revision(rev, store=store, authorization_ref=grant.id)
     assert rev.lifecycle_status == "applied"
     # persisted
     fetched = store.get_record(rev.id)
@@ -215,6 +223,14 @@ def test_revision_no_silent_overwrite():
     store.save_record(new)
     rev = create_revision(old, new)  # pass objects directly
     store.save_record(rev)
+    grant = create_grant_for_approval(
+        principal_ref="human:owner",
+        grantee_ref="agent:revision",
+        allowed_capabilities=["revision.apply"],
+        subject_version_refs=[rev.id],
+    )
+    store.save_authorization(grant)
+    apply_revision(rev, store=store, authorization_ref=grant.id)
     supersede(store, old.id, new.id, revision=rev)
     # both still present - old retained, not silently overwritten
     assert len(store.list_records()) >= 3

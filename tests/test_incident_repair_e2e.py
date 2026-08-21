@@ -10,6 +10,7 @@ from portable_runtime.core.registry import ProviderRegistry
 from portable_runtime.core.router import CapabilityService
 from portable_runtime.core.runtime import Runtime
 from portable_runtime.records.models import Assertion
+from portable_runtime.records.open_validation import ClosedVerificationResult
 from portable_runtime.records.relations import RecordRelation
 from portable_runtime.stores.memory import InMemoryStateStore
 from portable_runtime.workflows.context import WorkflowContext
@@ -26,7 +27,18 @@ def make_registry_with_providers(patch_hint="patch:v1"):
         async def health(self): return ProviderHealth(provider_id=self._d.id, available=True)
         async def invoke(self, req: CapabilityRequest, ctx: InvocationContext):
             # keep track via metadata if needed
-            return CapabilityResult(request_id=req.id, provider_id=self._d.id, status="succeeded", message=f"ok {self._d.id}", output_artifact_refs=[f"art_{req.id}"] if "code.edit" in self._d.capabilities else [])
+            return CapabilityResult(
+                request_id=req.id,
+                provider_id=self._d.id,
+                status="succeeded",
+                message=f"ok {self._d.id}",
+                output_artifact_refs=[],
+                verification_result=(
+                    ClosedVerificationResult(result="pass", message="ok")
+                    if req.capability.startswith("verify.")
+                    else None
+                ),
+            )
         async def cancel(self, rid): return None
     providers = [
         ("p_logs", ["observe.logs"]),
@@ -52,6 +64,7 @@ async def test_incident_repair_e2e_observe_to_knowledge():
     seed_action_governance(work, run, store)
     reg = make_registry_with_providers()
     caps = CapabilityService(reg, store=store)
+    caps.boundary.reliability.cooldown_seconds = 0
     ctx = WorkflowContext(work=work, run=run, store=store, capabilities=caps, registry=reg)
     wf = IncidentRepairWorkflow()
     result = await wf.run(ctx, work, run)

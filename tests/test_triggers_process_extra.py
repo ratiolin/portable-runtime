@@ -30,6 +30,14 @@ async def test_alertmanager_trigger():
     assert ev is not None
     await trigger.stop()
 
+
+@pytest.mark.asyncio
+async def test_alertmanager_configured_secret_requires_signature():
+    trigger = AlertmanagerTrigger(secret="test-secret")
+    payload = {"alerts": [{"labels": {"alertname": "TestAlert"}}]}
+    with pytest.raises(Exception, match="signature"):
+        await trigger.handle_webhook(payload, raw_body=b'{"alerts": []}')
+
 @pytest.mark.asyncio
 async def test_process_truncate_and_exec():
     execu = PortableSubprocessExecutor()

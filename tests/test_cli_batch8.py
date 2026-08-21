@@ -71,7 +71,7 @@ def test_cli_explain_and_lineage(tmp_path):
     runtime = Runtime(store=store)
     rec = Assertion(statement="explainable", epistemic_status="supported", lifecycle_status="draft")
     store.save_record(rec)
-    rel = RecordRelation(relation_type="supports", subject_ref="evidence_99", object_ref=rec.id)
+    rel = RecordRelation(relation_type="supports", subject_ref="evidence:99", object_ref=rec.id)
     store.save_relation(rel)
     store.close()
 
@@ -100,16 +100,16 @@ def test_cli_why(tmp_path):
     db = _seed(tmp_path)
     store = SQLiteStateStore(db)
     runtime = Runtime(store=store)
-    rel1 = RecordRelation(relation_type="produces", subject_ref="action_777", object_ref="outcome_777")
-    rel2 = RecordRelation(relation_type="authorizes", subject_ref="decision_777", object_ref="action_777")
+    rel1 = RecordRelation(relation_type="produces", subject_ref="action:777", object_ref="outcome:777")
+    rel2 = RecordRelation(relation_type="authorizes", subject_ref="decision:777", object_ref="action:777")
     store.save_relation(rel1)
     store.save_relation(rel2)
     store.close()
 
-    rc, out = _capture(["--state", str(db), "why", "action_777"])
+    rc, out = _capture(["--state", str(db), "why", "action:777"])
     assert rc == 0
     data = json.loads(out)
-    assert data["action_id"] == "action_777"
+    assert data["action_id"] == "action:777"
     assert isinstance(data["relations"], list)
     assert len(data["relations"]) >= 2
 
@@ -121,7 +121,7 @@ def test_cli_evidence(tmp_path):
     # assertion with supporting evidence relation
     assertion = Assertion(statement="needs support", epistemic_status="supported", lifecycle_status="draft")
     store.save_record(assertion)
-    rel = RecordRelation(relation_type="supports", subject_ref="evidence_a", object_ref=assertion.id)
+    rel = RecordRelation(relation_type="supports", subject_ref="evidence:a", object_ref=assertion.id)
     store.save_relation(rel)
     store.close()
 
@@ -148,18 +148,18 @@ def test_cli_affected_by(tmp_path):
     db = _seed(tmp_path)
     store = SQLiteStateStore(db)
     runtime = Runtime(store=store)
-    rel = RecordRelation(relation_type="validated-under", subject_ref="assertion_affected", object_ref="evaluator_v8")
+    rel = RecordRelation(relation_type="validated-under", subject_ref="assertion:affected", object_ref="evaluator:v8")
     store.save_relation(rel)
     store.close()
 
-    rc, out = _capture(["--state", str(db), "affected-by", "evaluator_v8", "--change-type", "evaluator"])
+    rc, out = _capture(["--state", str(db), "affected-by", "evaluator:v8", "--change-type", "evaluator"])
     assert rc == 0, out
     data = json.loads(out)
     assert isinstance(data, list)
-    assert any(item["affected_ref"] == "assertion_affected" for item in data)
+    assert any(item["affected_ref"] == "assertion:affected" for item in data)
 
     # via revalidation affected-by subcommand
-    rc, out = _capture(["--state", str(db), "revalidation", "affected-by", "evaluator_v8", "--change-type", "evaluator"])
+    rc, out = _capture(["--state", str(db), "revalidation", "affected-by", "evaluator:v8", "--change-type", "evaluator"])
     assert rc == 0
     data2 = json.loads(out)
     assert isinstance(data2, list)

@@ -19,6 +19,7 @@ from portable_runtime.records.authorization import (
     is_authorized_for_legacy as is_authorized_for,
     validate_grant,
 )
+from portable_runtime.records.open_validation import ClosedVerificationResult
 from portable_runtime.stores.memory import InMemoryStateStore
 from portable_runtime.workflows.procedure import (
     ObligationStatus,
@@ -283,7 +284,17 @@ async def test_human_approve_generates_decision_and_grant():
         def descriptor(self): return self._d
         async def health(self): return ProviderHealth(provider_id=self._d.id, available=True)
         async def invoke(self, req: CapabilityRequest, ctx: InvocationContext):
-            return CapabilityResult(request_id=req.id, provider_id=self._d.id, status="succeeded", message="ok")
+            return CapabilityResult(
+                request_id=req.id,
+                provider_id=self._d.id,
+                status="succeeded",
+                message="ok",
+                verification_result=(
+                    ClosedVerificationResult(result="pass", message="ok")
+                    if req.capability.startswith("verify.")
+                    else None
+                ),
+            )
 
     store = InMemoryStateStore()
     work = Work(id=new_id("work"), title="incident fix", kind="incident", metadata={"requires_approval": True, "patch_hint": "patch:v1", "approver": "human:alice"})
@@ -295,6 +306,7 @@ async def test_human_approve_generates_decision_and_grant():
     for pid, caps in [("p_logs", ["observe.logs"]), ("p_cont", ["observe.container"]), ("p_reason", ["reason.generate"]), ("p_edit", ["code.edit"]), ("p_http", ["verify.http"]), ("p_git", ["verify.git_diff"]), ("p_human", ["human.approve"])]:
         registry.register(SucceedProvider(pid, caps))
     caps_service = CapabilityService(registry, store=store)
+    caps_service.boundary.reliability.cooldown_seconds = 0
     ctx = WorkflowContext(work=work, run=run, store=store, capabilities=caps_service, registry=registry)
     wf = IncidentRepairWorkflow()
     result = await wf.run(ctx, work, run)
