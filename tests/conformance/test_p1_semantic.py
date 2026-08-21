@@ -14,6 +14,7 @@ from portable_runtime.records.revalidation import (
     derive_revalidation_disposition,
 )
 from portable_runtime.records.relations import RecordRelation
+from portable_runtime.core.qualification import QualificationRef, QualificationResolutionError
 from portable_runtime.stores.memory import InMemoryStateStore
 from portable_runtime.workflows.context import WorkflowContext
 from portable_runtime.workflows.daily_scan.workflow import KnowledgeConsolidationWorkflow
@@ -109,3 +110,14 @@ def test_derivation_is_a_canonical_record_with_explicit_premises_and_conclusion(
     assert fetched is not None
     assert fetched.record_type == "Derivation"
     assert fetched.conclusion_ref == assertion.id
+
+
+def test_qualification_refs_accept_legacy_aliases_but_reject_inline_shapes() -> None:
+    assert QualificationRef.parse("record:one", default_kind="evidence").ref_id == "record:one"
+    assert QualificationRef.parse({"ref_id": "record:two"}).ref_id == "record:two"
+    assert QualificationRef.parse({"ref": "record:three"}).ref_id == "record:three"
+    assert QualificationRef.parse({"record_id": "record:four"}).ref_id == "record:four"
+    with pytest.raises(QualificationResolutionError):
+        QualificationRef.parse({"record_id": ""})
+    with pytest.raises(QualificationResolutionError):
+        QualificationRef.parse(["record:bad"])
