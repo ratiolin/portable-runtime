@@ -68,8 +68,10 @@ _ALLOWED_LIFECYCLE: dict[str, set[str]] = {
     "Derivation": {"draft", "current", "superseded", "archived"},
 }
 
-# Which types may carry epistemic_status
-_EPISTEMIC_ALLOWED = {"Assertion", "Observation"}
+# Which types may carry epistemic_status.  Observation keeps the shared
+# vocabulary for compatibility, but its status is observation-level quality
+# metadata; it is not a proposition-level assertion about the world.
+EPISTEMIC_STATUS_RECORD_TYPES = frozenset({"Assertion", "Observation"})
 
 class BaseRecord(BaseModel):
     model_config = ConfigDict(extra="allow")
@@ -95,7 +97,7 @@ class BaseRecord(BaseModel):
     def _validate_orthogonal(self) -> BaseRecord:
         # epistemic_status only for proposition-type records
         # Action uses type-specific status, not epistemic
-        if self.epistemic_status is not None and self.record_type not in _EPISTEMIC_ALLOWED:
+        if self.epistemic_status is not None and self.record_type not in EPISTEMIC_STATUS_RECORD_TYPES:
             raise ValueError(
                 f"{self.record_type} must not carry epistemic_status, use type-specific status"
             )
@@ -116,6 +118,13 @@ class EvidenceArtifact(BaseRecord):
 
 
 class Observation(BaseRecord):
+    """An acquired observation with optional observation-level epistemic status.
+
+    ``epistemic_status`` on an Observation describes the quality/state of the
+    observation record itself.  Proposition-level support/refutation belongs
+    to an ``Assertion`` that references the observation.
+    """
+
     record_type: RecordType = "Observation"
     observed_at: datetime = Field(default_factory=utcnow)
     method: str = ""
@@ -124,6 +133,8 @@ class Observation(BaseRecord):
 
 
 class Assertion(BaseRecord):
+    """A proposition that owns proposition-level ``epistemic_status``."""
+
     record_type: RecordType = "Assertion"
     kind: Literal["claim", "hypothesis", "challenge", "assertion"] = "claim"
     statement: str = ""
@@ -211,7 +222,8 @@ class Derivation(BaseRecord):
 
     A Derivation records how a conclusion was produced; it does not own the
     conclusion's epistemic status.  That status remains on the referenced
-    Assertion (or other proposition record).
+    Assertion (or other proposition record).  Passing ``epistemic_status`` to
+    a Derivation therefore fails in ``BaseRecord``'s orthogonality validator.
     """
 
     record_type: RecordType = "Derivation"

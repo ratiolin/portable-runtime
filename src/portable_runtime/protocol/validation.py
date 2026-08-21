@@ -231,6 +231,92 @@ def _target_shape_ok(
     return True
 
 
+def _metadata_refs(raw: dict[str, object], *names: str) -> list[str]:
+    metadata = raw.get("metadata")
+    values: list[str] = []
+    if not isinstance(metadata, dict):
+        return values
+    for name in names:
+        value = metadata.get(name)
+        if isinstance(value, str) and value.strip():
+            values.append(value)
+        elif isinstance(value, list):
+            values.extend(str(item) for item in value if isinstance(item, str) and item.strip())
+    return values
+
+
+def _verification_result_is_passing(raw: dict[str, object]) -> bool:
+    """Accept only explicit typed verification results, never boolean hints."""
+
+    result = raw.get("result") or raw.get("status")
+    if isinstance(result, str) and result.lower() in {"pass", "passed", "verified", "succeeded", "success"}:
+        return True
+    metadata = raw.get("metadata")
+    if isinstance(metadata, dict):
+        nested = metadata.get("verification_result") or metadata.get("result")
+        if isinstance(nested, dict):
+            value = nested.get("result") or nested.get("status")
+            return isinstance(value, str) and value.lower() in {"pass", "passed", "verified", "succeeded", "success"}
+    return False
+
+
+def _has_effective_authorization(
+    target: dict[str, object],
+    state: dict[str, list[dict[str, object]]],
+    relations: list[RecordRelation],
+) -> bool:
+    target_id = target.get("id")
+    if not isinstance(target_id, str):
+        return False
+    target_version = target.get("version", 1)
+    expected_refs = {target_id, f"{target_id}:v{target_version}"}
+    for raw in state.get("authorization", []):
+        if not isinstance(raw, dict):
+            continue
+        refs = raw.get("subject_version_refs")
+        if not isinstance(refs, list) or not any(str(ref) in expected_refs for ref in refs):
+            continue
+        if raw.get("revoked_at") or raw.get("expires_at"):
+            # Expiry is evaluated by AuthorizationGrant; graph validation only
+            # rejects explicit revocation and preserves time-based checks for
+            # the boundary's current clock.
+            if raw.get("revoked_at"):
+                continue
+        return True
+    return any(
+        rel.relation_type == "authorizes" and (rel.object_ref == target_id or rel.subject_ref == target_id)
+        for rel in relations
+    )
+
+
+def _has_effective_verification(
+    target: dict[str, object],
+    state: dict[str, list[dict[str, object]]],
+    relations: list[RecordRelation],
+) -> bool:
+    target_id = target.get("id")
+    if not isinstance(target_id, str):
+        return False
+    metadata_refs = _metadata_refs(target, "verification_refs", "verification_ref", "closed_verification_refs")
+    by_id = {
+        str(raw.get("id")): raw
+        for values in state.values()
+        for raw in values
+        if isinstance(raw, dict) and isinstance(raw.get("id"), str)
+    }
+    if metadata_refs and all(ref in by_id and _verification_result_is_passing(by_id[ref]) for ref in metadata_refs):
+        return True
+    for rel in relations:
+        if rel.relation_type not in {"validated-under", "evaluated-by", "supports"}:
+            continue
+        if target_id not in {rel.subject_ref, rel.object_ref}:
+            continue
+        result = rel.metadata.get("result") if isinstance(rel.metadata, dict) else None
+        if isinstance(result, str) and result.lower() in {"pass", "passed", "verified", "succeeded", "success"}:
+            return True
+    return False
+
+
 def validate_state_graph(state: dict[str, list[dict[str, object]]], *, strict: bool = True) -> list[str]:
     """Return all cross-object invariant violations in a state snapshot.
 
@@ -334,6 +420,10 @@ def validate_state_graph(state: dict[str, list[dict[str, object]]], *, strict: b
                 errors.append(f"relation {relation.id} target type mismatch for {relation.relation_type}")
         except Exception as exc:
             identifier = raw.get("id", "<unknown>") if isinstance(raw, dict) else "<unknown>"
+            if isinstance(raw, dict) and raw.get("relation_type") == "causes":
+                errors.append(
+                    f"relation {identifier}: relation_type 'causes' is not part of the canonical Runtime relation set"
+                )
             errors.append(f"relation {identifier}: invalid relation: {exc}")
 
     # Strong local references in core records.  Event subjects may be request
@@ -388,6 +478,42 @@ def validate_state_graph(state: dict[str, list[dict[str, object]]], *, strict: b
             identifier = raw.get("id", "<unknown>") if isinstance(raw, dict) else "<unknown>"
             errors.append(f"authorization {identifier}: invalid grant: {exc}")
 
+    # Candidate -> official promotion is a graph-level governance transition:
+    # the record itself cannot prove either verification or authorization.
+    relation_values = parsed_relations
+    for raw in normalized["record"]:
+        if not isinstance(raw, dict) or raw.get("lifecycle_status") != "official":
+            continue
+        if raw.get("record_type") not in {"Policy", "ChangeObject"}:
+            continue
+        metadata = raw.get("metadata")
+        previous = metadata.get("previous_lifecycle_status") if isinstance(metadata, dict) else None
+        if previous not in {"candidate", "official"}:
+            continue
+        identifier = str(raw.get("id", "<unknown>"))
+        if not _has_effective_verification(raw, normalized, relation_values):
+            errors.append(f"record {identifier} official promotion requires a passing verification relation/result")
+        if not _has_effective_authorization(raw, normalized, relation_values):
+            errors.append(f"record {identifier} official promotion requires effective authorization")
+
+    # Revision endpoints must exist locally and remain type-compatible.  The
+    # single-object validator cannot prove this because it has no graph.
+    for record in parsed_records.values():
+        if record.record_type != "Revision":
+            continue
+        old_ref = getattr(record, "revises_ref", None)
+        new_ref = getattr(record, "produces_ref", None)
+        if not old_ref or not new_ref or record.lifecycle_status in {"proposed", "rejected"}:
+            continue
+        old_record = parsed_records.get(old_ref)
+        new_record = parsed_records.get(new_ref)
+        if old_record is None:
+            errors.append(f"revision {record.id} revises_ref {old_ref!r} is not a local record")
+        if new_record is None:
+            errors.append(f"revision {record.id} produces_ref {new_ref!r} is not a local record")
+        if old_record is not None and new_record is not None and old_record.record_type != new_record.record_type:
+            errors.append(f"revision {record.id} old/new record types are incompatible")
+
     # More than one active superseder for a predecessor is ambiguous lineage.
     superseders: dict[str, list[str]] = defaultdict(list)
     lifecycle_by_id = {identifier: rec.lifecycle_status for identifier, rec in parsed_records.items()}
@@ -402,6 +528,31 @@ def validate_state_graph(state: dict[str, list[dict[str, object]]], *, strict: b
         unique_subjects = sorted(set(subjects))
         if len(unique_subjects) > 1:
             errors.append(f"duplicate active superseder for {predecessor!r}: {', '.join(unique_subjects)}")
+
+    # Supersedes edges form a lineage, not a cycle.  A cycle would make the
+    # current version non-deterministic even when each edge is individually
+    # well-shaped.
+    supersedes_graph: dict[str, list[str]] = defaultdict(list)
+    for relation in parsed_relations:
+        if relation.relation_type == "supersedes" and relation.subject_ref in ids and relation.object_ref in ids:
+            supersedes_graph[relation.subject_ref].append(relation.object_ref)
+    visiting: set[str] = set()
+    visited: set[str] = set()
+
+    def visit(node: str) -> None:
+        if node in visiting:
+            errors.append(f"supersedes lineage contains a cycle at {node!r}")
+            return
+        if node in visited:
+            return
+        visiting.add(node)
+        for predecessor in supersedes_graph.get(node, []):
+            visit(predecessor)
+        visiting.remove(node)
+        visited.add(node)
+
+    for node in supersedes_graph:
+        visit(node)
 
     return errors
 
