@@ -9,7 +9,7 @@ from portable_runtime.core.capabilities import CapabilityRequest, CapabilityResu
 from portable_runtime.core.models import Run, Work, new_id
 from portable_runtime.core.registry import ProviderRegistry
 from portable_runtime.core.router import CapabilityService, ConstraintRouter
-from portable_runtime.records.authorization import AuthorizationGrant, create_grant_for_approval, is_authorized_for
+from portable_runtime.records.authorization import AuthorizationGrant, create_grant_for_approval, is_authorized_for_legacy as is_authorized_for
 from portable_runtime.stores.memory import InMemoryStateStore
 
 

@@ -3,8 +3,81 @@
 from __future__ import annotations
 
 from portable_runtime.core.models import Action, Decision, Evidence, KnowledgeItem, Outcome
+from portable_runtime.records.authorization import CanonicalAuthorizationRequest
 from portable_runtime.records.knowledge import KnowledgeProjection
 from portable_runtime.records.models import ActionRecord, DecisionRecord, EvidenceArtifact, OutcomeRecord
+
+
+def normalize_legacy_authorization_input(action: object) -> CanonicalAuthorizationRequest:
+    """Convert historical dict/object input to the strict typed request shape."""
+
+    if isinstance(action, CanonicalAuthorizationRequest):
+        return action
+    if isinstance(action, dict):
+        capability = str(action.get("capability", "") or action.get("cap", "") or action.get("action", ""))
+        resource = action.get("resource_ref") or action.get("resource") or action.get("path") or action.get("target")
+        actor = action.get("actor_ref") or action.get("actor") or action.get("grantee_ref") or action.get("grantee")
+        versions = (
+            action.get("subject_version_refs")
+            or action.get("subject_refs")
+            or action.get("version_refs")
+            or action.get("versions")
+        )
+        metadata = action.get("metadata")
+        if isinstance(metadata, dict):
+            versions = versions or metadata.get("subject_version_refs") or metadata.get("version")
+        effect = action.get("effect_class") or action.get("effect") or "read"
+        lease_generation = action.get("lease_generation")
+        if lease_generation is None and isinstance(metadata, dict):
+            lease_generation = metadata.get("lease_generation")
+    else:
+        capability = str(
+            getattr(action, "capability", "")
+            or getattr(action, "cap", "")
+            or getattr(action, "action", "")
+        )
+        resource = (
+            getattr(action, "resource_ref", None)
+            or getattr(action, "resource", None)
+            or getattr(action, "target", None)
+        )
+        actor = (
+            getattr(action, "actor_ref", None)
+            or getattr(action, "actor", None)
+            or getattr(action, "grantee_ref", None)
+        )
+        versions = (
+            getattr(action, "subject_version_refs", None)
+            or getattr(action, "subject_refs", None)
+            or getattr(action, "version_refs", None)
+        )
+        metadata = getattr(action, "metadata", None) or getattr(action, "payload", None)
+        if not versions and isinstance(metadata, dict):
+            versions = metadata.get("subject_version_refs") or metadata.get("version")
+        effect = getattr(action, "effect_class", None) or getattr(action, "effect", None) or "read"
+        lease_generation = getattr(action, "lease_generation", None)
+    if isinstance(resource, list):
+        resource = resource[0] if resource else None
+    if isinstance(versions, str):
+        versions = [versions]
+    elif not isinstance(versions, list):
+        versions = []
+    if not isinstance(lease_generation, int):
+        try:
+            lease_generation = int(lease_generation) if lease_generation is not None else None
+        except (TypeError, ValueError):
+            lease_generation = None
+    effect_value = str(effect or "read")
+    if effect_value not in {"read", "write-local", "write-remote", "deploy", "admin", "irreversible"}:
+        effect_value = "irreversible"
+    return CanonicalAuthorizationRequest(
+        capability=capability,
+        actor_ref=str(actor or ""),
+        resource_ref=str(resource) if resource is not None else None,
+        subject_version_refs=[str(value) for value in versions],
+        effect_class=effect_value,  # type: ignore[arg-type]
+        lease_generation=lease_generation,
+    )
 
 
 def legacy_evidence_to_artifact(ev: Evidence) -> EvidenceArtifact:

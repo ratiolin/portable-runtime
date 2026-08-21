@@ -12,7 +12,7 @@ from portable_runtime.core.models import Artifact, Run, Step, StepAttempt, Work,
 from portable_runtime.core.registry import ProviderRegistry
 from portable_runtime.core.router import CapabilityService
 from portable_runtime.core.runtime import Runtime
-from portable_runtime.records.authorization import AuthorizationGrant, create_grant_for_approval, is_authorized_for, validate_grant
+from portable_runtime.records.authorization import AuthorizationGrant, create_grant_for_approval, is_authorized_for_legacy as is_authorized_for, validate_grant
 from portable_runtime.records.lifecycle import validate_lifecycle_transition
 from portable_runtime.records.models import Assertion, EvidenceArtifact, PolicyRecord
 from portable_runtime.records.relations import RecordRelation, validate_relation

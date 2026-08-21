@@ -154,7 +154,7 @@ async def test_incident_repair_crash_after_provider_unknown_and_recovery():
 @pytest.mark.asyncio
 async def test_incident_repair_auth_gate_blocks_without_grant():
     # Ensure auth gate blocks deployment when grant missing/expired
-    from portable_runtime.records.authorization import is_authorized_for, create_grant_for_approval
+    from portable_runtime.records.authorization import is_authorized_for_legacy as is_authorized_for, create_grant_for_approval
     grant = create_grant_for_approval(principal_ref="human:owner", grantee_ref="agent:allowed", allowed_capabilities=["code.edit"], subject_version_refs=["patch:v1"], ttl_seconds=0.01)
     import asyncio
     await asyncio.sleep(0.02)

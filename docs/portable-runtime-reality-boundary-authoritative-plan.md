@@ -2,7 +2,7 @@
 
 ## Current status
 
-The P0 RealityBoundary/SQLite kernel plus the P1 semantic and P2 protocol hardening are closed on 2026-08-21. The semantic freeze-candidate blocker set is closed; protocol stabilization now tightens revalidation profiles, authoritative reopen assembly, deep qualification immutability, and the Boundary-only provider invocation seam. Fresh local evidence is `ruff` clean, `mypy src` clean, `uv run pytest -q` → `253 passed`, and the CI-equivalent strict-conformance selection → `56 passed`. Commit `20c81ae32f6bf33d38209d27a463555d88003e23` is green in [main CI run 32442371727](https://github.com/ratiolin/portable-runtime/actions/runs/32442371727), including strict-conformance and SonarCloud; the SonarCloud quality gate is `OK` with `80.6%` new-code coverage.
+The P0 RealityBoundary/SQLite kernel plus the P1 semantic and P2 protocol hardening are closed on 2026-08-21. The semantic freeze-candidate blocker set is closed; the four-commit protocol-convergence sequence now tightens semantic contracts, Boundary internal stages, reliability profiles and authorization compatibility. Fresh local evidence is `ruff` clean, `mypy src` clean, `uv run pytest -q` → `261 passed`, and the CI-equivalent strict-conformance selection → `63 passed`; the previous baseline remains green in [main CI run 32442371727](https://github.com/ratiolin/portable-runtime/actions/runs/32442371727), while this new sequence will receive its own CI/SonarCloud result after push.
 
 The P0 enforcement kernel is implemented and has executable evidence in:
 
@@ -19,7 +19,7 @@ The P0 enforcement kernel is implemented and has executable evidence in:
 | SQLite CAS/Lease are atomic | `SQLiteStateStore` CAS/lease transactions | S001–S006 | n/a |
 
 The strict-conformance command and the repository-wide suite both pass. The
-latest local verification is `253 passed` with the two existing collection/
+latest local verification is `261 passed` with the two existing collection/
 deprecation warnings only. The fresh coverage run reports 76% overall coverage.
 Legacy workflow fixtures now carry explicit typed
 authorization, resource/version, and procedure evidence; the runtime boundary
