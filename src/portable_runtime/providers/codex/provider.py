@@ -8,11 +8,12 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import shutil
 import time
 from collections.abc import Mapping
 from pathlib import Path
 from types import MappingProxyType
-from typing import Final, Literal
+from typing import Final, Literal, Protocol, cast
 
 from portable_runtime.core.capabilities import (
     CapabilityRequest,
@@ -28,10 +29,31 @@ logger = logging.getLogger(__name__)
 
 SandboxProfile = Literal["read-only", "workspace-write"]
 
-# The capability is the authority for the Codex process sandbox.  Unknown
-# capabilities fail closed to read-only, and request parameters are never
-# consulted for this decision.  In particular, callers cannot smuggle a
-# ``danger-full-access`` override through ``parameters``.
+
+class PreparedExecutionBoundary(Protocol):
+    """Structural contract for one isolated Codex process invocation."""
+
+    @property
+    def cwd(self) -> Path: ...
+
+    @property
+    def env(self) -> Mapping[str, str]: ...
+
+    def cleanup(self) -> None: ...
+
+
+class ExecutionBoundary(Protocol):
+    """Injectable deployment boundary; kept provider-neutral by design."""
+
+    session_dir: Path
+
+    def prepare(self, repo: str, sandbox: SandboxProfile) -> PreparedExecutionBoundary: ...
+
+    def redact_transcript(self, text: str) -> str: ...
+
+# The capability is the authority for the Codex process sandbox.  Keep the
+# default mapping immutable so callers cannot widen it at runtime; an explicit
+# deployment mapping is accepted only after validating the same safe profiles.
 CODEX_SANDBOX_BY_CAPABILITY: Final[Mapping[str, SandboxProfile]] = MappingProxyType(
     {
         "reason.generate": "read-only",
@@ -42,10 +64,17 @@ CODEX_SANDBOX_BY_CAPABILITY: Final[Mapping[str, SandboxProfile]] = MappingProxyT
         "shell.exec": "workspace-write",
     }
 )
+_ALLOWED_CODEX_SANDBOXES = frozenset({"read-only", "workspace-write"})
 
 
 def sandbox_for_capability(capability: str) -> SandboxProfile:
-    """Return the fail-closed Codex sandbox for a capability name."""
+    """Return the least-privilege Codex sandbox for a capability.
+
+    Unknown capabilities fail closed to ``read-only``.  ``danger-full-access``
+    is intentionally not an accepted profile value for the portable provider;
+    real remote/deployment effects belong to a separate Provider behind the
+    Runtime RealityBoundary.
+    """
 
     return CODEX_SANDBOX_BY_CAPABILITY.get(capability, "read-only")
 
@@ -53,16 +82,8 @@ def sandbox_for_capability(capability: str) -> SandboxProfile:
 def _resolve_cli(explicit: str | Path | None) -> Path:
     if explicit:
         return Path(explicit)
-    # Reuse control_plane logic if available, else fallback to which
-    try:
-        from control_plane.config import resolve_codex_cli
-
-        return resolve_codex_cli(str(explicit or ""))
-    except Exception:
-        import shutil
-
-        found = shutil.which("codex.cmd") or shutil.which("codex")
-        return Path(found) if found else Path("codex")
+    found = shutil.which("codex.cmd") or shutil.which("codex")
+    return Path(found) if found else Path("codex")
 
 
 class CodexProvider:
@@ -88,6 +109,8 @@ class CodexProvider:
         executor: ProcessExecutor | None = None,
         artifact_store: FilesystemArtifactStore | None = None,
         gateway_base_url: str | None = None,
+        sandbox_by_capability: Mapping[str, str] | None = None,
+        execution_boundary: ExecutionBoundary | None = None,
     ) -> None:
         self._cli = _resolve_cli(cli)
         self._model = model
@@ -96,6 +119,18 @@ class CodexProvider:
         self._executor: ProcessExecutor = executor or PortableSubprocessExecutor()
         self._artifact_store = artifact_store
         self._gateway_base_url = gateway_base_url
+        # Deployment-specific process isolation is injected by the application;
+        # the provider itself remains independent of control-plane modules.
+        self._execution_boundary = execution_boundary
+        self._sandbox_by_capability: dict[str, SandboxProfile] = dict(CODEX_SANDBOX_BY_CAPABILITY)
+        if sandbox_by_capability:
+            for capability, sandbox in sandbox_by_capability.items():
+                if sandbox not in _ALLOWED_CODEX_SANDBOXES:
+                    raise ValueError(
+                        f"unsupported Codex sandbox {sandbox!r} for {capability!r}; "
+                        f"allowed={sorted(_ALLOWED_CODEX_SANDBOXES)}"
+                    )
+                self._sandbox_by_capability[capability] = cast(SandboxProfile, sandbox)
         self._descriptor = ProviderDescriptor(
             id=provider_id,
             name="Codex Provider",
@@ -173,44 +208,57 @@ class CodexProvider:
         repo = str(request.parameters.get("repo", "") or self._working_directory or "")
         # Use provider-level model unless overridden per-request
         model = str(request.parameters.get("model", self._model))
+        sandbox = self._sandbox_by_capability.get(request.capability, "read-only")
         cwd = Path(repo) if repo else (self._working_directory or Path.cwd())
-        # Ensure session dir for transcript
-        session_dir = cwd / "data" / "agent-sessions" if cwd else Path("data/agent-sessions")
+        boundary = None
+        if self._execution_boundary is not None:
+            boundary = self._execution_boundary.prepare(str(cwd), sandbox)
+            cwd = boundary.cwd
+        # Ensure session dir for transcript.  Keep transcripts outside the
+        # ephemeral worktree when a deployment boundary is supplied.
+        if self._execution_boundary is not None:
+            session_dir = self._execution_boundary.session_dir
+        else:
+            session_dir = cwd / "data" / "agent-sessions" if cwd else Path("data/agent-sessions")
         # Fallback to portable artifact dir if repo not set
         try:  # noqa: SIM105,S110
             session_dir.mkdir(parents=True, exist_ok=True)
         except Exception:  # noqa: S110
             pass  # noqa: S110
-        argv = [
-            str(self._cli),
-            "exec",
-            "--model",
-            model,
-            "--sandbox",
-            sandbox_for_capability(request.capability),
-            "--skip-git-repo-check",
-            "--json",
-            prompt,
-        ]
+        argv = [str(self._cli), "exec", "--model", model, "--sandbox", sandbox, "--skip-git-repo-check", "--json", prompt]  # noqa: E501
         # Normalize Windows path for cwd (same as control_plane.codex_runner.repo_path_to_windows)
         import os
 
         cwd_str = str(cwd)
         if os.name == "nt":
             cwd_str = cwd_str.replace("/", "\\")
-        spec = ProcessSpec(argv=argv, cwd=Path(cwd_str) if cwd_str else None, timeout_seconds=request.timeout_seconds or self._timeout or 900)  # noqa: E501
+        spec = ProcessSpec(
+            argv=argv,
+            cwd=Path(cwd_str) if cwd_str else None,
+            env=dict(boundary.env) if boundary is not None else None,
+            timeout_seconds=request.timeout_seconds or self._timeout or 900,
+        )
         # Optional preflight
-        health = await self.health()
-        if not health.available and ("not found" in health.detail.lower() or "probe failed" in health.detail.lower()):  # noqa: SIM102
-            pass
-        result = await self._executor.run(spec)
+        try:
+            health = await self.health()
+            if not health.available and (
+                "not found" in health.detail.lower() or "probe failed" in health.detail.lower()
+            ):  # noqa: SIM102
+                pass
+            result = await self._executor.run(spec)
+        except BaseException:
+            if boundary is not None:
+                boundary.cleanup()
+            raise
         if result.timed_out:
+            if boundary is not None:
+                boundary.cleanup()
             return CapabilityResult(
                 request_id=request.id,
                 provider_id=self.descriptor.id,
                 status="failed",
                 error={"type": "timeout", "message": "codex session timed out", "stderr": result.stderr[-2000:]},
-                metadata={"duration_ms": result.duration_ms},
+                metadata={"duration_ms": result.duration_ms, "sandbox": sandbox, "capability": request.capability},
             )
         # Persist transcript as artifact if available
         artifact_refs: list[str] = []
@@ -228,15 +276,18 @@ class CodexProvider:
                 header = json.dumps({"type": "control_plane_meta", "run_id": run_id, "request_id": request.id, "started_at": int(time.time())}, ensure_ascii=False)  # noqa: E501
                 # Apply redaction similar to control_plane.audit.redact_text
                 try:
-                    from control_plane.audit import redact_text, truncate_bytes
-
-                    stored, _ = truncate_bytes(redact_text(result.stdout), 200_000)
+                    if self._execution_boundary is not None:
+                        stored = self._execution_boundary.redact_transcript(result.stdout)
+                    else:
+                        stored = result.stdout[:200_000]
                 except Exception:
                     stored = result.stdout[:200_000]
                 jsonl_path.write_text(header + "\n" + stored, encoding="utf-8")
             except Exception:
                 logger.debug("failed to write codex session jsonl", exc_info=True)
         if result.exit_code != 0:
+            if boundary is not None:
+                boundary.cleanup()
             return CapabilityResult(
                 request_id=request.id,
                 provider_id=self.descriptor.id,
@@ -244,19 +295,36 @@ class CodexProvider:
                 error={"type": "codex_exit", "exit_code": result.exit_code, "stderr": result.stderr[-2000:]},
                 output_artifact_refs=artifact_refs,
                 message=result.stdout[:20000] if result.stdout else result.stderr[:5000],
-                metadata={"duration_ms": result.duration_ms, "exit_code": result.exit_code},
+                metadata={
+                    "duration_ms": result.duration_ms,
+                    "exit_code": result.exit_code,
+                    "sandbox": sandbox,
+                    "capability": request.capability,
+                },
             )
+        if boundary is not None:
+            boundary.cleanup()
         return CapabilityResult(
             request_id=request.id,
             provider_id=self.descriptor.id,
             status="succeeded",
             output_artifact_refs=artifact_refs,
             message=result.stdout[:20000],
-            metadata={"duration_ms": result.duration_ms, "model": model},
+            metadata={
+                "duration_ms": result.duration_ms,
+                "model": model,
+                "sandbox": sandbox,
+                "capability": request.capability,
+            },
         )
 
     async def cancel(self, request_id: str) -> None:
         # Best-effort: Codex exec is not cancellable via explicit API; tree kill handled by executor timeout.
+        return None
+
+    async def reconcile(self, request_id: str) -> CapabilityResult | None:
+        """Codex has no remote operation ledger to reconcile."""
+
         return None
 
 def create_codex_provider_from_toml(path: Path, provider_id: str = "codex-primary") -> CodexProvider:
