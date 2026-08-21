@@ -13,7 +13,7 @@
 
 ## 2026-08-21 执行状态
 
-本轮已按本计划完成 P1/P2 的代码与负路径闭环；semantic freeze candidate 已闭合，协议稳定化增量当前已完成本地验证，待远端 CI/SonarCloud 复核：
+本轮已按本计划完成 P1/P2 的代码与负路径闭环；semantic freeze candidate 已闭合，协议稳定化增量也已完成远端复核：
 
 | 范围 | 已落地的强制路径 | 新鲜本地证据 |
 |---|---|---|
@@ -25,7 +25,7 @@
 
 本轮 freeze blockers 也已收口：Knowledge/Evidence compatibility view 现在是 canonical ingestion 的单向 sink；`Derivation` 只能记录产生过程，epistemic status 采用 proposition whitelist；revalidation 形成 `DependencyImpact → RiskAssessment → RevalidationDisposition` 三层责任；Memory/SQLite 通过 typed record restoration 和 fixed-point/adversarial conformance 保持语义对等；普通 canonical record write 拒绝 undeclared top-level fields，legacy/import boundary 保留 forward-field 兼容。
 
-当前本地证据为 `uv run pytest -q` → `253 passed`、strict-conformance → `56 passed`，另有 `ruff`/`mypy` 通过。新增协议稳定化证据包括 `DefaultRevalidationPolicyProfile`、authoritative `ReopenAssembler`、deep immutable qualification snapshot，以及 Boundary-only provider invocation architecture lock；远端结果将在本轮推送后补记。
+当前本地证据为 `uv run pytest -q` → `253 passed`、strict-conformance → `56 passed`，另有 `ruff`/`mypy` 通过。新增协议稳定化证据包括 `DefaultRevalidationPolicyProfile`、authoritative `ReopenAssembler`、deep immutable qualification snapshot，以及 Boundary-only provider invocation architecture lock。提交 `20c81ae32f6bf33d38209d27a463555d88003e23` 已通过 [main CI run 32442371727](https://github.com/ratiolin/portable-runtime/actions/runs/32442371727) 的 lint/test、strict-conformance 与 SonarCloud；SonarCloud quality gate 为 `OK`，new-code coverage 为 `80.6%`。
 
 ## 协议稳定化起点（2026-08-21）
 

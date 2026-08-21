@@ -16,7 +16,7 @@ The RealityBoundary, SQLite Store, semantic-plane P1 work and protocol P2 work a
 - canonical `KnowledgeProjection` state is bundle-portable; legacy `KnowledgeItem` remains read-compatible but is not a new workflow write target;
 - HTTP mutating control routes are loopback-only and explicitly not an authenticated multi-user boundary;
 - the CI `strict-conformance` job runs the same focused suite and is a prerequisite for SonarCloud analysis;
-- The next protocol-stabilization delta is locally verified and will be recorded after its main CI/SonarCloud run.
+- remote proof for commit [`20c81ae32f6bf33d38209d27a463555d88003e23`](https://github.com/ratiolin/portable-runtime/commit/20c81ae32f6bf33d38209d27a463555d88003e23) is green in [main CI run 32442371727](https://github.com/ratiolin/portable-runtime/actions/runs/32442371727): lint-and-test, strict-conformance and SonarCloud all passed; SonarCloud quality gate is `OK` with `80.6%` new-code coverage.
 
 The remote evidence above is the final post-push proof for this change.
 

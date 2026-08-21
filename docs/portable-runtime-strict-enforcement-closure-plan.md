@@ -12,7 +12,7 @@
 - Event Journal、bundle/state graph validation、projection bundle portability、HTTP loopback governance 均有执行路径和负路径测试；
 - compatibility non-reentrancy、Derivation epistemic whitelist、`DependencyImpact → RiskAssessment → RevalidationDisposition`、Memory/SQLite fixed-point parity 和 authority-sensitive permit snapshot 已补齐；
 - 协议稳定化增量已补齐 `DefaultRevalidationPolicyProfile`、authoritative `ReopenAssembler`、deep immutable `AssessmentContext` 和 Boundary-only provider invocation architecture lock；
-- fresh local proof: `uv run ruff check .`, `uv run mypy src`, `uv run pytest -q` → `253 passed`，strict-conformance selection → `56 passed`；远端 CI/SonarCloud 结果将在本轮推送后补记。
+- fresh local proof: `uv run ruff check .`, `uv run mypy src`, `uv run pytest -q` → `253 passed`，strict-conformance selection → `56 passed`；提交 `20c81ae32f6bf33d38209d27a463555d88003e23` 已通过 [main CI run 32442371727](https://github.com/ratiolin/portable-runtime/actions/runs/32442371727) 的 lint/test、strict-conformance 与 SonarCloud，SonarCloud quality gate 为 `OK`，new-code coverage 为 `80.6%`。
 
 - 全量本地验证（P0 基线记录）：`uv run pytest -q` → `223 passed`，仅保留两个既有 collection/deprecation warnings；
 - 严格一致性验证：E001–E020（21 cases）与 S001–S006（6 cases）；
