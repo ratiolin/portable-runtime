@@ -43,11 +43,13 @@ def test_qualification_resolves_legacy_decision_records(
             subject_version_refs=[],
             metadata={
                 "decision_refs": [{"id": decision.id, "kind": reference_kind}],
+                "procedure_proof_refs": [{"id": decision.id, "kind": reference_kind}],
             },
         )
         assessment = AssessmentContext.resolve(store, request)
 
         assert [value.id for value in assessment.proofs["decisions"]] == [decision.id]
+        assert [value.id for value in assessment.procedure_proofs()["decisions"]] == [decision.id]
     finally:
         close = getattr(store, "close", None)
         if callable(close):
