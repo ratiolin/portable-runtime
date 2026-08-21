@@ -13,11 +13,11 @@
 
 ## 2026-08-21 执行状态
 
-本轮已按本计划完成 P1/P2 的代码与负路径闭环；提交 `63bac6d9f31eb10235879a531d62f788303ebf37` 已通过[主分支 CI](https://github.com/ratiolin/portable-runtime/actions/runs/32440264051)和 SonarCloud quality gate（`OK`，new-code coverage `80.4%`）：
+本轮已按本计划完成 P1/P2 的代码与负路径闭环；semantic freeze candidate 已闭合，协议稳定化增量当前已完成本地验证，待远端 CI/SonarCloud 复核：
 
 | 范围 | 已落地的强制路径 | 新鲜本地证据 |
 |---|---|---|
-| P1-1 qualification/procedure | typed qualification refs → AssessmentContext snapshot → InvocationPermit → immutable authority-sensitive request snapshot → pre-provider digest recheck；inline proof facts fail closed | E021–E023、全量 250 tests |
+| P1-1 qualification/procedure | typed qualification refs → deeply immutable AssessmentContext snapshot → internally scoped InvocationPermit → immutable authority-sensitive request snapshot → pre-provider digest recheck；inline proof facts fail closed | E021–E023、全量 253 tests |
 | P1-2 routing | failure-domain/independence hard filtering、circuit breaker actual path、caller reference descriptor 不再作为 proof | `tests/test_p1_routing.py` |
 | P1-3 reliability | rate、parallel、blast radius、cooldown、exposure、side-effect budget、enhanced timing gate | `tests/test_reliability_controls_p2.py` |
 | P1-4/P1-5/P1-6 semantic workflows | canonical reopen/projection/derivation、verification judgment 与 execution status 分离、incident repair 不再新写 legacy knowledge/evidence | `tests/conformance/test_p1_semantic.py`、全量回归 |
@@ -25,7 +25,11 @@
 
 本轮 freeze blockers 也已收口：Knowledge/Evidence compatibility view 现在是 canonical ingestion 的单向 sink；`Derivation` 只能记录产生过程，epistemic status 采用 proposition whitelist；revalidation 形成 `DependencyImpact → RiskAssessment → RevalidationDisposition` 三层责任；Memory/SQLite 通过 typed record restoration 和 fixed-point/adversarial conformance 保持语义对等；普通 canonical record write 拒绝 undeclared top-level fields，legacy/import boundary 保留 forward-field 兼容。
 
-当前本地证据为 `uv run pytest -q` → `250 passed`、strict-conformance → `53 passed`，另有 `ruff`/`mypy` 通过；远端运行 `32440264051` 已对同一提交完成绿灯闭合。
+当前本地证据为 `uv run pytest -q` → `253 passed`、strict-conformance → `56 passed`，另有 `ruff`/`mypy` 通过。新增协议稳定化证据包括 `DefaultRevalidationPolicyProfile`、authoritative `ReopenAssembler`、deep immutable qualification snapshot，以及 Boundary-only provider invocation architecture lock；远端结果将在本轮推送后补记。
+
+## 协议稳定化起点（2026-08-21）
+
+semantic vocabulary 不再扩展。本阶段只允许收紧既有接口的机械保证：默认 revalidation 映射属于显式 policy profile，legacy flat `AffectedAssessment.impact_type` 只表示 observed impact 且已降格为兼容字段；reopen handoff 必须由 authoritative graph 组装，Work metadata 只能作为 display/cache hint；AssessmentContext 深冻结，InvocationPermit 明确为可重复 materialize 的内部 snapshot permit，不声称 linear consumption；架构测试锁定 `provider.invoke` 只能从 `RealityBoundary` 现实出口取得。
 
 本状态不以提交信息代替执行证据；远端 CI 和 SonarCloud 已对该提交完成绿灯闭合。
 

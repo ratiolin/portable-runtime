@@ -306,7 +306,7 @@ def run_cli(args: list[str]) -> int:
                         print("record not found")
                         return 1
                     work = runtime.create_work(title=f"Reopen {parsed.record_id}", description=assess.reason, kind="reopen")
-                new_work = create_reopen_work(assess, work)
+                new_work = create_reopen_work(assess, work, store=runtime.store)
                 runtime.store.save_work(new_work)
                 print(json.dumps({"assessment": assess.model_dump(mode="json"), "work": new_work.model_dump(mode="json")}, ensure_ascii=False, indent=2))
             except Exception as exc:

@@ -58,6 +58,7 @@ jobs:
       - name: Strict conformance
         run: >-
           uv run pytest -q
+          tests/conformance/test_boundary_architecture.py
           tests/conformance/test_authoritative.py
           tests/conformance/test_sqlite_atomicity.py
           tests/conformance/test_p1_semantic.py

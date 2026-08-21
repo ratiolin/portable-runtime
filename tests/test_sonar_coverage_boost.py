@@ -8,6 +8,7 @@ from portable_runtime.records.open_validation import open_validate, closed_verif
 from portable_runtime.records.experiment import ExperimentPlan, create_experiment_work
 from portable_runtime.records.reopen import ReopenAssessment, create_reopen_work
 from portable_runtime.core.models import Work
+from portable_runtime.stores.memory import InMemoryStateStore
 from portable_runtime.records.provenance import lineage, provenance_chain, is_supported
 
 def test_reliability_controls():
@@ -51,7 +52,7 @@ def test_experiment_and_reopen():
     assert is_low_cost_discriminative(plan)
     work = Work(title="orig", kind="incident")
     assess = ReopenAssessment(record_ref=work.id, revision_scope="other", reason="test")
-    new_w = create_reopen_work(assess, work)
+    new_w = create_reopen_work(assess, work, store=InMemoryStateStore())
     assert new_w.parent_work_id == work.id
 
 def test_provenance_helpers():

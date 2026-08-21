@@ -11,13 +11,12 @@ Portable runtime for durable **Work / Run** orchestration with pluggable **Provi
 The RealityBoundary, SQLite Store, semantic-plane P1 work and protocol P2 work are locally closed with executable evidence. The current pre-push proof is:
 
 - `uv run ruff check .` and `uv run mypy src` — both clean;
-- `uv run pytest -q` — `250 passed` (two existing collection/deprecation warnings only);
-- strict-conformance — `53 passed`: E001–E023, S001–S006, P1 semantic, P2 protocol, routing and reliability gates;
+- `uv run pytest -q` — `253 passed` (two existing collection/deprecation warnings only);
+- strict-conformance — `56 passed`: E001–E023, S001–S006, P1 semantic, P2 protocol, routing and reliability gates;
 - canonical `KnowledgeProjection` state is bundle-portable; legacy `KnowledgeItem` remains read-compatible but is not a new workflow write target;
 - HTTP mutating control routes are loopback-only and explicitly not an authenticated multi-user boundary;
 - the CI `strict-conformance` job runs the same focused suite and is a prerequisite for SonarCloud analysis;
-- [main CI run](https://github.com/ratiolin/portable-runtime/actions/runs/32440264051) for commit `63bac6d9f31eb10235879a531d62f788303ebf37` — lint/test, strict-conformance and SonarCloud all green;
-- [SonarCloud quality gate](https://sonarcloud.io/project/overview?id=portable-runtime) — `OK`, new-code coverage `80.4%`.
+- The next protocol-stabilization delta is locally verified and will be recorded after its main CI/SonarCloud run.
 
 The remote evidence above is the final post-push proof for this change.
 
@@ -170,7 +169,7 @@ Reference profile: `examples/personal-platform-profile` is a minimal trigger/pro
 uv sync --extra dev
 uv run ruff check .
 uv run mypy src
-uv run pytest              # 250 tests; current local verification
+uv run pytest              # 253 tests; current local verification
 uv run pytest --cov=src --cov-report=xml  # for SonarCloud
 ```
 

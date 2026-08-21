@@ -79,7 +79,9 @@ def test_assess_revalidation_all_change_types():
         assert len(result) == len(watch), f"change_type {ct} expected {len(watch)} but got {len(result)} Types {watch}"
         for a in result:
             assert a.required_action in {"none","warn","background-revalidate","block-next-use","require-human-review","reopen"}
-            assert a.impact_type == a.required_action
+            assert a.impact_type == "warn"
+            assert a.revalidation_disposition is not None
+            assert a.required_action == a.revalidation_disposition.action
             assert a.severity in {"low","medium","high","critical"}
 
 

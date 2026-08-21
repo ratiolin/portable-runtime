@@ -3,7 +3,7 @@
 The workflow/request metadata boundary carries references only.  Qualification
 facts (authorization grants, evidence, relations, procedure proofs and
 verification results) are resolved from the configured state store into one
-immutable, deep-copied assessment snapshot.  The boundary can then compare the
+deeply immutable assessment snapshot.  The boundary can then compare the
 snapshot digest immediately before creating an execution permit, preventing a
 checker from evaluating one set of facts while the provider is invoked with a
 different set.
@@ -19,7 +19,7 @@ from __future__ import annotations
 import copy
 import hashlib
 import json
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from types import SimpleNamespace
@@ -81,11 +81,13 @@ class QualificationRef(BaseModel):
 
 @dataclass(frozen=True)
 class InvocationPermit:
-    """One-use internal capability bound to an immutable request snapshot.
+    """Internally scoped permit bound to an immutable request snapshot.
 
     The provider-facing request is materialized from ``request_snapshot``;
     precommit and invocation must not continue consuming a mutable caller
-    object after this permit is issued.
+    object after this permit is issued.  Replay prevention remains owned by
+    Boundary precommit, idempotency and fencing; this object is not a linear
+    capability and may be materialized repeatedly for inspection/testing.
     """
 
     request_digest: str
@@ -294,6 +296,108 @@ def _clone(value: Any) -> Any:
     return copy.deepcopy(value)
 
 
+class _FrozenList(list[Any]):
+    """List-shaped read surface whose mutations cannot alter the snapshot."""
+
+    def _deny(self, *_args: Any, **_kwargs: Any) -> None:
+        raise TypeError("qualification snapshot is immutable")
+
+    __setitem__ = _deny  # type: ignore[assignment]
+    __delitem__ = _deny  # type: ignore[assignment]
+    __iadd__ = _deny  # type: ignore[assignment]
+    __imul__ = _deny  # type: ignore[assignment]
+    append = _deny
+    clear = _deny
+    extend = _deny
+    insert = _deny
+    pop = _deny
+    remove = _deny
+    reverse = _deny
+    sort = _deny
+
+
+class _FrozenDict(dict[str, Any]):
+    """Dict-shaped read surface with copy-on-read ``get`` compatibility."""
+
+    def _deny(self, *_args: Any, **_kwargs: Any) -> None:
+        raise TypeError("qualification snapshot is immutable")
+
+    __setitem__ = _deny  # type: ignore[assignment]
+    __delitem__ = _deny  # type: ignore[assignment]
+    __ior__ = _deny  # type: ignore[assignment]
+    clear = _deny
+    pop = _deny
+    popitem = _deny  # type: ignore[assignment]
+    setdefault = _deny
+    update = _deny
+
+    def get(self, key: str, default: Any = None) -> Any:
+        value = dict.get(self, key, default)
+        return _thaw(value)
+
+
+class _FrozenModelSnapshot:
+    """Read-only model-shaped projection used inside AssessmentContext."""
+
+    __slots__ = ("_payload", "_model_type")
+
+    def __init__(self, value: BaseModel) -> None:
+        object.__setattr__(self, "_payload", _freeze(value.model_dump(mode="python")))
+        object.__setattr__(self, "_model_type", value.__class__)
+
+    def __setattr__(self, _name: str, _value: Any) -> None:
+        raise TypeError("qualification snapshot is immutable")
+
+    def __getattr__(self, name: str) -> Any:
+        payload = object.__getattribute__(self, "_payload")
+        if name in payload:
+            # Materialize a fresh typed value so nested Pydantic models (for
+            # example AuthorizationGrant.typed_conditions) retain behavior;
+            # callers can mutate that copy without touching the snapshot.
+            return copy.deepcopy(getattr(self.materialize(), name))
+        raise AttributeError(name)
+
+    def model_dump(self, **_kwargs: Any) -> dict[str, Any]:
+        return _thaw(object.__getattribute__(self, "_payload"))
+
+    def materialize(self) -> BaseModel:
+        model_type = object.__getattribute__(self, "_model_type")
+        return model_type.model_validate(self.model_dump())
+
+    def __repr__(self) -> str:
+        return f"ImmutableSnapshot({self.model_dump()!r})"
+
+
+def _freeze(value: Any) -> Any:
+    if isinstance(value, (_FrozenModelSnapshot, _FrozenDict, _FrozenList)):
+        return value
+    if isinstance(value, BaseModel):
+        return _FrozenModelSnapshot(value)
+    if isinstance(value, dict):
+        return _FrozenDict({str(key): _freeze(item) for key, item in value.items()})
+    if isinstance(value, (list, tuple)):
+        return _FrozenList(_freeze(item) for item in value)
+    if isinstance(value, set):
+        return frozenset(_freeze(item) for item in value)
+    return value
+
+
+def _thaw(value: Any) -> Any:
+    if isinstance(value, _FrozenModelSnapshot):
+        return value.materialize()
+    if isinstance(value, dict):
+        return {key: _thaw(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_thaw(item) for item in value]
+    if isinstance(value, (set, frozenset)):
+        return {_thaw(item) for item in value}
+    return value
+
+
+def _freeze_mapping(value: Mapping[str, Any]) -> _FrozenDict:
+    return _freeze(dict(value))
+
+
 def _version(value: Any) -> int | str | None:
     candidate = getattr(value, "version", None)
     if candidate is not None:
@@ -438,14 +542,19 @@ def _as_procedure_item(value: Any, bucket: str) -> Any:
 
 @dataclass(frozen=True)
 class AssessmentContext:
-    """Immutable qualification snapshot shared by all boundary gate checks."""
+    """Deeply immutable qualification snapshot shared by boundary gates."""
 
     work: Any | None
     run: Any | None
-    proofs: dict[str, list[Any]]
+    proofs: Mapping[str, Any]
     refs: tuple[QualificationRef, ...]
     digest: str
     captured_at: datetime = field(default_factory=lambda: datetime.now(UTC))
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "work", _freeze(self.work) if self.work is not None else None)
+        object.__setattr__(self, "run", _freeze(self.run) if self.run is not None else None)
+        object.__setattr__(self, "proofs", _freeze_mapping(self.proofs))
 
     @property
     def has_authorization_refs(self) -> bool:

@@ -24,6 +24,58 @@ REQUIRED_ACTIONS: set[str] = {"none", "warn", "background-revalidate", "block-ne
 CHANGE_TYPES: set[str] = {"evaluator", "model", "code", "dataset", "permission", "classification", "state_space", "environment"}
 
 
+class DefaultRevalidationPolicyProfile(BaseModel):
+    """Named default policy profile for risk interpretation and action policy.
+
+    Dependency detection remains structural and profile-free.  This profile
+    owns the default severity/urgency/blast-radius interpretation and the
+    default governance action; deployments may provide another profile
+    without changing ``DependencyImpact``.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    profile_id: str = "default-revalidation-policy"
+    risk_rules: dict[str, tuple[Severity, Urgency, BlastRadius]] = {
+        "evaluator": ("high", "urgent", "wide"),
+        "model": ("high", "urgent", "wide"),
+        "code": ("medium", "elevated", "bounded"),
+        "dataset": ("medium", "elevated", "bounded"),
+        "permission": ("high", "urgent", "wide"),
+        "classification": ("medium", "elevated", "bounded"),
+        "state_space": ("critical", "immediate", "systemic"),
+        "environment": ("high", "urgent", "wide"),
+    }
+    required_action_rules: dict[str, dict[str, ImpactType]] = {
+        "evaluator": {"validated-under": "block-next-use", "evaluated-by": "block-next-use", "depends-on": "background-revalidate"},
+        "model": {"validated-under": "block-next-use", "evaluated-by": "block-next-use", "depends-on": "background-revalidate"},
+        "code": {"executed-with": "block-next-use", "validated-under": "block-next-use", "depends-on": "background-revalidate"},
+        "dataset": {"measured-by": "block-next-use", "depends-on": "background-revalidate"},
+        "permission": {"authorized-under": "require-human-review", "depends-on": "background-revalidate"},
+        "classification": {"scoped-to": "require-human-review", "depends-on": "background-revalidate"},
+        "state_space": {"scoped-to": "reopen", "depends-on": "background-revalidate", "validated-under": "block-next-use"},
+        "environment": {"validated-under": "block-next-use", "executed-with": "background-revalidate", "measured-by": "background-revalidate", "depends-on": "warn"},
+    }
+
+    def risk_for(self, change_type: str) -> tuple[Severity, Urgency, BlastRadius]:
+        return self.risk_rules.get(change_type.strip().lower(), ("medium", "elevated", "bounded"))
+
+    def action_for(self, change_type: str, relation_type: str) -> ImpactType:
+        per_type = self.required_action_rules.get(change_type.strip().lower(), {})
+        if relation_type in per_type:
+            return per_type[relation_type]
+        if relation_type in {"validated-under", "evaluated-by"}:
+            return "block-next-use"
+        if relation_type in {"authorized-under", "scoped-to"}:
+            return "require-human-review"
+        if relation_type in {"executed-with", "measured-by"}:
+            return "background-revalidate"
+        return "background-revalidate"
+
+
+DEFAULT_REVALIDATION_POLICY_PROFILE = DefaultRevalidationPolicyProfile()
+
+
 class DependencyImpact(BaseModel):
     """Observed dependency impact; it does not prescribe runtime action."""
 
@@ -32,7 +84,10 @@ class DependencyImpact(BaseModel):
     change_ref: str
     affected_ref: str
     relation_type: str
-    impact_type: ImpactType = "warn"
+    impact_type: ImpactType = Field(
+        default="warn",
+        description="Deprecated flat compatibility field: observed impact only; use revalidation_disposition.action for governance action.",
+    )
     reason_refs: list[str] = Field(default_factory=list)
 
 
@@ -67,7 +122,10 @@ class AffectedAssessment(BaseModel):
     affected_ref: str
     impact_type: ImpactType = "warn"
     severity: Severity = "medium"
-    required_action: ImpactType = "warn"
+    required_action: ImpactType = Field(
+        default="warn",
+        description="Deprecated flat compatibility field; use revalidation_disposition.action.",
+    )
     reason_refs: list[str] = Field(default_factory=list)
     created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
     dependency_impact: DependencyImpact | None = None
@@ -121,40 +179,13 @@ _TYPED_DEPENDENCY_RULES: dict[str, set[str]] = {
     "environment": {"validated-under", "executed-with", "measured-by", "depends-on"},
 }
 
-_RISK_RULES: dict[str, tuple[Severity, Urgency, BlastRadius]] = {
-    "evaluator": ("high", "urgent", "wide"),
-    "model": ("high", "urgent", "wide"),
-    "code": ("medium", "elevated", "bounded"),
-    "dataset": ("medium", "elevated", "bounded"),
-    "permission": ("high", "urgent", "wide"),
-    "classification": ("medium", "elevated", "bounded"),
-    "state_space": ("critical", "immediate", "systemic"),
-    "environment": ("high", "urgent", "wide"),
-}
-
-_REQUIRED_ACTION_RULES: dict[str, dict[str, ImpactType]] = {
-    "evaluator": {"validated-under": "block-next-use", "evaluated-by": "block-next-use", "depends-on": "background-revalidate"},
-    "model": {"validated-under": "block-next-use", "evaluated-by": "block-next-use", "depends-on": "background-revalidate"},
-    "code": {"executed-with": "block-next-use", "validated-under": "block-next-use", "depends-on": "background-revalidate"},
-    "dataset": {"measured-by": "block-next-use", "depends-on": "background-revalidate"},
-    "permission": {"authorized-under": "require-human-review", "depends-on": "background-revalidate"},
-    "classification": {"scoped-to": "require-human-review", "depends-on": "background-revalidate"},
-    "state_space": {"scoped-to": "reopen", "depends-on": "background-revalidate", "validated-under": "block-next-use"},
-    "environment": {"validated-under": "block-next-use", "executed-with": "background-revalidate", "measured-by": "background-revalidate", "depends-on": "warn"},
-}
-
-
-def _resolve_required_action(change_type: str, relation_type: str) -> ImpactType:
-    per_type = _REQUIRED_ACTION_RULES.get(change_type, {})
-    if relation_type in per_type:
-        return per_type[relation_type]
-    if relation_type in {"validated-under", "evaluated-by"}:
-        return "block-next-use"
-    if relation_type in {"authorized-under", "scoped-to"}:
-        return "require-human-review"
-    if relation_type in {"executed-with", "measured-by"}:
-        return "background-revalidate"
-    return "background-revalidate"
+def _resolve_required_action(
+    change_type: str,
+    relation_type: str,
+    *,
+    profile: DefaultRevalidationPolicyProfile = DEFAULT_REVALIDATION_POLICY_PROFILE,
+) -> ImpactType:
+    return profile.action_for(change_type, relation_type)
 
 
 def detect_dependency_impacts(
@@ -195,12 +226,11 @@ def derive_risk_assessment(
     impact: DependencyImpact,
     *,
     change_type: str,
+    profile: DefaultRevalidationPolicyProfile = DEFAULT_REVALIDATION_POLICY_PROFILE,
 ) -> RiskAssessment:
-    """Interpret an observed dependency impact under risk policy."""
+    """Interpret an observed dependency impact under a named policy profile."""
 
-    severity, urgency, blast_radius = _RISK_RULES.get(
-        change_type.strip().lower(), ("medium", "elevated", "bounded")
-    )
+    severity, urgency, blast_radius = profile.risk_for(change_type)
     return RiskAssessment(
         change_ref=impact.change_ref,
         affected_ref=impact.affected_ref,
@@ -215,17 +245,24 @@ def derive_revalidation_disposition(
     impact: DependencyImpact,
     *,
     change_type: str,
-    policy_ref: str = "default-revalidation-policy",
+    policy_ref: str | None = None,
+    profile: DefaultRevalidationPolicyProfile = DEFAULT_REVALIDATION_POLICY_PROFILE,
 ) -> RevalidationDisposition:
     """Apply an explicit policy profile to one observed impact."""
-    action = _resolve_required_action(change_type.strip().lower(), impact.relation_type)
-    return RevalidationDisposition(action=action, policy_ref=policy_ref, rationale_refs=list(impact.reason_refs))
+    action = _resolve_required_action(change_type, impact.relation_type, profile=profile)
+    return RevalidationDisposition(
+        action=action,
+        policy_ref=policy_ref or profile.profile_id,
+        rationale_refs=list(impact.reason_refs),
+    )
 
 
 def assess_revalidation(
     change_ref: str,
     change_type: str,
     relations: list[Any],
+    *,
+    profile: DefaultRevalidationPolicyProfile = DEFAULT_REVALIDATION_POLICY_PROFILE,
 ) -> list[AffectedAssessment]:
     """Direct dependency matching — no recursive invalidation.
 
@@ -240,16 +277,16 @@ def assess_revalidation(
         AffectedAssessment(
             change_ref=impact.change_ref,
             affected_ref=impact.affected_ref,
-            # Flat fields are retained for read compatibility; the explicit
-            # impact/risk/disposition objects are authoritative for new callers.
-            impact_type=derive_revalidation_disposition(impact, change_type=ct).action,
-            severity=derive_risk_assessment(impact, change_type=ct).severity,
-            required_action=derive_revalidation_disposition(impact, change_type=ct).action,
+            # Deprecated flat fields retain their historical shape but no
+            # longer fold the governance action into ``impact_type``.
+            impact_type=impact.impact_type,
+            severity=derive_risk_assessment(impact, change_type=ct, profile=profile).severity,
+            required_action=derive_revalidation_disposition(impact, change_type=ct, profile=profile).action,
             reason_refs=list(impact.reason_refs),
             metadata={"relation_type": impact.relation_type},
             dependency_impact=impact,
-            risk_assessment=derive_risk_assessment(impact, change_type=ct),
-            revalidation_disposition=derive_revalidation_disposition(impact, change_type=ct),
+            risk_assessment=derive_risk_assessment(impact, change_type=ct, profile=profile),
+            revalidation_disposition=derive_revalidation_disposition(impact, change_type=ct, profile=profile),
         )
         for impact in detect_dependency_impacts(change_ref, ct, relations)
     ]
@@ -262,6 +299,8 @@ def should_block(affected: AffectedAssessment) -> bool:
 
 __all__ = [
     "AffectedAssessment",
+    "DefaultRevalidationPolicyProfile",
+    "DEFAULT_REVALIDATION_POLICY_PROFILE",
     "DependencyImpact",
     "RiskAssessment",
     "RevalidationDisposition",
