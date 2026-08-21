@@ -25,7 +25,7 @@
 
 本轮 freeze blockers 也已收口：Knowledge/Evidence compatibility view 现在是 canonical ingestion 的单向 sink；`Derivation` 只能记录产生过程，epistemic status 采用 proposition whitelist；revalidation 形成 `DependencyImpact → RiskAssessment → RevalidationDisposition` 三层责任；Memory/SQLite 通过 typed record restoration 和 fixed-point/adversarial conformance 保持语义对等；普通 canonical record write 拒绝 undeclared top-level fields，legacy/import boundary 保留 forward-field 兼容。
 
-当前本地证据为 `uv run pytest -q` → `244 passed`、strict-conformance → `61 passed`，另有 `ruff`/`mypy` 通过。协议收敛序列依次收口 semantic contract、Boundary internal stage seam、reliability policy profile 和 authorization compatibility contraction；本轮继续收敛 Boundary、阈值配置与历史覆盖率测试，并保持 Boundary-only provider invocation。远端闭合证据将在本轮提交的 main CI/SonarCloud 运行完成后回写。
+当前本地证据为 `uv run pytest -q` → `244 passed`、strict-conformance → `61 passed`，另有 `ruff`/`mypy` 通过。协议收敛序列依次收口 semantic contract、Boundary internal stage seam、reliability policy profile 和 authorization compatibility contraction；本轮继续收敛 Boundary、阈值配置与历史覆盖率测试，并保持 Boundary-only provider invocation。远端闭合证据为 [main CI run 32447784428](https://github.com/ratiolin/portable-runtime/actions/runs/32447784428)，SonarCloud new-code coverage 为 `80.1%` 且 quality gate 为 `OK`。
 
 ## 协议稳定化起点（2026-08-21）
 
