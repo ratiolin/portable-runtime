@@ -8,7 +8,7 @@ Portable runtime for durable **Work / Run** orchestration with pluggable **Provi
 
 ## Strict enforcement status
 
-The RealityBoundary, SQLite Store, semantic-plane P1 work and protocol P2 work are locally closed with executable evidence. The current four-commit protocol-convergence sequence has this pre-push proof:
+The RealityBoundary, SQLite Store, semantic-plane P1 work and protocol P2 work are locally closed with executable evidence. The current protocol-convergence sequence has this verified proof:
 
 - `uv run ruff check .` and `uv run mypy src` — both clean;
 - `uv run pytest -q` — `264 passed` (two existing collection/deprecation warnings only);

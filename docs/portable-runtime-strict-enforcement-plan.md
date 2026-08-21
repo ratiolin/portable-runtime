@@ -33,7 +33,7 @@ semantic vocabulary 不再扩展。本阶段只允许收紧既有接口的机械
 
 本状态不以提交信息代替执行证据；远端 CI 和 SonarCloud 已对该提交完成绿灯闭合。
 
-## 四提交协议收敛序列（2026-08-21）
+## 协议收敛序列（2026-08-21）
 
 1. `semantic-contract`：统一 Assertion / Observation / Derivation 的认识状态归属；补齐 Observation 来源、Revision 本地语义、promotion graph 证据、supersedes lineage 与 canonical relation 集合。
 2. `boundary-internals`：保持 `RealityBoundary` 为唯一现实出口，提取显式内部 stage value objects，并将 Boundary 纳回 Python 3.12 的 mypy 检查。
