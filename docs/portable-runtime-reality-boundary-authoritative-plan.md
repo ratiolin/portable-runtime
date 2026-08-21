@@ -2,7 +2,7 @@
 
 ## Current status
 
-The P0 RealityBoundary/SQLite kernel plus the P1 semantic and P2 protocol hardening are closed on 2026-08-21. The semantic freeze-candidate blocker set is closed; the protocol-convergence sequence now continues with Boundary internal convergence, threshold ownership cleanup and removal of historical coverage-only tests. Fresh local evidence is `ruff` clean, `mypy src` clean, `uv run pytest -q` → `244 passed`, and the CI-equivalent strict-conformance selection → `61 passed`; the cleanup is green in [main CI run 32447784428](https://github.com/ratiolin/portable-runtime/actions/runs/32447784428), with SonarCloud new-code coverage at `80.1%`.
+The P0 RealityBoundary/SQLite kernel plus the P1 semantic and P2 protocol hardening are closed on 2026-08-21. The semantic freeze-candidate blocker set is closed; the protocol-convergence sequence now continues with Boundary internal convergence, threshold ownership cleanup and removal of historical coverage-only tests. Fresh local evidence is `ruff` clean, `mypy src` clean, `uv run pytest -q` → `244 passed`, and the CI-equivalent strict-conformance selection → `61 passed`; the cleanup is green in [main CI run 32449728188](https://github.com/ratiolin/portable-runtime/actions/runs/32449728188), with SonarCloud new-code coverage at `80.4%`.
 
 The P0 enforcement kernel is implemented and has executable evidence in:
 
@@ -22,7 +22,7 @@ The strict-conformance command and the repository-wide suite both pass. The
 latest local verification is `244 passed` with the two existing collection/
 deprecation warnings only. The fresh coverage run reports 77% overall coverage; the
 fresh coverage run reports 76% overall coverage. The remote SonarCloud quality gate
-reports 80.1% new-code coverage for this cleanup commit.
+reports 80.4% new-code coverage for this cleanup commit.
 Legacy workflow fixtures now carry explicit typed
 authorization, resource/version, and procedure evidence; the runtime boundary
 itself remains fail-closed when those proofs are absent.
