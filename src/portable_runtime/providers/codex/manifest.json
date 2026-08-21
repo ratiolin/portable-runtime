@@ -22,7 +22,7 @@
       "shell.exec": "workspace-write"
     },
     "unknown_capability_sandbox": "read-only",
-    "sandbox_override": "forbidden"
+    "sandbox_override": "tighten-only"
   },
   "description": "Wraps codex exec as a portable CapabilityProvider; health checks codex --version."
 }

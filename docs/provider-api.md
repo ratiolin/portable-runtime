@@ -72,7 +72,11 @@ The built-in Codex provider derives its process sandbox from the capability,
 not from request parameters: `reason.generate`, `code.read`, and `git.diff`
 use `read-only`; `code.edit`, `code.test`, and `shell.exec` use
 `workspace-write`; unknown capabilities fail closed to `read-only`. A caller
-cannot request `danger-full-access` through the capability request.
+cannot request `danger-full-access` through the capability request. A
+deployment may pass `sandbox_by_capability` only to tighten a canonical
+capability (for example, `code.test` from `workspace-write` to `read-only`);
+attempts to widen `reason.generate`, `code.read`, `git.diff`, or an unknown
+capability to `workspace-write` are rejected.
 
 Deployment-specific process isolation is an optional injected
 `ExecutionBoundary`. The provider-neutral contract supplies a prepared
