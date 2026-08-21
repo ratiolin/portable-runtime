@@ -6,6 +6,25 @@ from .models import BaseRecord
 from .relations import RecordRelation, validate_relation
 
 
+def validate_canonical_write(record: BaseRecord) -> list[str]:
+    """Reject undeclared top-level fields on normal canonical writes.
+
+    ``BaseRecord`` stays permissive so legacy/import adapters can preserve
+    forward fields.  Store ``save_record`` paths call this stricter contract;
+    state/bundle imports validate and retain unknown fields explicitly at the
+    compatibility boundary instead of silently promoting them into the write
+    protocol.
+    """
+
+    extra = getattr(record, "model_extra", None) or {}
+    if extra:
+        return [
+            "canonical record writes forbid undeclared fields: "
+            + ", ".join(sorted(str(key) for key in extra))
+        ]
+    return []
+
+
 def validate_record(record: BaseRecord) -> list[str]:
     errors: list[str] = []
     # 3 orthogonal dimensions must be present

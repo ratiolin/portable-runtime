@@ -23,7 +23,22 @@ from portable_runtime.core.models import (
     Work,
 )
 from portable_runtime.records.knowledge import KnowledgeProjection
-from portable_runtime.records.models import BaseRecord, EvidenceArtifact
+from portable_runtime.records.models import (
+    ActionRecord,
+    Assertion,
+    BaseRecord,
+    ChangeObjectRecord,
+    Constraint,
+    DecisionRecord,
+    Derivation,
+    EvidenceArtifact,
+    Experiment,
+    Goal,
+    Observation,
+    OutcomeRecord,
+    PolicyRecord,
+    RevisionRecord,
+)
 from portable_runtime.records.relations import RecordRelation
 
 
@@ -75,6 +90,23 @@ def _parse_utc(value: Any) -> datetime | None:
     if parsed.tzinfo is None:
         parsed = parsed.replace(tzinfo=UTC)
     return parsed.astimezone(UTC)
+
+
+_RECORD_MODELS: dict[str, type[BaseRecord]] = {
+    "EvidenceArtifact": EvidenceArtifact,
+    "Observation": Observation,
+    "Assertion": Assertion,
+    "Goal": Goal,
+    "Constraint": Constraint,
+    "Experiment": Experiment,
+    "Decision": DecisionRecord,
+    "Action": ActionRecord,
+    "Outcome": OutcomeRecord,
+    "Revision": RevisionRecord,
+    "ChangeObject": ChangeObjectRecord,
+    "Policy": PolicyRecord,
+    "Derivation": Derivation,
+}
 
 
 class SQLiteStateStore:
@@ -155,13 +187,26 @@ class SQLiteStateStore:
             row = self._connection.execute(
                 "SELECT data FROM runtime_records WHERE kind=? AND id=?", (kind, identifier)
             ).fetchone()
-        return value_type.model_validate_json(row["data"]) if row else None
+        if not row:
+            return None
+        if kind == "record":
+            payload = json.loads(row["data"])
+            model_type = _RECORD_MODELS.get(str(payload.get("record_type")), BaseRecord)
+            return model_type.model_validate(payload)
+        return value_type.model_validate_json(row["data"])
 
     def _list(self, kind: str, value_type: type[Any]) -> list[Any]:
         with self._lock:
             rows = self._connection.execute(
                 "SELECT data FROM runtime_records WHERE kind=? ORDER BY created_at DESC, id DESC", (kind,)
             ).fetchall()
+        if kind == "record":
+            values: list[BaseRecord] = []
+            for row in rows:
+                payload = json.loads(row["data"])
+                model_type = _RECORD_MODELS.get(str(payload.get("record_type")), BaseRecord)
+                values.append(model_type.model_validate(payload))
+            return values
         return [value_type.model_validate_json(row["data"]) for row in rows]
 
     def save_work(self, value: Work) -> None: self._save("work", value)
@@ -204,11 +249,7 @@ class SQLiteStateStore:
     def save_evidence(self, value: Evidence) -> None: self._save("evidence", value)
     def get_evidence(self, evidence_id: str) -> Evidence | None: return self._get("evidence", Evidence, evidence_id)
     def list_evidence(self, subject_ref: str | None = None) -> list[Evidence]:
-        values = [
-            value
-            for value in self._list("evidence", Evidence)
-            if subject_ref is None or subject_ref in value.subject_refs
-        ]
+        values = self.list_raw_legacy_evidence(subject_ref)
         try:
             from portable_runtime.compat.legacy_records import evidence_artifact_to_legacy
 
@@ -222,6 +263,13 @@ class SQLiteStateStore:
         except Exception:
             pass
         return values
+
+    def list_raw_legacy_evidence(self, subject_ref: str | None = None) -> list[Evidence]:
+        return [
+            value
+            for value in self._list("evidence", Evidence)
+            if subject_ref is None or subject_ref in value.subject_refs
+        ]
     def save_decision(self, value: Decision) -> None: self._save("decision", value)
     def save_action(self, value: Action) -> None: self._save("action", value)
     def save_outcome(self, value: Outcome) -> None: self._save("outcome", value)
@@ -235,7 +283,7 @@ class SQLiteStateStore:
                 return knowledge_projection_to_legacy(projection)
         return legacy
     def list_knowledge(self, status: str | None = None) -> list[KnowledgeItem]:
-        values = [value for value in self._list("knowledge", KnowledgeItem) if status is None or value.status == status]
+        values = self.list_raw_legacy_knowledge(status)
         try:
             from portable_runtime.compat.legacy_records import knowledge_projection_to_legacy
 
@@ -247,6 +295,9 @@ class SQLiteStateStore:
         except Exception:
             pass
         return values
+
+    def list_raw_legacy_knowledge(self, status: str | None = None) -> list[KnowledgeItem]:
+        return [value for value in self._list("knowledge", KnowledgeItem) if status is None or value.status == status]
 
     def save_knowledge_projection(self, value: KnowledgeProjection) -> None:
         self._save("knowledge_projection", value)
@@ -588,8 +639,8 @@ class SQLiteStateStore:
                 return
         except Exception:
             pass
-        from portable_runtime.records.validation import validate_record
-        errs = validate_record(value)
+        from portable_runtime.records.validation import validate_canonical_write, validate_record
+        errs = [*validate_record(value), *validate_canonical_write(value)]
         if errs:
             raise ValueError("; ".join(errs))
         self._save("record", value)

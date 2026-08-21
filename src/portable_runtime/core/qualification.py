@@ -81,13 +81,73 @@ class QualificationRef(BaseModel):
 
 @dataclass(frozen=True)
 class InvocationPermit:
-    """One-use internal capability produced after qualification assessment."""
+    """One-use internal capability bound to an immutable request snapshot.
+
+    The provider-facing request is materialized from ``request_snapshot``;
+    precommit and invocation must not continue consuming a mutable caller
+    object after this permit is issued.
+    """
 
     request_digest: str
     qualification_digest: str
     provider_id: str
     lease_generation: int
+    request_snapshot: str
     issued_at: datetime = field(default_factory=lambda: datetime.now(UTC))
+
+    @classmethod
+    def issue(
+        cls,
+        request: Any,
+        *,
+        provider_id: str,
+        qualification_digest: str,
+        lease_generation: int,
+    ) -> InvocationPermit:
+        request_payload = (
+            request.model_dump(mode="json")
+            if hasattr(request, "model_dump")
+            else dict(request)
+        )
+        authority_payload = {
+            "request_id": request_payload.get("id"),
+            "capability": request_payload.get("capability"),
+            "actor": request_payload.get("actor_ref"),
+            "resource": request_payload.get("resource_ref"),
+            "subject_version_refs": list(request_payload.get("subject_version_refs") or []),
+            "effect_class": request_payload.get("effect_class"),
+            "constraints": request_payload.get("constraints") or {},
+            "provider": provider_id,
+            "lease_generation": lease_generation,
+            "idempotency_key": request_payload.get("idempotency_key"),
+            "qualification_digest": qualification_digest,
+        }
+        snapshot_payload = {
+            "request": request_payload,
+            "authority": authority_payload,
+        }
+        snapshot = json.dumps(snapshot_payload, sort_keys=True, separators=(",", ":"), default=str)
+        digest = hashlib.sha256(snapshot.encode()).hexdigest()
+        return cls(
+            request_digest=digest,
+            qualification_digest=qualification_digest,
+            provider_id=provider_id,
+            lease_generation=lease_generation,
+            request_snapshot=snapshot,
+        )
+
+    def snapshot_payload(self) -> dict[str, Any]:
+        value = json.loads(self.request_snapshot)
+        if not isinstance(value, dict) or not isinstance(value.get("request"), dict):
+            raise QualificationResolutionError("invocation permit contains an invalid request snapshot")
+        return value
+
+    def materialize_request(self) -> Any:
+        """Return a fresh provider-facing request reconstructed from the permit."""
+
+        from portable_runtime.core.capabilities import CapabilityRequest
+
+        return CapabilityRequest.model_validate(self.snapshot_payload()["request"])
 
 
 _INLINE_FACT_KEYS = frozenset(

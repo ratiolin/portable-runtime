@@ -4,9 +4,11 @@ from __future__ import annotations
 
 import pytest
 
+from portable_runtime.core.capabilities import CapabilityRequest
 from portable_runtime.core.models import Evidence, Run, Work
+from portable_runtime.core.qualification import InvocationPermit
 from portable_runtime.records.knowledge import KnowledgeProjection
-from portable_runtime.records.models import Assertion, Derivation
+from portable_runtime.records.models import Assertion, BaseRecord, Derivation, EvidenceArtifact
 from portable_runtime.records.reopen import ReopenAssessment, create_reopen_work
 from portable_runtime.records.revalidation import (
     assess_revalidation,
@@ -16,6 +18,7 @@ from portable_runtime.records.revalidation import (
 from portable_runtime.records.relations import RecordRelation
 from portable_runtime.core.qualification import QualificationRef, QualificationResolutionError
 from portable_runtime.stores.memory import InMemoryStateStore
+from portable_runtime.stores.sqlite import SQLiteStateStore
 from portable_runtime.workflows.context import WorkflowContext
 from portable_runtime.workflows.daily_scan.workflow import KnowledgeConsolidationWorkflow
 
@@ -93,6 +96,60 @@ async def test_knowledge_consolidation_writes_only_canonical_projection_and_jour
     assert any(event.type == "KnowledgeProjected" for event in store.list_events())
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("backend", ["memory", "sqlite"])
+async def test_canonical_consolidation_is_non_reentrant_and_evidence_ids_are_authoritative(
+    backend: str, tmp_path: object
+) -> None:
+    store = InMemoryStateStore() if backend == "memory" else SQLiteStateStore(tmp_path / "compat.db")  # type: ignore[operator]
+    try:
+        work = Work(id="work_non_reentrant", title="consolidate", kind="knowledge-consolidation")
+        run = Run(id="run_non_reentrant", work_id=work.id, status="running")
+        store.save_work(work)
+        store.save_run(run)
+        evidence = EvidenceArtifact(
+            id="record_canonical_evidence",
+            kind="check",
+            source_refs=[work.id],
+            lifecycle_status="current",
+        )
+        store.save_record(evidence)
+        projection = KnowledgeProjection(
+            id="projection_non_reentrant",
+            title="candidate",
+            source_work_refs=[work.id],
+            current_assertion_refs=["assertion:canonical:v1"],
+            evidence_summary_refs=[evidence.id],
+            epistemic_judgment_refs=["judgment:canonical:v1"],
+            authorization_refs=["authorization:canonical:v1"],
+            validity_scope={"domain": "test"},
+            environment_bindings={"runtime": "v1"},
+        )
+        store.save_knowledge_projection(projection)
+
+        # Public compatibility reads expose a legacy view, but canonical
+        # ingestion must use the raw namespace and therefore see no legacy
+        # duplicate for this canonical projection.
+        assert len(store.list_knowledge("candidate")) == 1
+        assert store.list_raw_legacy_knowledge("candidate") == []
+        assert store.list_raw_legacy_evidence() == []
+        assert any(item.id.startswith("legacy_") for item in store.list_evidence())
+
+        context = WorkflowContext(work=work, run=run, store=store, capabilities=None, registry=None)
+        assert await KnowledgeConsolidationWorkflow().run(context, work, run) == "succeeded"
+        assert [item.id for item in store.list_knowledge_projections()] == [projection.id]
+        assert store.get_knowledge_projection(projection.id).lifecycle_status == "official"
+
+        # Fixed-point property: compatibility reads followed by another
+        # canonical consolidation cannot create a second semantic projection.
+        projection_ids = [item.id for item in store.list_knowledge_projections()]
+        assert await KnowledgeConsolidationWorkflow().run(context, work, run) == "succeeded"
+        assert [item.id for item in store.list_knowledge_projections()] == projection_ids
+    finally:
+        if backend == "sqlite":
+            store.close()  # type: ignore[attr-defined]
+
+
 def test_derivation_is_a_canonical_record_with_explicit_premises_and_conclusion() -> None:
     store = InMemoryStateStore()
     assertion = Assertion(statement="derived", lifecycle_status="draft")
@@ -110,6 +167,56 @@ def test_derivation_is_a_canonical_record_with_explicit_premises_and_conclusion(
     assert fetched is not None
     assert fetched.record_type == "Derivation"
     assert fetched.conclusion_ref == assertion.id
+
+
+def test_derivation_cannot_acquire_epistemic_status() -> None:
+    with pytest.raises(ValueError, match="must not carry epistemic_status"):
+        Derivation(epistemic_status="supported")
+
+
+def test_canonical_record_writes_reject_undeclared_top_level_fields() -> None:
+    store = InMemoryStateStore()
+    record = BaseRecord(record_type="Assertion", lifecycle_status="draft", future_field="legacy-only")  # type: ignore[call-arg]
+    with pytest.raises(ValueError, match="undeclared fields"):
+        store.save_record(record)
+
+
+def test_invocation_permit_binds_an_immutable_authority_sensitive_snapshot() -> None:
+    request = CapabilityRequest(
+        id="request_snapshot",
+        capability="deploy.prod",
+        instruction="apply",
+        parameters={"patch": "v1"},
+        constraints={"resource": "repo/app"},
+        actor_ref="agent:one",
+        resource_ref="repo/app",
+        subject_version_refs=["patch:v1"],
+        effect_class="deploy",
+        idempotency_key="idem-snapshot",
+    )
+    permit = InvocationPermit.issue(
+        request,
+        provider_id="provider-a",
+        qualification_digest="qualification-v1",
+        lease_generation=7,
+    )
+    request.parameters["patch"] = "v2"
+    materialized = permit.materialize_request()
+
+    assert materialized.parameters["patch"] == "v1"
+    assert permit.snapshot_payload()["authority"] == {
+        "actor": "agent:one",
+        "capability": "deploy.prod",
+        "constraints": {"resource": "repo/app"},
+        "effect_class": "deploy",
+        "idempotency_key": "idem-snapshot",
+        "lease_generation": 7,
+        "provider": "provider-a",
+        "qualification_digest": "qualification-v1",
+        "request_id": "request_snapshot",
+        "resource": "repo/app",
+        "subject_version_refs": ["patch:v1"],
+    }
 
 
 def test_qualification_refs_accept_legacy_aliases_but_reject_inline_shapes() -> None:

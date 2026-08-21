@@ -273,7 +273,10 @@ class KnowledgeConsolidationWorkflow:
         try:
             from portable_runtime.compat.legacy_records import legacy_knowledge_to_projection
 
-            for legacy_item in context.store.list_knowledge(status="candidate"):
+            raw_legacy_knowledge = getattr(context.store, "list_raw_legacy_knowledge", None)
+            if raw_legacy_knowledge is None:
+                raise RuntimeError("canonical consolidation requires raw legacy knowledge namespace")
+            for legacy_item in raw_legacy_knowledge(status="candidate"):
                 projection = legacy_knowledge_to_projection(legacy_item)
                 if projection.id in seen_projection_ids:
                     continue
@@ -290,7 +293,16 @@ class KnowledgeConsolidationWorkflow:
         # Build evidence lookup from store
         evidence_by_id: dict[str, Any] = {}
         try:
-            all_evidence = context.store.list_evidence(subject_ref=None)
+            raw_legacy_evidence = getattr(context.store, "list_raw_legacy_evidence", None)
+            if raw_legacy_evidence is None:
+                raise RuntimeError("canonical consolidation requires raw legacy evidence namespace")
+            all_evidence = [*raw_legacy_evidence(subject_ref=None)]
+            for projection_evidence in context.store.list_records("EvidenceArtifact"):
+                if getattr(projection_evidence, "record_type", None) != "EvidenceArtifact":
+                    continue
+                # Canonical evidence is indexed by its authoritative record id;
+                # never feed the compatibility adapter back into this map.
+                evidence_by_id[projection_evidence.id] = projection_evidence
             for ev in all_evidence:
                 evidence_by_id[ev.id] = ev
         except Exception:
