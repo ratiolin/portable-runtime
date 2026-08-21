@@ -23,6 +23,7 @@ from portable_runtime.stores.memory import InMemoryStateStore
 from portable_runtime.stores.sqlite import SQLiteStateStore
 from portable_runtime.workflows.procedure import ObligationStatus, ProcedureProfile, check_procedure, gates_for_profile
 from portable_runtime.core.policies import Obligation
+from tests._strict_fixtures import seed_action_governance
 
 def make_work(title="t", kind="incident", **kw):
     return Work(id=new_id("work"), title=title, kind=kind, description="desc", **kw)
@@ -31,7 +32,7 @@ def make_run(work_id, status="running"):
 
 class FakeReconcilableProvider:
     def __init__(self, pid="reconprov", effect="reconcilable"):
-        self._d = ProviderDescriptor(id=pid, name=pid, version="1.0.0", capabilities=["code.deploy"], effect_semantics=effect, side_effect_class=effect, reversibility="irreversible")
+        self._d = ProviderDescriptor(id=pid, name=pid, version="1.0.0", capabilities=["deploy.prod"], effect_semantics=effect, side_effect_class=effect, reversibility="irreversible")
     @property
     def descriptor(self): return self._d
     async def health(self): return ProviderHealth(provider_id=self._d.id, available=True)
@@ -42,7 +43,7 @@ class FakeReconcilableProvider:
         return CapabilityResult(request_id=request_id, provider_id=self._d.id, status="unknown", message="cannot confirm")
 class UnknownPreservingProvider:
     def __init__(self, pid="unkprov"):
-        self._d = ProviderDescriptor(id=pid, name=pid, version="1.0.0", capabilities=["code.deploy"], effect_semantics="irreversible-opaque", side_effect_class="irreversible-opaque")
+        self._d = ProviderDescriptor(id=pid, name=pid, version="1.0.0", capabilities=["deploy.prod"], effect_semantics="irreversible-opaque", side_effect_class="irreversible-opaque")
     @property
     def descriptor(self): return self._d
     async def health(self): return ProviderHealth(provider_id=self._d.id, available=True)
@@ -58,7 +59,8 @@ async def test_provider_health_invoke_cancel_reconcile_and_unknown_preserved():
     svc = CapabilityService(reg, store=store)
     w = make_work(title="w1"); w.id="work_1"; store.save_work(w)
     r = make_run("work_1"); r.id="run_1"; store.save_run(r)
-    req = CapabilityRequest(id=new_id("req"), capability="code.deploy", work_id="work_1", run_id="run_1")
+    seed_action_governance(w, r, store, capability="deploy.prod", resource_ref="repo/test", subject_version="patch:v1", include_grant=True)
+    req = CapabilityRequest(id=new_id("req"), capability="deploy.prod", work_id="work_1", run_id="run_1", actor_ref="run:run_1", resource_ref="repo/test", subject_version_refs=["patch:v1"])
     h = await prov.health(); assert h.available is True
     res = await svc.invoke(req); assert res.status == "succeeded"
     await prov.cancel(req.id)
@@ -68,7 +70,8 @@ async def test_provider_health_invoke_cancel_reconcile_and_unknown_preserved():
     store2 = InMemoryStateStore(); w2 = make_work(); w2.id="work_1"; store2.save_work(w2)
     r2 = make_run("work_1"); r2.id="run_1"; store2.save_run(r2)
     svc2 = CapabilityService(reg2, store=store2)
-    req2 = CapabilityRequest(id=new_id("req"), capability="code.deploy", work_id="work_1", run_id="run_1")
+    seed_action_governance(w2, r2, store2, capability="deploy.prod", resource_ref="repo/test", subject_version="patch:v1", include_grant=True)
+    req2 = CapabilityRequest(id=new_id("req"), capability="deploy.prod", work_id="work_1", run_id="run_1", actor_ref="run:run_1", resource_ref="repo/test", subject_version_refs=["patch:v1"])
     res2 = await svc2.invoke(req2); assert res2.status == "succeeded"
     stale = Step(id=new_id("step"), run_id="run_1", step_key="k1", status="running", effect_semantics="irreversible-opaque", side_effect_class="irreversible-opaque", updated_at=datetime.now(UTC) - timedelta(seconds=60), current_attempt=1)
     store2.save_step(stale)
@@ -90,8 +93,9 @@ async def test_provider_unknown_retained_on_cancel_and_reconcile_none():
         async def cancel(self, request_id: str): return None
     reg = ProviderRegistry(); p = NoReconcileProv(); reg.register(p)
     store = InMemoryStateStore(); w = make_work(); w.id="work_1"; store.save_work(w); r = make_run("work_1"); r.id="run_1"; store.save_run(r)
+    seed_action_governance(w, r, store, capability="code.edit", resource_ref="repo/test", subject_version="patch:v1", include_grant=True)
     svc = CapabilityService(reg, store=store)
-    req = CapabilityRequest(id=new_id("req"), capability="code.edit", work_id="work_1", run_id="run_1")
+    req = CapabilityRequest(id=new_id("req"), capability="code.edit", work_id="work_1", run_id="run_1", actor_ref="run:run_1", resource_ref="repo/test", subject_version_refs=["patch:v1"])
     res = await svc.invoke(req); assert res.status == "succeeded"
     await p.cancel(req.id)
     stale = Step(id=new_id("step"), run_id="run_1", step_key="k2", status="running", effect_semantics="irreversible-opaque", updated_at=datetime.now(UTC)-timedelta(seconds=120), current_attempt=1)

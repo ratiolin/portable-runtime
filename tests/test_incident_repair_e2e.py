@@ -14,6 +14,7 @@ from portable_runtime.records.relations import RecordRelation
 from portable_runtime.stores.memory import InMemoryStateStore
 from portable_runtime.workflows.context import WorkflowContext
 from portable_runtime.workflows.incident_repair.workflow import IncidentRepairWorkflow
+from tests._strict_fixtures import seed_action_governance
 
 def make_registry_with_providers(patch_hint="patch:v1"):
     reg = ProviderRegistry()
@@ -48,6 +49,7 @@ async def test_incident_repair_e2e_observe_to_knowledge():
     store.save_work(work)
     run = Run(id=new_id("run"), work_id=work.id, status="running", workflow_id="incident-repair")
     store.save_run(run)
+    seed_action_governance(work, run, store)
     reg = make_registry_with_providers()
     caps = CapabilityService(reg, store=store)
     ctx = WorkflowContext(work=work, run=run, store=store, capabilities=caps, registry=reg)

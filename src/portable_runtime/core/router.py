@@ -35,6 +35,8 @@ class DeterministicPriorityRouting:
         ]
         if not request.constraints:
             matching = candidates
+        if not matching:
+            return None
         return sorted(
             matching,
             key=lambda descriptor: (
@@ -45,27 +47,56 @@ class DeterministicPriorityRouting:
         )[0]
 
 class ConstraintRouter(DeterministicPriorityRouting):
+    """V1.6 Constraint Router: hard constraints > eligible > deterministic > cost."""
+
+    def __init__(self, registry: Any | None = None, *args: Any, **kwargs: Any) -> None:
+        super().__init__(*args, **kwargs)  # type: ignore[call-arg]
+        self.registry: Any | None = registry
+
     async def select(
         self,
         request: CapabilityRequest,
         candidates: list[ProviderDescriptor],
     ) -> ProviderDescriptor | None:
+        from portable_runtime.core.independence import IndependenceContext  # type: ignore[import-untyped]
+
+        ind_ctx = IndependenceContext.from_request(request)
+        reference_descriptors: list[ProviderDescriptor] = []
+        if ind_ctx and ind_ctx.reference_provider_refs and ind_ctx.independent_on:
+            reg = getattr(self, "registry", None)
+            if reg is not None:
+                for ref_id in ind_ctx.reference_provider_refs:
+                    try:
+                        prov = reg.get(ref_id)  # type: ignore
+                        reference_descriptors.append(prov.descriptor)  # type: ignore
+                    except Exception:
+                        try:
+                            for d in reg.list_descriptors():  # type: ignore
+                                if d.id == ref_id:
+                                    reference_descriptors.append(d)
+                                    break
+                        except Exception:
+                            pass
+            else:
+                meta = getattr(request, "metadata", {}) if isinstance(getattr(request, "metadata", None), dict) else {}
+                ref_descs = meta.get("reference_descriptors") if isinstance(meta, dict) else None
+                if isinstance(ref_descs, list):
+                    reference_descriptors.extend([d for d in ref_descs if hasattr(d, "id")])
         eligible: list[ProviderDescriptor] = []
-        required_independence = request.constraints.get("required_independence") or request.constraints.get("independent_on") or request.metadata.get("independence_constraints", {}).get("independent_on") if isinstance(request.metadata, dict) else None
-        independent_from = request.constraints.get("independent_from_provider_ids") or request.metadata.get("independence_constraints", {}).get("independent_from_provider_ids") if isinstance(request.metadata, dict) else None
         for c in candidates:
-            if required_independence and isinstance(required_independence, list):
+            if ind_ctx and ind_ctx.independent_on and reference_descriptors:
+                ok, _ = ind_ctx.is_satisfied(c, reference_descriptors)
+                if not ok:
+                    continue
+            elif ind_ctx and ind_ctx.independent_on:
                 skip = False
-                if independent_from and isinstance(independent_from, list) and c.id in independent_from:
-                    skip = True
-                meta_ind = request.metadata.get("independence_constraints", {}) if isinstance(request.metadata, dict) else {}
-                ind_on = meta_ind.get("independent_on") if isinstance(meta_ind, dict) else None
-                if ind_on and isinstance(ind_on, list):
-                    for dom in ind_on:
-                        if getattr(c, dom, None) is None:
-                            skip = True
-                            break
+                for dom in ind_ctx.independent_on:
+                    if getattr(c, dom, None) is None:
+                        skip = True
+                        break
                 if skip:
+                    continue
+                if ind_ctx.reference_provider_refs:
                     continue
             req_domains = request.constraints.get("required_failure_domains")
             if req_domains and isinstance(req_domains, dict):
@@ -97,20 +128,34 @@ class CapabilityService:
         store: StateStore | None = None,
         runtime_id: str = "runtime",
         boundary: Any | None = None,
+        **_kwargs: Any,
     ) -> None:
-        from portable_runtime.core.boundary import RealityBoundary  # type: ignore
-        from portable_runtime.core.capability_contract import CapabilityContractRegistry  # type: ignore
         if boundary is not None:
             self.boundary = boundary
             self.registry = getattr(boundary, "registry", registry) or registry  # type: ignore
-            self.routing = getattr(boundary, "routing", routing or ConstraintRouter())  # type: ignore
+            self.routing = getattr(boundary, "routing", routing or ConstraintRouter(registry=self.registry))  # type: ignore
             self.store = getattr(boundary, "store", store)
             self.runtime_id = getattr(boundary, "runtime_id", runtime_id)
-        else:
-            self.registry = registry  # type: ignore
-            self.routing = routing or ConstraintRouter()
-            self.store = store
-            self.runtime_id = runtime_id
+            try:
+                if hasattr(self.routing, "registry"):
+                    self.routing.registry = self.registry  # type: ignore
+            except Exception:
+                pass
+            return
+        if registry is None:
+            raise TypeError("CapabilityService requires either registry or boundary")
+        self.registry = registry
+        self.routing = routing or ConstraintRouter(registry=registry)
+        try:
+            if hasattr(self.routing, "registry"):
+                self.routing.registry = registry  # type: ignore
+        except Exception:
+            pass
+        self.store = store
+        self.runtime_id = runtime_id
+        try:
+            from portable_runtime.core.boundary import RealityBoundary
+            from portable_runtime.core.capability_contract import CapabilityContractRegistry
             self.boundary = RealityBoundary(  # type: ignore
                 store=self.store,
                 registry=self.registry,
@@ -118,21 +163,41 @@ class CapabilityService:
                 runtime_id=self.runtime_id,
                 contract_registry=CapabilityContractRegistry(),
             )
+        except Exception:
+            self.boundary = None  # type: ignore
 
     async def invoke(self, request: CapabilityRequest) -> CapabilityResult:
-        return await self.boundary.execute(request)  # type: ignore
+        if hasattr(self, "boundary") and self.boundary is not None:
+            return await self.boundary.execute(request, capability_service=self)  # type: ignore
+        from portable_runtime.core.boundary import RealityBoundary
+        boundary = RealityBoundary(store=self.store, registry=self.registry, routing=self.routing, runtime_id=self.runtime_id)
+        return await boundary.execute(request, capability_service=self)
+
+    async def reconcile(self, request_id: str, provider_id: str) -> CapabilityResult | None:
+        """Route recovery reconciliation through the RealityBoundary.
+
+        Recovery is still an authority-sensitive runtime action.  Keeping the
+        provider call behind the boundary prevents ``Runtime`` or a workflow
+        from bypassing the single reality exit.
+        """
+
+        boundary = getattr(self, "boundary", None)
+        if boundary is None:
+            from portable_runtime.core.boundary import RealityBoundary
+
+            boundary = RealityBoundary(
+                store=self.store,
+                registry=self.registry,
+                routing=self.routing,
+                runtime_id=self.runtime_id,
+            )
+        reconcile = getattr(boundary, "reconcile", None)
+        if reconcile is None:
+            return None
+        return await reconcile(request_id, provider_id, capability_service=self)
 
     def _digest(self, request: CapabilityRequest) -> str:
         import hashlib
         import json
         payload = json.dumps({"cap": request.capability, "inst": request.instruction, "params": request.parameters}, sort_keys=True, default=str)
         return hashlib.sha256(payload.encode()).hexdigest()[:16]
-
-    async def reconcile(self, request_id: str, provider_id: str) -> CapabilityResult | None:
-        try:
-            provider = self.registry.get(provider_id)  # type: ignore[union-attr]
-            if hasattr(provider, "reconcile"):
-                return await provider.reconcile(request_id)  # type: ignore
-        except Exception:
-            pass
-        return None

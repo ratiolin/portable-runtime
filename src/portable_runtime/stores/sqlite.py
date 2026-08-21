@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import sqlite3
 import threading
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -36,6 +37,45 @@ def _safe_db_path(p: Path) -> Path:
     return p
 
 
+class StoreUnavailable(RuntimeError):  # noqa: N818 - stable public error name from the closure plan
+    """The SQLite store could not complete an operation.
+
+    A database/SQL failure is deliberately distinct from a normal conditional
+    miss (for example, a stale CAS version or a lease owned by another worker).
+    Callers that need fail-closed behaviour can handle this typed error without
+    mistaking infrastructure failure for an ordinary conflict.
+    """
+
+
+class CASExecutionError(StoreUnavailable):
+    """A CAS transaction failed for a reason other than version conflict."""
+
+
+class LeaseExecutionError(StoreUnavailable):
+    """A lease transaction failed for a reason other than an ownership miss."""
+
+
+def _parse_utc(value: Any) -> datetime | None:
+    """Parse a persisted timestamp as an aware UTC datetime.
+
+    ``None`` means no expiry.  Malformed timestamps raise instead of being
+    treated as expired: an unknown lease state must not silently become
+    acquirable.
+    """
+
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        raise ValueError(f"invalid persisted timestamp type: {type(value).__name__}")
+    try:
+        parsed = datetime.fromisoformat(value)
+    except ValueError as exc:
+        raise ValueError(f"invalid persisted timestamp: {value!r}") from exc
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=UTC)
+    return parsed.astimezone(UTC)
+
+
 class SQLiteStateStore:
     """Portable JSON-record store with stable IDs and atomic import/export."""
 
@@ -56,6 +96,13 @@ class SQLiteStateStore:
         "record": BaseRecord,
         "relation": RecordRelation,
     }
+    # Kept as an attribute so a conformance test can deliberately inject a
+    # malformed statement and verify that it raises a typed DB error.
+    _CAS_UPDATE_SQL = (
+        "UPDATE runtime_records SET data=?, created_at=? "
+        "WHERE kind=? AND id=? "
+        "AND CAST(json_extract(data, '$.version') AS INTEGER)=?"
+    )
     # authorization added dynamically via import_state handling
 
 
@@ -77,7 +124,15 @@ class SQLiteStateStore:
             self._connection.execute(
                 "CREATE TABLE IF NOT EXISTS runtime_leases ("
                 "run_id TEXT PRIMARY KEY, owner TEXT, generation INTEGER NOT NULL, "
-                "expires_at TEXT, heartbeat_at TEXT, version INTEGER NOT NULL)"
+                "expires_at TEXT, heartbeat_at TEXT)"
+            )
+            # Databases created by an earlier development build included a
+            # redundant NOT NULL ``version`` column.  Keep writes compatible
+            # with those files while using the independent lease table as the
+            # source of truth.
+            self._lease_has_version_column = any(
+                row["name"] == "version"
+                for row in self._connection.execute("PRAGMA table_info(runtime_leases)").fetchall()
             )
 
     def close(self) -> None:
@@ -113,7 +168,32 @@ class SQLiteStateStore:
         return [value for value in self._list("work", Work) if status is None or value.status == status]
 
     def save_run(self, value: Run) -> None: self._save("run", value)
-    def get_run(self, run_id: str) -> Run | None: return self._get("run", Run, run_id)
+    def get_run(self, run_id: str) -> Run | None:
+        # The lease table is authoritative.  Overlay its current state so a
+        # stale run JSON mirror cannot make a caller believe an old owner is
+        # still fencing the run.
+        with self._lock:
+            row = self._connection.execute(
+                "SELECT data FROM runtime_records WHERE kind=? AND id=?", ("run", run_id)
+            ).fetchone()
+            if row is None:
+                return None
+            lease = self._connection.execute(
+                "SELECT owner, generation, expires_at, heartbeat_at "
+                "FROM runtime_leases WHERE run_id=?",
+                (run_id,),
+            ).fetchone()
+        run = Run.model_validate_json(row["data"])
+        if lease is None:
+            return run
+        return run.model_copy(
+            update={
+                "lease_owner": lease["owner"],
+                "lease_generation": int(lease["generation"]),
+                "lease_expires_at": _parse_utc(lease["expires_at"]),
+                "heartbeat_at": _parse_utc(lease["heartbeat_at"]),
+            }
+        )
     def list_runs(self, work_id: str | None = None) -> list[Run]:
         return [value for value in self._list("run", Run) if work_id is None or value.work_id == work_id]
 
@@ -175,31 +255,53 @@ class SQLiteStateStore:
     def save_checkpoint(self, value: Checkpoint) -> None: self._save("checkpoint", value)
     def get_checkpoint(self, checkpoint_id: str) -> Checkpoint | None: return self._get("checkpoint", Checkpoint, checkpoint_id)
     def save_compensation(self, value: Compensation) -> None: self._save("compensation", value)
+
+    @staticmethod
+    def _rollback(cursor: sqlite3.Cursor) -> None:
+        try:
+            cursor.execute("ROLLBACK")
+        except Exception:
+            # The original operation is the useful diagnostic.  A rollback
+            # failure must never turn an already typed error back into False.
+            pass
+
     def compare_and_swap(self, kind: str, identifier: str, expected_version: int, new_value) -> bool:
-        import json as _json
+        """Atomically replace a JSON record only at the expected version.
+
+        ``False`` means the predicate matched zero rows (a normal stale/missing
+        record conflict).  Any SQL/transaction failure raises
+        :class:`CASExecutionError`; there is intentionally no permissive
+        insert/upsert fallback.
+        """
 
         data = new_value.model_dump(mode="json")
-        raw = _json.dumps(data, ensure_ascii=False)
+        raw = json.dumps(data, ensure_ascii=False)
         created_at = data.get("created_at", "") if isinstance(data, dict) else ""
         with self._lock:
             cur = self._connection.cursor()
+            transaction_started = False
             try:
                 cur.execute("BEGIN IMMEDIATE")
+                transaction_started = True
                 cur.execute(
-                    "UPDATE runtime_records SET data=?, created_at=? WHERE kind=? AND id=? AND CAST(json_extract(data, '$.version') AS INTEGER)=?",
+                    self._CAS_UPDATE_SQL,
                     (raw, created_at, kind, identifier, expected_version),
                 )
-                if cur.rowcount != 1:
+                if cur.rowcount == 0:
                     cur.execute("ROLLBACK")
+                    transaction_started = False
                     return False
+                if cur.rowcount != 1:
+                    raise sqlite3.DatabaseError(f"CAS affected unexpected row count: {cur.rowcount}")
                 cur.execute("COMMIT")
+                transaction_started = False
                 return True
-            except Exception:
-                try:
-                    cur.execute("ROLLBACK")
-                except Exception:
-                    pass
-                return False
+            except Exception as exc:
+                if transaction_started:
+                    self._rollback(cur)
+                raise CASExecutionError(
+                    f"SQLite CAS execution failed for {kind!r}/{identifier!r}"
+                ) from exc
     def transaction(self):
         from contextlib import contextmanager
         @contextmanager
@@ -213,165 +315,224 @@ class SQLiteStateStore:
                     self._connection.execute("ROLLBACK")
                     raise
         return _tx()
+    def _insert_lease(
+        self,
+        cursor: sqlite3.Cursor,
+        run_id: str,
+        owner: str,
+        generation: int,
+        expires_at: str,
+        heartbeat_at: str,
+    ) -> None:
+        if self._lease_has_version_column:
+            cursor.execute(
+                "INSERT INTO runtime_leases "
+                "(run_id, owner, generation, expires_at, heartbeat_at, version) "
+                "VALUES (?, ?, ?, ?, ?, ?)",
+                (run_id, owner, generation, expires_at, heartbeat_at, generation),
+            )
+            return
+        cursor.execute(
+            "INSERT INTO runtime_leases "
+            "(run_id, owner, generation, expires_at, heartbeat_at) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (run_id, owner, generation, expires_at, heartbeat_at),
+        )
+
+    @staticmethod
+    def _load_run_payload(cursor: sqlite3.Cursor, run_id: str) -> tuple[dict[str, Any], str] | None:
+        row = cursor.execute(
+            "SELECT data, created_at FROM runtime_records WHERE kind=? AND id=?", ("run", run_id)
+        ).fetchone()
+        if row is None:
+            return None
+        payload = json.loads(row["data"])
+        if not isinstance(payload, dict):
+            raise ValueError(f"run record {run_id!r} is not a JSON object")
+        return payload, row["created_at"]
+
+    @staticmethod
+    def _mirror_run_lease(
+        cursor: sqlite3.Cursor,
+        run_id: str,
+        *,
+        owner: str | None,
+        generation: int,
+        expires_at: str | None,
+        heartbeat_at: str | None,
+    ) -> None:
+        loaded = SQLiteStateStore._load_run_payload(cursor, run_id)
+        if loaded is None:
+            raise ValueError(f"run record disappeared while updating lease: {run_id!r}")
+        payload, created_at = loaded
+        payload["lease_owner"] = owner
+        payload["lease_generation"] = generation
+        payload["lease_expires_at"] = expires_at
+        payload["heartbeat_at"] = heartbeat_at
+        cursor.execute(
+            "UPDATE runtime_records SET data=?, created_at=? WHERE kind=? AND id=?",
+            (json.dumps(payload, ensure_ascii=False), payload.get("created_at") or created_at, "run", run_id),
+        )
+
     def acquire_lease(self, run_id: str, owner: str, ttl_seconds: float = 30) -> bool:
-        import datetime
-        import json as _json2
+        if ttl_seconds < 0:
+            raise ValueError("ttl_seconds must be non-negative")
         with self._lock:
             cur = self._connection.cursor()
+            transaction_started = False
             try:
                 cur.execute("BEGIN IMMEDIATE")
-                row = cur.execute("SELECT data FROM runtime_records WHERE kind=? AND id=?", ("run", run_id)).fetchone()
-                if row is None:
+                transaction_started = True
+                run_payload = self._load_run_payload(cur, run_id)
+                if run_payload is None:
                     cur.execute("ROLLBACK")
+                    transaction_started = False
                     return False
-                lease_row = cur.execute("SELECT owner, generation, expires_at FROM runtime_leases WHERE run_id=?", (run_id,)).fetchone()
-                now = datetime.datetime.now(datetime.UTC)
+                lease_row = cur.execute(
+                    "SELECT owner, generation, expires_at FROM runtime_leases WHERE run_id=?", (run_id,)
+                ).fetchone()
+                now = datetime.now(UTC)
                 now_iso = now.isoformat()
-                expires_iso = (now + datetime.timedelta(seconds=ttl_seconds)).isoformat()
-                if lease_row is not None:
-                    exp_raw = lease_row["expires_at"]
-                    gen = int(lease_row["generation"] or 0)
-                    try:
-                        exp_dt = datetime.datetime.fromisoformat(exp_raw) if isinstance(exp_raw, str) else None
-                        if exp_dt is not None and exp_dt.tzinfo is None:
-                            exp_dt = exp_dt.replace(tzinfo=datetime.timezone.utc)
-                    except Exception:
-                        exp_dt = None
-                    if lease_row["owner"] != owner and exp_dt is not None and exp_dt > now:
-                        cur.execute("ROLLBACK")
-                        return False
-                    new_gen = gen + 1
-                    cur.execute(
-                        "INSERT INTO runtime_leases(run_id, owner, generation, expires_at, heartbeat_at, version) VALUES (?,?,?,?,?,?) ON CONFLICT(run_id) DO UPDATE SET owner=excluded.owner, generation=excluded.generation, expires_at=excluded.expires_at, heartbeat_at=excluded.heartbeat_at, version=excluded.version",
-                        (run_id, owner, new_gen, expires_iso, now_iso, new_gen),
-                    )
+                expires_iso = (now + timedelta(seconds=ttl_seconds)).isoformat()
+                if lease_row is None:
+                    payload, _created_at = run_payload
+                    current_owner = payload.get("lease_owner")
+                    current_generation = int(payload.get("lease_generation") or 0)
+                    current_expiry = _parse_utc(payload.get("lease_expires_at"))
                 else:
-                    try:
-                        data = _json2.loads(row["data"]) if isinstance(row["data"], str) else {}
-                        cur_gen = int(data.get("lease_generation") or 0)
-                        cur_owner = data.get("lease_owner")
-                        cur_exp_raw = data.get("lease_expires_at")
-                    except Exception:
-                        cur_gen = 0
-                        cur_owner = None
-                        cur_exp_raw = None
-                    if cur_owner and cur_owner != owner and cur_exp_raw:
-                        try:
-                            cur_exp = datetime.datetime.fromisoformat(cur_exp_raw) if isinstance(cur_exp_raw, str) else None
-                            if cur_exp is not None and cur_exp.tzinfo is None:
-                                cur_exp = cur_exp.replace(tzinfo=datetime.timezone.utc)
-                            if cur_exp is not None and cur_exp > now:
-                                cur.execute("ROLLBACK")
-                                return False
-                        except Exception:
-                            pass
-                    new_gen = cur_gen + 1
-                    cur.execute(
-                        "INSERT INTO runtime_leases(run_id, owner, generation, expires_at, heartbeat_at, version) VALUES (?,?,?,?,?,?) ON CONFLICT(run_id) DO UPDATE SET owner=excluded.owner, generation=excluded.generation, expires_at=excluded.expires_at, heartbeat_at=excluded.heartbeat_at, version=excluded.version",
-                        (run_id, owner, new_gen, expires_iso, now_iso, new_gen),
-                    )
-                cur_row = cur.execute("SELECT data, created_at FROM runtime_records WHERE kind=? AND id=?", ("run", run_id)).fetchone()
-                if cur_row is not None:
-                    try:
-                        rd = _json2.loads(cur_row["data"])
-                    except Exception:
-                        rd = {}
-                    rd["lease_owner"] = owner
-                    rd["lease_generation"] = new_gen
-                    rd["lease_expires_at"] = expires_iso
-                    rd["heartbeat_at"] = now_iso
-                    raw = _json2.dumps(rd, ensure_ascii=False)
-                    created_at = rd.get("created_at") or cur_row["created_at"] or now_iso
-                    cur.execute("UPDATE runtime_records SET data=?, created_at=? WHERE kind=? AND id=?", (raw, created_at, "run", run_id))
-                cur.execute("COMMIT")
-                return True
-            except Exception:
-                try:
+                    current_owner = lease_row["owner"]
+                    current_generation = int(lease_row["generation"])
+                    current_expiry = _parse_utc(lease_row["expires_at"])
+
+                # A different owner may take over only after a known expiry.
+                # ``None``/malformed expiry is not treated as expired.
+                if (
+                    current_owner is not None
+                    and current_owner != owner
+                    and (current_expiry is None or current_expiry > now)
+                ):
                     cur.execute("ROLLBACK")
-                except Exception:
-                    pass
-                return False
+                    transaction_started = False
+                    return False
+
+                new_generation = current_generation + 1
+                if lease_row is None:
+                    self._insert_lease(cur, run_id, owner, new_generation, expires_iso, now_iso)
+                else:
+                    cur.execute(
+                        "UPDATE runtime_leases SET owner=?, generation=?, expires_at=?, heartbeat_at=? "
+                        "WHERE run_id=?",
+                        (owner, new_generation, expires_iso, now_iso, run_id),
+                    )
+                    if cur.rowcount != 1:
+                        raise sqlite3.DatabaseError("lease acquire updated an unexpected row count")
+                self._mirror_run_lease(
+                    cur,
+                    run_id,
+                    owner=owner,
+                    generation=new_generation,
+                    expires_at=expires_iso,
+                    heartbeat_at=now_iso,
+                )
+                cur.execute("COMMIT")
+                transaction_started = False
+                return True
+            except Exception as exc:
+                if transaction_started:
+                    self._rollback(cur)
+                raise LeaseExecutionError(f"SQLite lease acquire failed for {run_id!r}") from exc
 
     def renew_lease(self, run_id: str, owner: str, ttl_seconds: float = 30) -> bool:
-        import datetime
-        import json as _json2
+        if ttl_seconds < 0:
+            raise ValueError("ttl_seconds must be non-negative")
         with self._lock:
             cur = self._connection.cursor()
+            transaction_started = False
             try:
                 cur.execute("BEGIN IMMEDIATE")
-                lease_row = cur.execute("SELECT owner, generation, expires_at FROM runtime_leases WHERE run_id=?", (run_id,)).fetchone()
-                now = datetime.datetime.now(datetime.UTC)
+                transaction_started = True
+                lease_row = cur.execute(
+                    "SELECT owner, generation, expires_at FROM runtime_leases WHERE run_id=?", (run_id,)
+                ).fetchone()
+                now = datetime.now(UTC)
                 if lease_row is None or lease_row["owner"] != owner:
                     cur.execute("ROLLBACK")
+                    transaction_started = False
                     return False
-                try:
-                    exp_dt = datetime.datetime.fromisoformat(lease_row["expires_at"]) if isinstance(lease_row["expires_at"], str) else None
-                    if exp_dt is not None and exp_dt.tzinfo is None:
-                        exp_dt = exp_dt.replace(tzinfo=datetime.timezone.utc)
-                    if exp_dt is not None and exp_dt <= now:
-                        cur.execute("ROLLBACK")
-                        return False
-                except Exception:
-                    pass
-                expires_iso = (now + datetime.timedelta(seconds=ttl_seconds)).isoformat()
-                now_iso = now.isoformat()
-                cur.execute("UPDATE runtime_leases SET expires_at=?, heartbeat_at=? WHERE run_id=?", (expires_iso, now_iso, run_id))
-                cur_row = cur.execute("SELECT data, created_at FROM runtime_records WHERE kind=? AND id=?", ("run", run_id)).fetchone()
-                if cur_row is not None:
-                    try:
-                        rd = _json2.loads(cur_row["data"])
-                    except Exception:
-                        rd = {}
-                    if rd.get("lease_owner") != owner:
-                        cur.execute("ROLLBACK")
-                        return False
-                    rd["lease_expires_at"] = expires_iso
-                    rd["heartbeat_at"] = now_iso
-                    raw = _json2.dumps(rd, ensure_ascii=False)
-                    created_at = rd.get("created_at") or cur_row["created_at"] or now_iso
-                    cur.execute("UPDATE runtime_records SET data=?, created_at=? WHERE kind=? AND id=?", (raw, created_at, "run", run_id))
-                cur.execute("COMMIT")
-                return True
-            except Exception:
-                try:
+                current_expiry = _parse_utc(lease_row["expires_at"])
+                if current_expiry is None or current_expiry <= now:
                     cur.execute("ROLLBACK")
-                except Exception:
-                    pass
-                return False
+                    transaction_started = False
+                    return False
+                if self._load_run_payload(cur, run_id) is None:
+                    cur.execute("ROLLBACK")
+                    transaction_started = False
+                    return False
+                now_iso = now.isoformat()
+                expires_iso = (now + timedelta(seconds=ttl_seconds)).isoformat()
+                cur.execute(
+                    "UPDATE runtime_leases SET expires_at=?, heartbeat_at=? "
+                    "WHERE run_id=? AND owner=?",
+                    (expires_iso, now_iso, run_id, owner),
+                )
+                if cur.rowcount != 1:
+                    raise sqlite3.DatabaseError("lease renew updated an unexpected row count")
+                self._mirror_run_lease(
+                    cur,
+                    run_id,
+                    owner=owner,
+                    generation=int(lease_row["generation"]),
+                    expires_at=expires_iso,
+                    heartbeat_at=now_iso,
+                )
+                cur.execute("COMMIT")
+                transaction_started = False
+                return True
+            except Exception as exc:
+                if transaction_started:
+                    self._rollback(cur)
+                raise LeaseExecutionError(f"SQLite lease renew failed for {run_id!r}") from exc
 
     def release_lease(self, run_id: str, owner: str) -> bool:
-        import datetime
-        import json as _json2
         with self._lock:
             cur = self._connection.cursor()
+            transaction_started = False
             try:
                 cur.execute("BEGIN IMMEDIATE")
-                lease_row = cur.execute("SELECT owner FROM runtime_leases WHERE run_id=?", (run_id,)).fetchone()
+                transaction_started = True
+                lease_row = cur.execute(
+                    "SELECT owner, generation FROM runtime_leases WHERE run_id=?", (run_id,)
+                ).fetchone()
                 if lease_row is None or lease_row["owner"] != owner:
                     cur.execute("ROLLBACK")
+                    transaction_started = False
                     return False
-                cur.execute("DELETE FROM runtime_leases WHERE run_id=?", (run_id,))
-                cur_row = cur.execute("SELECT data, created_at FROM runtime_records WHERE kind=? AND id=?", ("run", run_id)).fetchone()
-                if cur_row is not None:
-                    try:
-                        rd = _json2.loads(cur_row["data"])
-                    except Exception:
-                        rd = {}
-                    if rd.get("lease_owner") != owner:
-                        cur.execute("ROLLBACK")
-                        return False
-                    rd["lease_owner"] = None
-                    raw = _json2.dumps(rd, ensure_ascii=False)
-                    created_at = rd.get("created_at") or cur_row["created_at"] or ""
-                    cur.execute("UPDATE runtime_records SET data=?, created_at=? WHERE kind=? AND id=?", (raw, created_at, "run", run_id))
-                cur.execute("COMMIT")
-                return True
-            except Exception:
-                try:
+                if self._load_run_payload(cur, run_id) is None:
                     cur.execute("ROLLBACK")
-                except Exception:
-                    pass
-                return False
+                    transaction_started = False
+                    return False
+                cur.execute(
+                    "UPDATE runtime_leases SET owner=NULL, expires_at=NULL, heartbeat_at=NULL "
+                    "WHERE run_id=? AND owner=?",
+                    (run_id, owner),
+                )
+                if cur.rowcount != 1:
+                    raise sqlite3.DatabaseError("lease release updated an unexpected row count")
+                self._mirror_run_lease(
+                    cur,
+                    run_id,
+                    owner=None,
+                    generation=int(lease_row["generation"]),
+                    expires_at=None,
+                    heartbeat_at=None,
+                )
+                cur.execute("COMMIT")
+                transaction_started = False
+                return True
+            except Exception as exc:
+                if transaction_started:
+                    self._rollback(cur)
+                raise LeaseExecutionError(f"SQLite lease release failed for {run_id!r}") from exc
 
     # Records V1.2
     def save_record(self, value: BaseRecord) -> None:

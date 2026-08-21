@@ -70,26 +70,9 @@ class IncidentRepairWorkflow:
                 context.transition_run("failed", current_step="diagnose-failed")
             return "failed"
 
-        # 3. execute reversible repair
-        with contextlib.suppress(Exception):
-            context.set_step("repair")
-        edit = await context.invoke(
-            "code.edit", instruction=f"repair {work.title}", patch_hint=work.metadata.get("patch_hint", "")
-        )
-        if edit.status == "failed":
-            with contextlib.suppress(ValueError):
-                context.transition_run("failed", current_step="repair-failed")
-            return "failed"
-
-        # 4. verify with independent verifier
-        with contextlib.suppress(Exception):
-            context.set_step("verify")
-        verify_http = await context.invoke(
-            "verify.http", url=work.metadata.get("verify_url", ""), expected_status=[200, 301, 302]
-        )
-        verify_git = await context.invoke("verify.git_diff", diff=edit.message or "")
-
-        # 5. request approval if policy requires it
+        # 3. request approval before any action-critical repair.  The old
+        # order invoked code.edit first and only then asked for approval,
+        # which is incompatible with a fail-closed boundary.
         policy_ctx = build_incident_policy_context(
             work_id=work.id,
             work_title=work.title,
@@ -115,8 +98,6 @@ class IncidentRepairWorkflow:
                         subj_versions = [ph]
                     elif isinstance(ph, list):
                         subj_versions = [str(x) for x in ph]
-                    if not subj_versions and edit.output_artifact_refs:
-                        subj_versions = list(edit.output_artifact_refs[:1])
                     if not subj_versions:
                         subj_versions = [f"{work.id}:v1"]
                     principal = str(work.metadata.get("approver", "human:owner"))
@@ -149,6 +130,25 @@ class IncidentRepairWorkflow:
                 with contextlib.suppress(ValueError):
                     context.transition_run("blocked", current_step="approval-blocked")
                 return "blocked"
+
+        # 4. execute reversible repair only after the approval/grant gate.
+        with contextlib.suppress(Exception):
+            context.set_step("repair")
+        edit = await context.invoke(
+            "code.edit", instruction=f"repair {work.title}", patch_hint=work.metadata.get("patch_hint", "")
+        )
+        if edit.status in {"failed", "unavailable"}:
+            with contextlib.suppress(ValueError):
+                context.transition_run("failed" if edit.status == "failed" else "blocked", current_step="repair-failed")
+            return "failed" if edit.status == "failed" else "blocked"
+
+        # 5. verify with independent verifier
+        with contextlib.suppress(Exception):
+            context.set_step("verify")
+        verify_http = await context.invoke(
+            "verify.http", url=work.metadata.get("verify_url", ""), expected_status=[200, 301, 302]
+        )
+        verify_git = await context.invoke("verify.git_diff", diff=edit.message or "")
 
         # 6. apply / merge (verify must have passed or at least one verifier succeeded)
         verify_ok = verify_http.status == "succeeded" or verify_git.status == "succeeded"
