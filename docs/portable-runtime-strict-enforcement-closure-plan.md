@@ -19,7 +19,7 @@
 - [主分支 CI](https://github.com/ratiolin/portable-runtime/actions/runs/32432839060)：lint/test、strict-conformance、SonarCloud 全部通过；
 - [SonarCloud](https://sonarcloud.io/project/overview?id=portable-runtime)：commit `bdec663509ab7d6ad4e5bf7740838f6f6f852179` 的 quality gate 为 `OK`。
 
-这里的“闭合”只覆盖本文件的 P0 范围，不代表更宽的语义改进方案中的 P1/P2 已完成；后者仍以 `docs/portable-runtime-strict-enforcement-plan.md` 为跟踪入口。
+这里的“闭合”仍只覆盖本文件定义的 P0 范围；同日追加的 P1/P2 协议稳定化已在本分支与主分支完成，并以 `docs/portable-runtime-strict-enforcement-plan.md` 作为完整执行记录与后续责任遥测入口。
 
 > 目标：停止新增抽象，停止用 commit message 或 test name 代替实际 enforcement。
 >
