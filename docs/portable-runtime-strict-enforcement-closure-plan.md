@@ -10,7 +10,7 @@
 - qualification 只接受 typed refs，边界创建 AssessmentContext/InvocationPermit 并在现实出口前做 TOCTOU digest recheck；
 - KnowledgeProjection、Derivation、独立 verification judgment、deep ReopenPackage/HandoffEnvelope、impact/disposition 分层均有 canonical 路径；
 - Event Journal、bundle/state graph validation、projection bundle portability、HTTP loopback governance 均有执行路径和负路径测试；
-- fresh local proof: `uv run ruff check .`, `uv run mypy src`, `uv run pytest -q` → `242 passed`，strict-conformance selection → `45 passed`。
+- fresh local proof: `uv run ruff check .`, `uv run mypy src`, `uv run pytest -q` → `244 passed`，strict-conformance selection → `45 passed`；[主分支 CI](https://github.com/ratiolin/portable-runtime/actions/runs/32438273097) 对提交 `2cb5b18cee5f517a43817a5d645312baea5e0f53` 全绿，SonarCloud quality gate 为 `OK`（new-code coverage `80.17%`）。
 
 - 全量本地验证（P0 基线记录）：`uv run pytest -q` → `223 passed`，仅保留两个既有 collection/deprecation warnings；
 - 严格一致性验证：E001–E020（21 cases）与 S001–S006（6 cases）；
