@@ -474,6 +474,27 @@ def test_config_and_compat(tmp_path: Path):
     with pytest.raises(ValueError):
         import_legacy_repair({}, store)
 
+
+def test_legacy_task_adapter_preserves_personal_task_workflow():
+    from portable_runtime.compat.legacy_control_plane import import_legacy_repair
+
+    store = InMemoryStateStore()
+    work, run = import_legacy_repair(
+        {
+            "id": "task-1",
+            "fingerprint": "task:task-1",
+            "status": "closed",
+            "payload_json": '{"kind":"task","prompt":"produce report","repo":"D:/repo"}',
+        },
+        store,
+    )
+    assert work.kind == "generic-task"
+    assert work.description == "produce report"
+    assert work.status == "waiting"
+    assert run.workflow_id == "personal-task"
+    assert run.status == "waiting"
+    assert work.metadata["canonical_workflow"] == "personal-task"
+
 def test_runtime_bundle_helpers(tmp_path: Path):
     rt = Runtime(runtime_id="rt-bundle")
     w = rt.create_work(title="t", description="d")

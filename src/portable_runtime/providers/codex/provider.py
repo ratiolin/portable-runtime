@@ -13,7 +13,7 @@ import time
 from collections.abc import Mapping
 from pathlib import Path
 from types import MappingProxyType
-from typing import Final, Literal, Protocol, cast
+from typing import Final, Literal, Protocol
 
 from portable_runtime.core.capabilities import (
     CapabilityRequest,
@@ -53,7 +53,7 @@ class ExecutionBoundary(Protocol):
 
 # The capability is the authority for the Codex process sandbox.  Keep the
 # default mapping immutable so callers cannot widen it at runtime; an explicit
-# deployment mapping is accepted only after validating the same safe profiles.
+# deployment mapping may only tighten a write-capable capability to read-only.
 CODEX_SANDBOX_BY_CAPABILITY: Final[Mapping[str, SandboxProfile]] = MappingProxyType(
     {
         "reason.generate": "read-only",
@@ -77,6 +77,36 @@ def sandbox_for_capability(capability: str) -> SandboxProfile:
     """
 
     return CODEX_SANDBOX_BY_CAPABILITY.get(capability, "read-only")
+
+
+def _validate_sandbox_overrides(overrides: Mapping[str, str] | None) -> dict[str, SandboxProfile]:
+    """Validate deployment overrides without allowing a capability widening.
+
+    The canonical capability mapping is the authority.  Overrides are useful
+    for a more constrained deployment (for example, running ``code.test`` in
+    a read-only sandbox), but they can never turn a canonical read-only or
+    unknown capability into ``workspace-write``.
+    """
+
+    validated: dict[str, SandboxProfile] = {}
+    for capability, sandbox in (overrides or {}).items():
+        if sandbox == "read-only":
+            validated[capability] = "read-only"
+            continue
+        if sandbox == "workspace-write":
+            canonical = sandbox_for_capability(capability)
+            if canonical != "workspace-write":
+                raise ValueError(
+                    f"Codex sandbox override for {capability!r} would widen the canonical "
+                    f"{canonical!r} sandbox to 'workspace-write'"
+                )
+            validated[capability] = "workspace-write"
+            continue
+        raise ValueError(
+            f"unsupported Codex sandbox {sandbox!r} for {capability!r}; "
+            f"allowed={sorted(_ALLOWED_CODEX_SANDBOXES)}"
+        )
+    return validated
 
 
 def _resolve_cli(explicit: str | Path | None) -> Path:
@@ -123,14 +153,8 @@ class CodexProvider:
         # the provider itself remains independent of control-plane modules.
         self._execution_boundary = execution_boundary
         self._sandbox_by_capability: dict[str, SandboxProfile] = dict(CODEX_SANDBOX_BY_CAPABILITY)
-        if sandbox_by_capability:
-            for capability, sandbox in sandbox_by_capability.items():
-                if sandbox not in _ALLOWED_CODEX_SANDBOXES:
-                    raise ValueError(
-                        f"unsupported Codex sandbox {sandbox!r} for {capability!r}; "
-                        f"allowed={sorted(_ALLOWED_CODEX_SANDBOXES)}"
-                    )
-                self._sandbox_by_capability[capability] = cast(SandboxProfile, sandbox)
+        self._sandbox_overrides = _validate_sandbox_overrides(sandbox_by_capability)
+        self._sandbox_by_capability.update(self._sandbox_overrides)
         self._descriptor = ProviderDescriptor(
             id=provider_id,
             name="Codex Provider",
@@ -152,7 +176,8 @@ class CodexProvider:
                 "gateway_base_url": gateway_base_url or "",
                 "sandbox_by_capability": dict(CODEX_SANDBOX_BY_CAPABILITY),
                 "unknown_capability_sandbox": "read-only",
-                "sandbox_override": "forbidden",
+                "sandbox_override": "tighten-only",
+                "sandbox_overrides": dict(self._sandbox_overrides),
             },
         )
 

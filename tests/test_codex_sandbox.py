@@ -65,6 +65,19 @@ def test_sandbox_for_capability_fails_closed(capability: str, expected: str) -> 
     assert sandbox_for_capability(capability) == expected
 
 
+@pytest.mark.parametrize("capability", ["reason.generate", "code.read", "unknown.capability"])
+def test_codex_provider_rejects_sandbox_widening(capability: str) -> None:
+    with pytest.raises(ValueError, match="would widen"):
+        CodexProvider(sandbox_by_capability={capability: "workspace-write"})
+
+
+def test_codex_provider_allows_only_tightening_write_capabilities() -> None:
+    provider = CodexProvider(sandbox_by_capability={"code.test": "read-only"})
+
+    assert provider.descriptor.metadata["sandbox_override"] == "tighten-only"
+    assert provider.descriptor.metadata["sandbox_overrides"] == {"code.test": "read-only"}
+
+
 @pytest.mark.asyncio
 async def test_codex_provider_uses_capability_mapping_and_rejects_override(tmp_path: Path) -> None:
     executor = _FakeExecutor()
@@ -104,7 +117,7 @@ def test_codex_manifest_declares_provider_neutral_sandbox_contract() -> None:
     metadata = manifest["metadata"]
     assert metadata["sandbox_by_capability"] == CODEX_SANDBOX_BY_CAPABILITY
     assert metadata["unknown_capability_sandbox"] == "read-only"
-    assert metadata["sandbox_override"] == "forbidden"
+    assert metadata["sandbox_override"] == "tighten-only"
 
 
 @pytest.mark.asyncio
