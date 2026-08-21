@@ -9,6 +9,7 @@ in ``core/boundary.py``.
 
 from __future__ import annotations
 
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from typing import Any, Literal
 
@@ -81,3 +82,67 @@ class BoundaryStagePlan:
         "projection",
     )
     provider_invocation_owner: str = "RealityBoundary"
+
+
+@dataclass(frozen=True)
+class ReliabilityStageDecision:
+    """Result of the private reliability stage implementation."""
+
+    allowed: bool
+    reason: str | None = None
+    error: Exception | None = None
+
+
+def evaluate_reliability_stage(
+    reliability: Any,
+    stage_input: ReliabilityStageInput,
+    call_supported: Callable[..., Any],
+) -> ReliabilityStageDecision:
+    """Evaluate reliability without exposing a provider capability."""
+
+    try:
+        if hasattr(reliability, "assess"):
+            allowed, reason = call_supported(reliability.assess, **stage_input.as_kwargs())
+        else:
+            allowed = call_supported(reliability.can_execute, **stage_input.as_kwargs())
+            reason = getattr(reliability, "last_block_reason", None) or "reliability budget exhausted"
+        return ReliabilityStageDecision(bool(allowed), str(reason) if reason is not None else None)
+    except Exception as exc:  # pragma: no cover - caller maps the typed failure
+        return ReliabilityStageDecision(False, error=exc)
+
+
+@dataclass(frozen=True)
+class ProviderSelectionDecision:
+    """Provider health/routing result; invocation remains owned by Boundary."""
+
+    healthy: tuple[Any, ...]
+    selected: Any | None = None
+    error: Exception | None = None
+    error_phase: Literal["eligibility", "routing"] | None = None
+
+
+async def select_provider_stage(
+    registry: Any,
+    routing: Any,
+    request: Any,
+    descriptors: Sequence[Any],
+    circuit_for: Callable[[str], Any],
+) -> ProviderSelectionDecision:
+    """Run health, circuit and constraint selection before the reality exit."""
+
+    healthy: list[Any] = []
+    for descriptor in descriptors:
+        try:
+            health = await registry.health(descriptor.id)
+            if not health.available:
+                continue
+            if not circuit_for(descriptor.id).allow():
+                continue
+            healthy.append(descriptor)
+        except Exception as exc:  # pragma: no cover - caller maps the typed failure
+            return ProviderSelectionDecision(tuple(healthy), error=exc, error_phase="eligibility")
+    try:
+        selected = await routing.select(request, healthy) if healthy else None
+    except Exception as exc:  # pragma: no cover - caller maps the typed failure
+        return ProviderSelectionDecision(tuple(healthy), error=exc, error_phase="routing")
+    return ProviderSelectionDecision(tuple(healthy), selected=selected)
