@@ -12,5 +12,17 @@
     }
   ],
   "capabilities": ["reason.generate","code.read","code.edit","code.test","shell.exec","git.diff"],
+  "metadata": {
+    "sandbox_by_capability": {
+      "reason.generate": "read-only",
+      "code.read": "read-only",
+      "git.diff": "read-only",
+      "code.edit": "workspace-write",
+      "code.test": "workspace-write",
+      "shell.exec": "workspace-write"
+    },
+    "unknown_capability_sandbox": "read-only",
+    "sandbox_override": "forbidden"
+  },
   "description": "Wraps codex exec as a portable CapabilityProvider; health checks codex --version."
 }

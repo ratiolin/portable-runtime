@@ -5,7 +5,11 @@ import hashlib
 import json
 
 from portable_runtime.core.capabilities import CapabilityRequest
-from portable_runtime.core.capability_contract import CapabilityContractRegistry, compute_effective_impact
+from portable_runtime.core.capability_contract import (
+    CapabilityContractRegistry,
+    compute_effective_impact,
+    compute_effective_procedure_profile,
+)
 from portable_runtime.core.models import new_id
 
 _IMPACT_ORDER = {"read": 0, "write-local": 1, "write-remote": 2, "deploy": 3, "admin": 4, "irreversible": 5}
@@ -88,7 +92,10 @@ class InvocationFactory:
             independence_context["independent_on"] = list(contract.default_independence_requirements)
         if "independence_constraints" in metadata and isinstance(metadata["independence_constraints"], dict):
             independence_context.update(metadata["independence_constraints"])
-        procedure_profile = contract.minimum_procedure_profile if contract else "minimal"
+        procedure_profile = compute_effective_procedure_profile(
+            contract.minimum_procedure_profile if contract else "minimal",
+            metadata.get("procedure_profile"),
+        )
         param_hash = _hash_params(capability, instruction, parameters)
         if not idempotency_key:
             idempotency_key = f"{run_id}:{capability}:{param_hash}" if run_id else f"{capability}:{param_hash}:{new_id('idem')}"

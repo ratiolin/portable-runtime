@@ -243,6 +243,7 @@ _KIND_TO_PROOF: dict[str, str] = {
     "recordrelation": "relations",
     "checkpoint": "checkpoints",
     "decision": "decisions",
+    "decisionrecord": "decisions",
     "obligation": "obligation_proofs",
     "policyobligation": "obligation_proofs",
     "failurestop": "failure_stop_proofs",
@@ -480,6 +481,12 @@ def _lookup(store: Any, ref: QualificationRef) -> Any | None:
     getters: list[str]
     if kind in {"authorization", "authorizationgrant", "grant"}:
         getters = ["get_authorization"]
+    elif kind in {"decision", "decisionrecord"}:
+        # Legacy core Decision records live in the dedicated decision bucket,
+        # while newer typed Decision records live in the generic record bucket.
+        # Prefer the typed getter but retain the generic fallback for migration
+        # and mixed stores.
+        getters = ["get_decision", "get_record"]
     elif kind in {"relation", "recordrelation"}:
         getters = ["get_relation"]
     elif kind in {"checkpoint"}:
@@ -487,7 +494,14 @@ def _lookup(store: Any, ref: QualificationRef) -> Any | None:
     elif kind in {"evidence", "evidenceartifact", "observation"}:
         getters = ["get_record", "get_evidence"]
     else:
-        getters = ["get_record", "get_authorization", "get_relation", "get_checkpoint", "get_evidence"]
+        getters = [
+            "get_record",
+            "get_decision",
+            "get_authorization",
+            "get_relation",
+            "get_checkpoint",
+            "get_evidence",
+        ]
     for getter_name in getters:
         getter = getattr(store, getter_name, None)
         if not callable(getter):

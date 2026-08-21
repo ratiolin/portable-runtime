@@ -68,4 +68,10 @@ Providers return structured `status` (`succeeded/failed/unavailable/needs-input/
 
 Capabilities are open strings, e.g. `reason.generate, code.edit, verify.http, human.approve, notify.send`. Core never hardcodes the set.
 
+The built-in Codex provider derives its process sandbox from the capability,
+not from request parameters: `reason.generate`, `code.read`, and `git.diff`
+use `read-only`; `code.edit`, `code.test`, and `shell.exec` use
+`workspace-write`; unknown capabilities fail closed to `read-only`. A caller
+cannot request `danger-full-access` through the capability request.
+
 See `docs/provider-protocol.md` for the language-neutral stdio JSONL transport, `docs/plugin-authoring.md` for the file layout.

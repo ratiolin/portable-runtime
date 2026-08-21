@@ -9,7 +9,10 @@ import asyncio
 import json
 import logging
 import time
+from collections.abc import Mapping
 from pathlib import Path
+from types import MappingProxyType
+from typing import Final, Literal
 
 from portable_runtime.core.capabilities import (
     CapabilityRequest,
@@ -22,6 +25,29 @@ from portable_runtime.core.process import PortableSubprocessExecutor, ProcessExe
 from portable_runtime.stores.filesystem import FilesystemArtifactStore
 
 logger = logging.getLogger(__name__)
+
+SandboxProfile = Literal["read-only", "workspace-write"]
+
+# The capability is the authority for the Codex process sandbox.  Unknown
+# capabilities fail closed to read-only, and request parameters are never
+# consulted for this decision.  In particular, callers cannot smuggle a
+# ``danger-full-access`` override through ``parameters``.
+CODEX_SANDBOX_BY_CAPABILITY: Final[Mapping[str, SandboxProfile]] = MappingProxyType(
+    {
+        "reason.generate": "read-only",
+        "code.read": "read-only",
+        "git.diff": "read-only",
+        "code.edit": "workspace-write",
+        "code.test": "workspace-write",
+        "shell.exec": "workspace-write",
+    }
+)
+
+
+def sandbox_for_capability(capability: str) -> SandboxProfile:
+    """Return the fail-closed Codex sandbox for a capability name."""
+
+    return CODEX_SANDBOX_BY_CAPABILITY.get(capability, "read-only")
 
 
 def _resolve_cli(explicit: str | Path | None) -> Path:
@@ -85,7 +111,14 @@ class CodexProvider:
             priority=10,
             tags={"external-tool", "supports-files"},
             constraints={},
-            metadata={"model": model, "cli": str(self._cli), "gateway_base_url": gateway_base_url or ""},
+            metadata={
+                "model": model,
+                "cli": str(self._cli),
+                "gateway_base_url": gateway_base_url or "",
+                "sandbox_by_capability": dict(CODEX_SANDBOX_BY_CAPABILITY),
+                "unknown_capability_sandbox": "read-only",
+                "sandbox_override": "forbidden",
+            },
         )
 
     @property
@@ -148,7 +181,17 @@ class CodexProvider:
             session_dir.mkdir(parents=True, exist_ok=True)
         except Exception:  # noqa: S110
             pass  # noqa: S110
-        argv = [str(self._cli), "exec", "--model", model, "--sandbox", "danger-full-access", "--skip-git-repo-check", "--json", prompt]  # noqa: E501
+        argv = [
+            str(self._cli),
+            "exec",
+            "--model",
+            model,
+            "--sandbox",
+            sandbox_for_capability(request.capability),
+            "--skip-git-repo-check",
+            "--json",
+            prompt,
+        ]
         # Normalize Windows path for cwd (same as control_plane.codex_runner.repo_path_to_windows)
         import os
 
