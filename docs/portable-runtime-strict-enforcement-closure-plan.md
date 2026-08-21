@@ -11,7 +11,7 @@
 - KnowledgeProjection、Derivation、独立 verification judgment、deep ReopenPackage/HandoffEnvelope、impact/disposition 分层均有 canonical 路径；
 - Event Journal、bundle/state graph validation、projection bundle portability、HTTP loopback governance 均有执行路径和负路径测试；
 - compatibility non-reentrancy、Derivation epistemic whitelist、`DependencyImpact → RiskAssessment → RevalidationDisposition`、Memory/SQLite fixed-point parity 和 authority-sensitive permit snapshot 已补齐；
-- fresh local proof: `uv run ruff check .`, `uv run mypy src`, `uv run pytest -q` → `250 passed`，strict-conformance selection → `53 passed`；远端 CI/SonarCloud 结果将在本轮推送后补记。
+- fresh local proof: `uv run ruff check .`, `uv run mypy src`, `uv run pytest -q` → `250 passed`，strict-conformance selection → `53 passed`；[主分支 CI](https://github.com/ratiolin/portable-runtime/actions/runs/32440264051) 对提交 `63bac6d9f31eb10235879a531d62f788303ebf37` 全绿，SonarCloud quality gate 为 `OK`（new-code coverage `80.4%`）。
 
 - 全量本地验证（P0 基线记录）：`uv run pytest -q` → `223 passed`，仅保留两个既有 collection/deprecation warnings；
 - 严格一致性验证：E001–E020（21 cases）与 S001–S006（6 cases）；
