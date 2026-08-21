@@ -731,7 +731,7 @@ class AssessmentContext:
                     )
                 refs.append(ref)
                 if bucket == "procedure_proofs":
-                    category = _metadata(cloned).get("qualification_kind")
+                    category = _metadata(cloned).get("qualification_kind") or ref.kind
                     target_bucket = (
                         _KIND_TO_PROOF.get(str(category).replace("_", "").replace("-", "").lower())
                         if category
