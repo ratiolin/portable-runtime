@@ -93,8 +93,9 @@ def _circuit_for(provider_id: str) -> CircuitBreaker:
     return _CIRCUITS[provider_id]
 
 def _digest_request(request: CapabilityRequest) -> str:
-    payload = json.dumps({"cap": request.capability, "inst": request.instruction, "params": request.parameters}, sort_keys=True, default=str)
-    return hashlib.sha256(payload.encode()).hexdigest()[:16]
+    payload = request.model_dump(mode="json")
+    serialized = json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str)
+    return hashlib.sha256(serialized.encode()).hexdigest()
 
 def _extract_lease_generation(request: CapabilityRequest) -> int | None:
     lg = getattr(request, "lease_generation", None)
@@ -800,12 +801,17 @@ class RealityBoundary:
             except Exception as exc:  # noqa: BLE001
                 _append_event(store, CODE_QUALIFICATION_CHANGED, request.id, {"reason": str(exc), "provider_id": provider_id})
                 return self._error_result(request, CODE_QUALIFICATION_CHANGED, f"qualification revalidation failed: {exc}", provider_id=provider_id)
-        permit = InvocationPermit(
-            request_digest=_digest_request(request),
-            qualification_digest=assessment.digest if assessment is not None else "",
+        permit = InvocationPermit.issue(
+            request,
             provider_id=provider_id,
+            qualification_digest=assessment.digest if assessment is not None else "",
             lease_generation=_extract_lease_generation(request) or 0,
         )
+        # From this point onward all precommit, fencing and provider-facing
+        # work consumes the permit's reconstructed snapshot, never the
+        # caller-owned mutable request object.
+        execution_request = permit.materialize_request()
+        request = execution_request
 
         # Precommit is mandatory for all action-critical effects.  A missing
         # durable store or identity is itself a STOP, never a bypass.
@@ -825,9 +831,9 @@ class RealityBoundary:
                 step = next((candidate for candidate in existing_steps if candidate.step_key == step_key), None)
                 lease_gen = _extract_lease_generation(request) or 0
                 if step is None:
-                    step = Step(id=new_id("step"), run_id=request.run_id, step_key=step_key, kind=request.capability.split(".")[0] if "." in request.capability else "generic", status="running", effect_semantics=effect_semantics, side_effect_class=side_effect_class, reversibility=getattr(selected, "reversibility", "unknown"), input_digest=_digest_request(request), lease_generation=lease_gen)
+                    step = Step(id=new_id("step"), run_id=request.run_id, step_key=step_key, kind=request.capability.split(".")[0] if "." in request.capability else "generic", status="running", effect_semantics=effect_semantics, side_effect_class=side_effect_class, reversibility=getattr(selected, "reversibility", "unknown"), input_digest=permit.request_digest, lease_generation=lease_gen)
                 else:
-                    step = step.model_copy(update={"status": "running", "updated_at": utcnow(), "input_digest": _digest_request(request), "effect_semantics": effect_semantics, "side_effect_class": side_effect_class, "lease_generation": lease_gen, "version": (step.version or 0) + 1})
+                    step = step.model_copy(update={"status": "running", "updated_at": utcnow(), "input_digest": permit.request_digest, "effect_semantics": effect_semantics, "side_effect_class": side_effect_class, "lease_generation": lease_gen, "version": (step.version or 0) + 1})
                 step_id = step.id
                 attempts = store.list_attempts(step_id) if hasattr(store, "list_attempts") else []
                 attempt_no = max((a.attempt_no for a in attempts), default=0) + 1
@@ -867,9 +873,9 @@ class RealityBoundary:
                     step_key = request.step_key or f"{request.capability}:{request.idempotency_key or request.id}"
                     step = next((candidate for candidate in existing_steps if candidate.step_key == step_key), None)
                     if step is None:
-                        step = Step(id=new_id("step"), run_id=request.run_id, step_key=step_key, kind=request.capability.split(".")[0] if "." in request.capability else "generic", status="running", effect_semantics=effect_semantics, side_effect_class=side_effect_class, reversibility=getattr(selected, "reversibility", "unknown"), input_digest=_digest_request(request), lease_generation=_extract_lease_generation(request) or 0)
+                        step = Step(id=new_id("step"), run_id=request.run_id, step_key=step_key, kind=request.capability.split(".")[0] if "." in request.capability else "generic", status="running", effect_semantics=effect_semantics, side_effect_class=side_effect_class, reversibility=getattr(selected, "reversibility", "unknown"), input_digest=permit.request_digest, lease_generation=_extract_lease_generation(request) or 0)
                     else:
-                        step = step.model_copy(update={"status": "running", "updated_at": utcnow(), "input_digest": _digest_request(request)})
+                        step = step.model_copy(update={"status": "running", "updated_at": utcnow(), "input_digest": permit.request_digest})
                     step_id = step.id
                     store.save_step(step)
                     if hasattr(store, "save_attempt"):
@@ -900,8 +906,8 @@ class RealityBoundary:
             if reliability_started and hasattr(self.reliability, "complete_action"):
                 _call_supported(self.reliability.complete_action, side_effect=True)
             return self._error_result(request, CODE_ROUTING_UNAVAILABLE, f"provider lookup failed: {exc}", provider_id=provider_id)
-        context = InvocationContext(runtime_id=self.runtime_id, work_id=request.work_id, run_id=request.run_id, lease_generation=_extract_lease_generation(request) or 0, idempotency_key=request.idempotency_key)
-        context.metadata.update(request.metadata or {})
+        context = InvocationContext(runtime_id=self.runtime_id, work_id=execution_request.work_id, run_id=execution_request.run_id, lease_generation=permit.lease_generation, idempotency_key=execution_request.idempotency_key)
+        context.metadata.update(execution_request.metadata or {})
         context.metadata.update(
             {
                 "qualification_digest": permit.qualification_digest,
@@ -913,7 +919,7 @@ class RealityBoundary:
         _append_event(store, "InvocationStarted", request.id, {"provider_id": provider_id, "capability": request.capability})
         breaker_state_before = breaker.state
         try:
-            result = await provider.invoke(request, context)
+            result = await provider.invoke(execution_request, context)
         except Exception as exc:
             breaker.record_failure()
             result = CapabilityResult(request_id=request.id, provider_id=provider_id, status="failed", error={"type": type(exc).__name__, "message": str(exc)})

@@ -7,10 +7,11 @@
 
 同日追加的 P1/P2 严格改进也已完成并推送到主分支：
 
-- qualification 只接受 typed refs，边界创建 AssessmentContext/InvocationPermit 并在现实出口前做 TOCTOU digest recheck；
+- qualification 只接受 typed refs，边界创建 AssessmentContext/InvocationPermit，并将完整 authority-sensitive request 固化为 immutable snapshot，在现实出口前做 TOCTOU digest recheck；
 - KnowledgeProjection、Derivation、独立 verification judgment、deep ReopenPackage/HandoffEnvelope、impact/disposition 分层均有 canonical 路径；
 - Event Journal、bundle/state graph validation、projection bundle portability、HTTP loopback governance 均有执行路径和负路径测试；
-- fresh local proof: `uv run ruff check .`, `uv run mypy src`, `uv run pytest -q` → `245 passed`，strict-conformance selection → `48 passed`；[主分支 CI](https://github.com/ratiolin/portable-runtime/actions/runs/32438470023) 对提交 `e6cbe884edbdca417ba2326b698db0fb51587f7a` 全绿，SonarCloud quality gate 为 `OK`（new-code coverage `80.2%`）。
+- compatibility non-reentrancy、Derivation epistemic whitelist、`DependencyImpact → RiskAssessment → RevalidationDisposition`、Memory/SQLite fixed-point parity 和 authority-sensitive permit snapshot 已补齐；
+- fresh local proof: `uv run ruff check .`, `uv run mypy src`, `uv run pytest -q` → `250 passed`，strict-conformance selection → `53 passed`；远端 CI/SonarCloud 结果将在本轮推送后补记。
 
 - 全量本地验证（P0 基线记录）：`uv run pytest -q` → `223 passed`，仅保留两个既有 collection/deprecation warnings；
 - 严格一致性验证：E001–E020（21 cases）与 S001–S006（6 cases）；

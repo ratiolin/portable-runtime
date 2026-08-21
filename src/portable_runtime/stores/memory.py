@@ -86,11 +86,7 @@ class InMemoryStateStore:
     def save_evidence(self, value: Evidence) -> None: self._save("evidence", value)
     def get_evidence(self, evidence_id: str) -> Evidence | None: return self._get("evidence", Evidence, evidence_id)
     def list_evidence(self, subject_ref: str | None = None) -> list[Evidence]:
-        values = [
-            value
-            for value in self._list("evidence", Evidence)
-            if subject_ref is None or subject_ref in value.subject_refs
-        ]
+        values = self.list_raw_legacy_evidence(subject_ref)
         try:
             from portable_runtime.compat.legacy_records import evidence_artifact_to_legacy
 
@@ -105,6 +101,13 @@ class InMemoryStateStore:
             pass
         return values
 
+    def list_raw_legacy_evidence(self, subject_ref: str | None = None) -> list[Evidence]:
+        return [
+            value
+            for value in self._list("evidence", Evidence)
+            if subject_ref is None or subject_ref in value.subject_refs
+        ]
+
     def save_decision(self, value: Decision) -> None: self._save("decision", value)
     def save_action(self, value: Action) -> None: self._save("action", value)
     def save_outcome(self, value: Outcome) -> None: self._save("outcome", value)
@@ -118,7 +121,7 @@ class InMemoryStateStore:
                 return knowledge_projection_to_legacy(projection)
         return legacy
     def list_knowledge(self, status: str | None = None) -> list[KnowledgeItem]:
-        values = [value for value in self._list("knowledge", KnowledgeItem) if status is None or value.status == status]
+        values = self.list_raw_legacy_knowledge(status)
         # Read compatibility only: canonical projections are never persisted
         # into the legacy ``knowledge`` bucket.
         try:
@@ -132,6 +135,9 @@ class InMemoryStateStore:
         except Exception:
             pass
         return values
+
+    def list_raw_legacy_knowledge(self, status: str | None = None) -> list[KnowledgeItem]:
+        return [value for value in self._list("knowledge", KnowledgeItem) if status is None or value.status == status]
 
     def save_knowledge_projection(self, value: KnowledgeProjection) -> None:
         self._save("knowledge_projection", value)
@@ -268,8 +274,8 @@ class InMemoryStateStore:
                 return
         except Exception:
             pass
-        from portable_runtime.records.validation import validate_record
-        errs = validate_record(value)
+        from portable_runtime.records.validation import validate_canonical_write, validate_record
+        errs = [*validate_record(value), *validate_canonical_write(value)]
         if errs:
             raise ValueError("; ".join(errs))
         self._save("record", value)

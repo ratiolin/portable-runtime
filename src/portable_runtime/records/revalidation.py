@@ -17,6 +17,8 @@ from portable_runtime.core.models import new_id
 ChangeType = Literal["evaluator", "model", "code", "dataset", "permission", "classification", "state_space", "environment"]
 ImpactType = Literal["none", "warn", "background-revalidate", "block-next-use", "require-human-review", "reopen"]
 Severity = Literal["low", "medium", "high", "critical"]
+Urgency = Literal["routine", "elevated", "urgent", "immediate"]
+BlastRadius = Literal["local", "bounded", "wide", "systemic"]
 
 REQUIRED_ACTIONS: set[str] = {"none", "warn", "background-revalidate", "block-next-use", "require-human-review", "reopen"}
 CHANGE_TYPES: set[str] = {"evaluator", "model", "code", "dataset", "permission", "classification", "state_space", "environment"}
@@ -25,20 +27,32 @@ CHANGE_TYPES: set[str] = {"evaluator", "model", "code", "dataset", "permission",
 class DependencyImpact(BaseModel):
     """Observed dependency impact; it does not prescribe runtime action."""
 
-    model_config = ConfigDict(extra="allow")
+    model_config = ConfigDict(extra="forbid", frozen=True)
 
     change_ref: str
     affected_ref: str
     relation_type: str
     impact_type: ImpactType = "warn"
-    severity: Severity = "medium"
     reason_refs: list[str] = Field(default_factory=list)
+
+
+class RiskAssessment(BaseModel):
+    """Risk interpretation of an observed impact, separate from detection."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    change_ref: str
+    affected_ref: str
+    severity: Severity = "medium"
+    urgency: Urgency = "elevated"
+    blast_radius: BlastRadius = "bounded"
+    rationale_refs: list[str] = Field(default_factory=list)
 
 
 class RevalidationDisposition(BaseModel):
     """Policy decision derived from an impact under an explicit profile."""
 
-    model_config = ConfigDict(extra="allow")
+    model_config = ConfigDict(extra="forbid", frozen=True)
 
     action: ImpactType = "warn"
     policy_ref: str = "default-revalidation-policy"
@@ -57,6 +71,7 @@ class AffectedAssessment(BaseModel):
     reason_refs: list[str] = Field(default_factory=list)
     created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
     dependency_impact: DependencyImpact | None = None
+    risk_assessment: RiskAssessment | None = None
     revalidation_disposition: RevalidationDisposition | None = None
     metadata: dict[str, Any] = Field(default_factory=dict)
 
@@ -69,14 +84,22 @@ class AffectedAssessment(BaseModel):
                 affected_ref=self.affected_ref,
                 relation_type=str(getattr(self, "metadata", {}).get("relation_type", "depends-on")),
                 impact_type=self.impact_type,
-                severity=self.severity,
                 reason_refs=list(self.reason_refs),
             )
         else:
             if self.impact_type == "warn" and self.dependency_impact.impact_type != "warn":
                 self.impact_type = self.dependency_impact.impact_type
-            self.severity = self.dependency_impact.severity
             self.reason_refs = list(self.dependency_impact.reason_refs)
+        if self.risk_assessment is None:
+            self.risk_assessment = RiskAssessment(
+                change_ref=self.change_ref,
+                affected_ref=self.affected_ref,
+                severity=self.severity,
+                rationale_refs=list(self.reason_refs),
+            )
+        else:
+            self.severity = self.risk_assessment.severity
+            self.reason_refs = list(self.risk_assessment.rationale_refs or self.reason_refs)
         if self.revalidation_disposition is None:
             self.revalidation_disposition = RevalidationDisposition(
                 action=self.required_action,
@@ -98,15 +121,15 @@ _TYPED_DEPENDENCY_RULES: dict[str, set[str]] = {
     "environment": {"validated-under", "executed-with", "measured-by", "depends-on"},
 }
 
-_SEVERITY_RULES: dict[str, Severity] = {
-    "evaluator": "high",
-    "model": "high",
-    "code": "medium",
-    "dataset": "medium",
-    "permission": "high",
-    "classification": "medium",
-    "state_space": "critical",
-    "environment": "high",
+_RISK_RULES: dict[str, tuple[Severity, Urgency, BlastRadius]] = {
+    "evaluator": ("high", "urgent", "wide"),
+    "model": ("high", "urgent", "wide"),
+    "code": ("medium", "elevated", "bounded"),
+    "dataset": ("medium", "elevated", "bounded"),
+    "permission": ("high", "urgent", "wide"),
+    "classification": ("medium", "elevated", "bounded"),
+    "state_space": ("critical", "immediate", "systemic"),
+    "environment": ("high", "urgent", "wide"),
 }
 
 _REQUIRED_ACTION_RULES: dict[str, dict[str, ImpactType]] = {
@@ -144,7 +167,6 @@ def detect_dependency_impacts(
         raise ValueError("change_ref must be non-empty")
     ct = change_type.strip().lower()
     watch = _TYPED_DEPENDENCY_RULES.get(ct, {"depends-on", "validated-under"})
-    severity: Severity = _SEVERITY_RULES.get(ct, "medium")  # type: ignore[assignment]
     affected: list[DependencyImpact] = []
     seen: set[str] = set()
     for rel in relations:
@@ -163,11 +185,30 @@ def detect_dependency_impacts(
                 affected_ref=subj,
                 relation_type=rt,
                 impact_type="warn",
-                severity=severity,
                 reason_refs=[rid] if rid else [],
             )
         )
     return affected
+
+
+def derive_risk_assessment(
+    impact: DependencyImpact,
+    *,
+    change_type: str,
+) -> RiskAssessment:
+    """Interpret an observed dependency impact under risk policy."""
+
+    severity, urgency, blast_radius = _RISK_RULES.get(
+        change_type.strip().lower(), ("medium", "elevated", "bounded")
+    )
+    return RiskAssessment(
+        change_ref=impact.change_ref,
+        affected_ref=impact.affected_ref,
+        severity=severity,
+        urgency=urgency,
+        blast_radius=blast_radius,
+        rationale_refs=list(impact.reason_refs),
+    )
 
 
 def derive_revalidation_disposition(
@@ -199,17 +240,15 @@ def assess_revalidation(
         AffectedAssessment(
             change_ref=impact.change_ref,
             affected_ref=impact.affected_ref,
-            # Flat fields are retained for read compatibility; the two
-            # explicit nested objects are authoritative for new callers.
-            # Legacy flat ``impact_type`` historically mirrored the chosen
-            # action; keep that view stable while nested ``dependency_impact``
-            # carries the observation independently.
+            # Flat fields are retained for read compatibility; the explicit
+            # impact/risk/disposition objects are authoritative for new callers.
             impact_type=derive_revalidation_disposition(impact, change_type=ct).action,
-            severity=impact.severity,
+            severity=derive_risk_assessment(impact, change_type=ct).severity,
             required_action=derive_revalidation_disposition(impact, change_type=ct).action,
             reason_refs=list(impact.reason_refs),
             metadata={"relation_type": impact.relation_type},
             dependency_impact=impact,
+            risk_assessment=derive_risk_assessment(impact, change_type=ct),
             revalidation_disposition=derive_revalidation_disposition(impact, change_type=ct),
         )
         for impact in detect_dependency_impacts(change_ref, ct, relations)
@@ -224,13 +263,17 @@ def should_block(affected: AffectedAssessment) -> bool:
 __all__ = [
     "AffectedAssessment",
     "DependencyImpact",
+    "RiskAssessment",
     "RevalidationDisposition",
     "ChangeType",
     "ImpactType",
     "Severity",
+    "Urgency",
+    "BlastRadius",
     "assess_revalidation",
     "detect_dependency_impacts",
     "derive_revalidation_disposition",
+    "derive_risk_assessment",
     "should_block",
     "CHANGE_TYPES",
     "REQUIRED_ACTIONS",

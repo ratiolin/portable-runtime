@@ -95,23 +95,7 @@ class BaseRecord(BaseModel):
     def _validate_orthogonal(self) -> BaseRecord:
         # epistemic_status only for proposition-type records
         # Action uses type-specific status, not epistemic
-        if (
-            self.epistemic_status is not None
-            and self.record_type not in _EPISTEMIC_ALLOWED
-            and self.record_type
-            in {
-                "Action",
-                "Outcome",
-                "Decision",
-                "Goal",
-                "Constraint",
-                "Revision",
-                "ChangeObject",
-                "Policy",
-                "Experiment",
-                "EvidenceArtifact",
-            }
-        ):
+        if self.epistemic_status is not None and self.record_type not in _EPISTEMIC_ALLOWED:
             raise ValueError(
                 f"{self.record_type} must not carry epistemic_status, use type-specific status"
             )
