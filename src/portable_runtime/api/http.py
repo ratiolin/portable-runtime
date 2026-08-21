@@ -158,7 +158,8 @@ def create_app(runtime: Runtime | None = None) -> FastAPI:
         return sorted({capability for provider in runtime.registry.list() for capability in provider.capabilities})
 
     @app.post("/v1/work")
-    async def create_work(body: CreateWorkRequest) -> dict[str, Any]:
+    async def create_work(request: Request, body: CreateWorkRequest) -> dict[str, Any]:
+        _require_local_control(request)
         return runtime.create_work(
             title=body.title,
             description=body.description,
@@ -210,7 +211,8 @@ def create_app(runtime: Runtime | None = None) -> FastAPI:
         return result.model_dump(mode="json")
 
     @app.post("/v1/work/{work_id}/cancel")
-    async def cancel_work(work_id: str) -> dict[str, Any]:
+    async def cancel_work(request: Request, work_id: str) -> dict[str, Any]:
+        _require_local_control(request)
         work = runtime.get_work(work_id)
         if work is None:
             raise HTTPException(status_code=404, detail="work not found")
@@ -369,13 +371,16 @@ def create_app(runtime: Runtime | None = None) -> FastAPI:
 
     @app.post("/v1/triggers/alertmanager")
     async def alertmanager_webhook(request: Request) -> dict[str, Any]:
+        _require_local_control(request)
+        import os
+
         from portable_runtime.triggers.alertmanager.trigger import AlertmanagerTrigger
         from portable_runtime.triggers.base import TriggerError as BTriggerError
         body = await request.json()
         signature = request.headers.get("x-signature") or request.headers.get("x-hub-signature") or request.headers.get("x-webhook-signature")
         raw = await request.body()
         raw_body = raw if raw else json.dumps(body).encode()
-        trigger = AlertmanagerTrigger()
+        trigger = AlertmanagerTrigger(secret=os.getenv("ALERTMANAGER_WEBHOOK_SECRET") or None)
         async def _emit(event):
             work_fields = trigger.to_work_fields(event)
             runtime.create_work(**work_fields)
@@ -388,6 +393,7 @@ def create_app(runtime: Runtime | None = None) -> FastAPI:
 
     @app.post("/v1/triggers/webhook")
     async def webhook_trigger(request: Request, kind: str = "webhook") -> dict[str, Any]:
+        _require_local_control(request)
         from portable_runtime.triggers.base import TriggerError as BTriggerError
         from portable_runtime.triggers.webhook.trigger import WebhookTrigger
         body = await request.json()
@@ -410,7 +416,8 @@ def create_app(runtime: Runtime | None = None) -> FastAPI:
         return event.model_dump(mode="json")
 
     @app.post("/v1/triggers/schedule/emit")
-    async def schedule_emit(kind: str = "maintenance-scan") -> dict[str, Any]:
+    async def schedule_emit(request: Request, kind: str = "maintenance-scan") -> dict[str, Any]:
+        _require_local_control(request)
         from portable_runtime.triggers.schedule.trigger import ScheduleTrigger
         trigger = ScheduleTrigger(kind=kind)
         async def _emit(event):
@@ -424,11 +431,11 @@ def create_app(runtime: Runtime | None = None) -> FastAPI:
         return event.model_dump(mode="json")
 
     @app.post("/v1/work/{work_id}/workflow/{workflow_id}")
-    async def run_workflow(work_id: str, workflow_id: str) -> dict[str, Any]:
+    async def run_workflow(request: Request, work_id: str, workflow_id: str) -> dict[str, Any]:
+        _require_local_control(request)
         work = runtime.get_work(work_id)
         if work is None:
             raise HTTPException(status_code=404, detail="work not found")
-        run = runtime.start_run(work_id, workflow_id=workflow_id)
         workflow: Any = None
         if workflow_id in {"incident-repair", "incident"}:
             from portable_runtime.workflows.incident_repair.workflow import IncidentRepairWorkflow
@@ -444,6 +451,11 @@ def create_app(runtime: Runtime | None = None) -> FastAPI:
             workflow = KnowledgeConsolidationWorkflow()
         else:
             raise HTTPException(status_code=404, detail=f"unknown workflow: {workflow_id}")
+        if not hasattr(workflow, "accepts") or not workflow.accepts(work):
+            raise HTTPException(status_code=409, detail=f"workflow {workflow_id!r} does not accept work kind {work.kind!r}")
+        # Resolve and qualify before creating a durable Run.  A rejected
+        # workflow request must not leave a phantom running execution behind.
+        run = runtime.start_run(work_id, workflow_id=workflow_id)
         from portable_runtime.workflows.context import WorkflowContext
         ctx = WorkflowContext(work=work, run=run, store=runtime.store, capabilities=runtime.capabilities, registry=runtime.registry)  # noqa: E501
         status = await workflow.run(ctx, work, run)
@@ -481,7 +493,8 @@ def create_app(runtime: Runtime | None = None) -> FastAPI:
         return [i.model_dump(mode="json") if hasattr(i, "model_dump") else i for i in _paginate(items, limit, offset)]
 
     @app.post("/v1/relations")
-    async def create_relation(payload: dict[str, Any]) -> dict[str, Any]:
+    async def create_relation(request: Request, payload: dict[str, Any]) -> dict[str, Any]:
+        _require_local_control(request)
         from portable_runtime.records.relations import RecordRelation
         try:
             rel = RecordRelation.model_validate(payload)

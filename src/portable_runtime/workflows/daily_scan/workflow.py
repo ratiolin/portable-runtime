@@ -78,6 +78,7 @@ class DailyScanWorkflow:
         )
 
         # Produce Evidence / Artifact for each invocation (even on failure -> contested)
+        verification_refs: list[str] = []
         for kind, result, detail in [
             ("container-observation", observe_result, {"targets": containers}),
             ("promql-observation", verify_result, {"query": promql_query}),
@@ -135,6 +136,8 @@ class DailyScanWorkflow:
                     )
                     if hasattr(context.store, "save_record"):
                         context.store.save_record(evidence)  # type: ignore[attr-defined]
+                        if result.verification_result is not None:
+                            verification_refs.append(evidence.id)
                 except Exception:
                     pass
             except Exception:
@@ -148,13 +151,30 @@ class DailyScanWorkflow:
             with contextlib.suppress(ValueError):
                 context.transition_run("blocked", current_step="scan-blocked")
             return "blocked"
-        if "failed" in statuses and "succeeded" not in statuses:
-            # Both failed -> still record but signal failed so caller can retry
+        if "failed" in statuses:
+            # A successful observation cannot mask a failed verification.
             with contextlib.suppress(ValueError):
                 context.transition_run("failed", current_step="scan-failed")
             return "failed"
-        with contextlib.suppress(ValueError):
-            context.transition_run("succeeded", current_step="scan-done")
+        if observe_result.status != "succeeded" or verify_result.status != "succeeded":
+            with contextlib.suppress(ValueError):
+                context.transition_run("waiting", current_step="scan-waiting")
+            return "waiting"
+        if (
+            verify_result.verification_result is None
+            or verify_result.verification_result.result != "pass"
+            or not verification_refs
+        ):
+            # Provider execution status is not a verification judgment.
+            with contextlib.suppress(ValueError):
+                context.transition_run("blocked", current_step="scan-verification-missing")
+            return "blocked"
+        try:
+            context.complete_with_proofs(verification_refs)
+        except ValueError:
+            with contextlib.suppress(ValueError):
+                context.transition_run("blocked", current_step="scan-proof-missing")
+            return "blocked"
         return "succeeded"
 
 
@@ -353,6 +373,16 @@ class KnowledgeConsolidationWorkflow:
                     logger.info("retain candidate knowledge %s: %s", item.id, reason)
             except Exception:
                 logger.debug("knowledge consolidation item update failed", exc_info=True)
+                # Keep the candidate durable and journal the failed promotion
+                # attempt; never silently drop a governance rejection.
+                try:
+                    retained = item.model_copy(
+                        update={"metadata": {**getattr(item, "metadata", {}), "_retain_reason": "promotion rejected"}}
+                    )
+                    context.store.save_knowledge_projection(retained)  # type: ignore[attr-defined]
+                    _append_projection_event(context, retained, "candidate")
+                except Exception:
+                    logger.debug("knowledge candidate retention failed", exc_info=True)
                 continue
 
         # Create a summary artifact

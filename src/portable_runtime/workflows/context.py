@@ -203,6 +203,22 @@ class WorkflowContext:
         self.store.save_run(new_run)
         return new_run
 
+    def complete_with_proofs(self, verification_refs: list[str]) -> Run:
+        """Authorize ``succeeded`` using the shared completion primitive.
+
+        Workflows must not equate provider execution success with a terminal
+        workflow result.  The authority resolves durable proof records and
+        accepts only explicit typed passing verification judgments.
+        """
+        from portable_runtime.workflows.completion import CompletionAuthority
+
+        self.run = CompletionAuthority(self.store).authorize(
+            work=self.work,
+            run=self.run,
+            verification_refs=verification_refs,
+        )
+        return self.run
+
     def set_step(self, step: str) -> Run:
         new_run = self.run.model_copy(update={"current_step": step})
         self.run = new_run

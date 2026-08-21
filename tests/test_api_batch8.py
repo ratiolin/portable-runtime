@@ -6,7 +6,7 @@ from fastapi.testclient import TestClient
 from portable_runtime.api.http import create_app
 from portable_runtime.core.models import KnowledgeItem
 from portable_runtime.core.runtime import Runtime
-from portable_runtime.records.models import Assertion
+from portable_runtime.records.models import Assertion, EvidenceArtifact
 from portable_runtime.records.relations import RecordRelation
 from portable_runtime.stores.memory import InMemoryStateStore
 
@@ -52,13 +52,15 @@ def test_records_list_and_get():
 
 # /v1/relations
 def test_relations_create_and_list():
-    client, _runtime, _store = _client()
+    client, _runtime, store = _client()
     # list empty
     resp = client.get("/v1/relations")
     assert resp.status_code == 200
     assert isinstance(resp.json(), list)
 
     # valid create
+    store.save_record(EvidenceArtifact(id="evidence_1", uri="memory:evidence"))
+    store.save_record(Assertion(id="assertion_1", statement="claim", lifecycle_status="draft"))
     payload = {
         "relation_type": "supports",
         "subject_ref": "evidence_1",
@@ -86,6 +88,9 @@ def test_relations_create_and_list():
 
 def test_relations_filter_by_type():
     client, _runtime, store = _client()
+    for rid in ("e1", "e2"):
+        store.save_record(EvidenceArtifact(id=rid, uri=f"memory:{rid}"))
+    store.save_record(Assertion(id="a1", statement="claim", lifecycle_status="draft"))
     r1 = RecordRelation(relation_type="supports", subject_ref="e1", object_ref="a1")
     r2 = RecordRelation(relation_type="contradicts", subject_ref="e2", object_ref="a1")
     store.save_relation(r1)
@@ -119,21 +124,22 @@ def test_revalidation_pending():
 def test_affected_by_endpoint():
     client, _runtime, store = _client()
     # create relation that will be affected by evaluator change
-    rel = RecordRelation(relation_type="validated-under", subject_ref="assertion_X", object_ref="evaluator_v9")
+    store.save_record(Assertion(id="assertion_X", statement="claim", lifecycle_status="draft"))
+    rel = RecordRelation(relation_type="validated-under", subject_ref="assertion_X", object_ref="evaluator:v9")
     store.save_relation(rel)
-    resp = client.get("/v1/revalidation/affected-by/evaluator_v9", params={"change_type": "evaluator"})
+    resp = client.get("/v1/revalidation/affected-by/evaluator:v9", params={"change_type": "evaluator"})
     assert resp.status_code == 200
     data = resp.json()
     assert isinstance(data, list)
     assert any(item["affected_ref"] == "assertion_X" for item in data)
 
     # missing change_ref still returns list (maybe empty for unknown ref)
-    resp = client.get("/v1/revalidation/affected-by/unknown_change_xyz")
+    resp = client.get("/v1/revalidation/affected-by/unknown:change_xyz")
     assert resp.status_code == 200
     assert resp.json() == [] or isinstance(resp.json(), list)
 
     # empty change_ref should 400 via assess_revalidation validation - test via direct with empty path? HTTP path cannot be empty, but test invalid change_type fallback
-    resp = client.get("/v1/revalidation/affected-by/evaluator_v9", params={"change_type": "invalid-type"})
+    resp = client.get("/v1/revalidation/affected-by/evaluator:v9", params={"change_type": "invalid-type"})
     assert resp.status_code == 200  # unknown type falls back to generic
 
 
@@ -274,7 +280,7 @@ def test_explain_why_lineage():
     client, _runtime, store = _client()
     rec = Assertion(statement="explain me", epistemic_status="supported", lifecycle_status="draft")
     store.save_record(rec)
-    rel = RecordRelation(relation_type="supports", subject_ref="evidence_42", object_ref=rec.id)
+    rel = RecordRelation(relation_type="supports", subject_ref="evidence:42", object_ref=rec.id)
     store.save_relation(rel)
 
     # explain
@@ -292,8 +298,8 @@ def test_explain_why_lineage():
     assert isinstance(resp.json()["lineage"], list)
 
     # why - trace action
-    act_id = "action_123"
-    r_why = RecordRelation(relation_type="produces", subject_ref=act_id, object_ref="outcome_1")
+    act_id = "action:123"
+    r_why = RecordRelation(relation_type="produces", subject_ref=act_id, object_ref="outcome:1")
     store.save_relation(r_why)
     resp = client.get(f"/v1/why/{act_id}")
     assert resp.status_code == 200

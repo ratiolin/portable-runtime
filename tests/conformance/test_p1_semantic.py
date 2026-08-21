@@ -143,7 +143,7 @@ async def test_knowledge_consolidation_writes_only_canonical_projection_and_jour
     result = await KnowledgeConsolidationWorkflow().run(context, work, run)
 
     assert result == "succeeded"
-    assert store.get_knowledge_projection(projection.id).lifecycle_status == "official"
+    assert store.get_knowledge_projection(projection.id).lifecycle_status == "candidate"
     assert store.export_state()["knowledge"] == []
     assert any(event.type == "KnowledgeProjected" for event in store.list_events())
 
@@ -190,7 +190,7 @@ async def test_canonical_consolidation_is_non_reentrant_and_evidence_ids_are_aut
         context = WorkflowContext(work=work, run=run, store=store, capabilities=None, registry=None)
         assert await KnowledgeConsolidationWorkflow().run(context, work, run) == "succeeded"
         assert [item.id for item in store.list_knowledge_projections()] == [projection.id]
-        assert store.get_knowledge_projection(projection.id).lifecycle_status == "official"
+        assert store.get_knowledge_projection(projection.id).lifecycle_status == "candidate"
 
         # Fixed-point property: compatibility reads followed by another
         # canonical consolidation cannot create a second semantic projection.

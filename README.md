@@ -8,10 +8,10 @@ Portable runtime for durable **Work / Run** orchestration with pluggable **Provi
 
 ## Strict enforcement status
 
-The RealityBoundary, SQLite Store, semantic-plane P1 work and protocol P2 work are locally closed with executable evidence. The current protocol-convergence sequence has this verified proof:
+The RealityBoundary and protocol-convergence baseline have executable local evidence. Semantic-plane authority hardening remains an active workstream; the status below records only verified baseline checks and must not be read as closure of the remaining terminalization, graph-write, revision-authorization or HTTP-ingress review items.
 
 - `uv run ruff check .` and `uv run mypy src` — both clean;
-- `uv run pytest -q` — `244 passed` (two existing collection/deprecation warnings only);
+- `uv run pytest -q` — `274 passed` (two existing collection/deprecation warnings only);
 - strict-conformance — `61 passed`: E001–E023, S001–S006, semantic-contract, authorization-contract, P1 semantic, P2 protocol, routing and reliability gates;
 - canonical `KnowledgeProjection` state is bundle-portable; legacy `KnowledgeItem` remains read-compatible but is not a new workflow write target;
 - HTTP mutating control routes are loopback-only and explicitly not an authenticated multi-user boundary;

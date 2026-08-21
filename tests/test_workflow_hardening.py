@@ -25,6 +25,7 @@ from portable_runtime.core.policies import (
 from portable_runtime.core.registry import ProviderRegistry
 from portable_runtime.core.router import CapabilityService
 from portable_runtime.core.workflows import WorkflowRegistry, is_valid_workflow, validate_workflow
+from portable_runtime.records.open_validation import ClosedVerificationResult
 from portable_runtime.interfaces.store import StateStore
 from portable_runtime.stores.memory import InMemoryStateStore
 from portable_runtime.workflows.context import (
@@ -61,6 +62,11 @@ class AnySucceedProvider:
             message="ok",
             evidence_refs=[],
             output_artifact_refs=[],
+            verification_result=(
+                ClosedVerificationResult(result="pass", message="ok")
+                if request.capability.startswith("verify.")
+                else None
+            ),
         )
 
     async def cancel(self, request_id: str) -> None:
@@ -121,6 +127,10 @@ def _make_context(work: Work, run: Run, store: StateStore, providers: list[AnySu
     for p in providers:
         registry.register(p)
     caps = CapabilityService(registry, store=store)
+    # Test providers model deterministic execution; disable the production
+    # inter-effect cooldown so verification can immediately observe the edit.
+    if getattr(caps, "boundary", None) is not None:
+        caps.boundary.reliability.cooldown_seconds = 0
     return WorkflowContext(work=work, run=run, store=store, capabilities=caps, registry=registry)
 
 
@@ -312,7 +322,8 @@ async def test_knowledge_consolidation_promote_and_archive() -> None:
         id=new_id("evidence"), kind="test", subject_refs=[work.id], artifact_refs=[], source="test", status="supported"
     )
     store.save_evidence(ev)
-    # Candidate with evidence -> should promote (strict: needs judgment+auth+scope+version)
+    # Candidate with only string-shaped judgment/auth refs remains a candidate;
+    # official promotion requires those refs to resolve to durable records.
     ki_good = KnowledgeItem(
         id=new_id("knowledge"),
         kind="pattern",
@@ -357,7 +368,7 @@ async def test_knowledge_consolidation_promote_and_archive() -> None:
     promoted = store.get_knowledge(ki_good.id)
     archived = store.get_knowledge(ki_bad.id)
     archived2 = store.get_knowledge(ki_bad2.id)
-    assert promoted is not None and promoted.status == "official"
+    assert promoted is not None and promoted.status == "candidate"
     # P1-3: missing prerequisites -> retain candidate, not archive
     assert archived is not None and archived.status == "candidate"
     assert archived2 is not None and archived2.status == "candidate"

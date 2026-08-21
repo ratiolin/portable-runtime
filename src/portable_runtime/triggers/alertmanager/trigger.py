@@ -58,8 +58,10 @@ class AlertmanagerTrigger:
         raw_body: bytes | None = None,
     ) -> list[TriggerEvent]:
         """Parse Alertmanager payload into TriggerEvents."""
-        if self._secret is not None and signature is not None:
+        if self._secret is not None:
             body = raw_body if raw_body is not None else json.dumps(payload, sort_keys=True).encode()
+            if not signature:
+                raise TriggerError("missing alertmanager signature", TriggerErrorCategory.SIGNATURE, 401)
             if not self.verify(body, signature):
                 raise TriggerError("invalid alertmanager signature", TriggerErrorCategory.SIGNATURE, 401)
         events: list[TriggerEvent] = []

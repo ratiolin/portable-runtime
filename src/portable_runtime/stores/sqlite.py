@@ -182,6 +182,12 @@ class SQLiteStateStore:
                 (kind, value.id, json.dumps(data, ensure_ascii=False), data["created_at"]),
             )
 
+    def _validate_candidate_write(self, kind: str, value: Any) -> None:
+        """Validate semantic writes against the complete current graph."""
+        from portable_runtime.protocol.validation import assert_valid_candidate_write
+
+        assert_valid_candidate_write(self.export_state(), kind, value)
+
     def _get(self, kind: str, value_type: type[Any], identifier: str) -> Any | None:
         with self._lock:
             row = self._connection.execute(
@@ -301,6 +307,7 @@ class SQLiteStateStore:
         return [value for value in self._list("knowledge", KnowledgeItem) if status is None or value.status == status]
 
     def save_knowledge_projection(self, value: KnowledgeProjection) -> None:
+        self._validate_candidate_write("knowledge_projection", value)
         self._save("knowledge_projection", value)
 
     def get_knowledge_projection(self, projection_id: str) -> KnowledgeProjection | None:
@@ -644,6 +651,7 @@ class SQLiteStateStore:
         errs = [*validate_record(value), *validate_canonical_write(value)]
         if errs:
             raise ValueError("; ".join(errs))
+        self._validate_candidate_write("record", value)
         self._save("record", value)
 
     def get_record(self, record_id: str) -> BaseRecord | None:
@@ -658,12 +666,18 @@ class SQLiteStateStore:
         errs = validate_relation(value)
         if errs:
             raise ValueError("; ".join(errs))
+        self._validate_candidate_write("relation", value)
         self._save("relation", value)
 
     def get_relation(self, relation_id: str) -> RecordRelation | None:
         return self._get("relation", RecordRelation, relation_id)
     def save_authorization(self, value: Any) -> None:
-        # structural validation delegated to model
+        from portable_runtime.records.authorization import AuthorizationGrant, validate_grant
+        if isinstance(value, AuthorizationGrant):
+            errs = validate_grant(value)
+            if errs:
+                raise ValueError("; ".join(errs))
+        self._validate_candidate_write("authorization", value)
         self._save("authorization", value)
     def get_authorization(self, auth_id: str) -> Any | None:
         from portable_runtime.records.authorization import AuthorizationGrant
