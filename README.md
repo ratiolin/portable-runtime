@@ -8,15 +8,15 @@ Portable runtime for durable **Work / Run** orchestration with pluggable **Provi
 
 ## Strict enforcement status
 
-The RealityBoundary, SQLite Store, semantic-plane P1 work and protocol P2 work are locally closed with executable evidence. The current pre-push proof is:
+The RealityBoundary, SQLite Store, semantic-plane P1 work and protocol P2 work are locally closed with executable evidence. The current four-commit protocol-convergence sequence has this pre-push proof:
 
 - `uv run ruff check .` and `uv run mypy src` — both clean;
-- `uv run pytest -q` — `253 passed` (two existing collection/deprecation warnings only);
-- strict-conformance — `56 passed`: E001–E023, S001–S006, P1 semantic, P2 protocol, routing and reliability gates;
+- `uv run pytest -q` — `261 passed` (two existing collection/deprecation warnings only);
+- strict-conformance — `63 passed`: E001–E023, S001–S006, semantic-contract, authorization-contract, P1 semantic, P2 protocol, routing and reliability gates;
 - canonical `KnowledgeProjection` state is bundle-portable; legacy `KnowledgeItem` remains read-compatible but is not a new workflow write target;
 - HTTP mutating control routes are loopback-only and explicitly not an authenticated multi-user boundary;
 - the CI `strict-conformance` job runs the same focused suite and is a prerequisite for SonarCloud analysis;
-- remote proof for commit [`20c81ae32f6bf33d38209d27a463555d88003e23`](https://github.com/ratiolin/portable-runtime/commit/20c81ae32f6bf33d38209d27a463555d88003e23) is green in [main CI run 32442371727](https://github.com/ratiolin/portable-runtime/actions/runs/32442371727): lint-and-test, strict-conformance and SonarCloud all passed; SonarCloud quality gate is `OK` with `80.6%` new-code coverage.
+- the prior remote proof for the already-pushed baseline remains green in [main CI run 32442371727](https://github.com/ratiolin/portable-runtime/actions/runs/32442371727); the four new commits are being pushed as one sequence and will be covered by the next CI/SonarCloud run.
 
 The remote evidence above is the final post-push proof for this change.
 
@@ -30,7 +30,7 @@ The control-plane HTTP API is local-only and is not an authenticated multi-user 
 - **Authorization & Policy (V1.4):** `AuthorizationGrant` isolated from `Decision` (`subject_version_refs` prevents v1→v2 reuse); `PolicyDecision(disposition=allow/deny/defer/require, obligations[])` with `deny > defer > union(needs) > allow` algebra and `waivable:false` hard boundaries; `ProcedureProfile` (`minimal / standard / enhanced`).
 - **Knowledge & Reopen (V1.5):** `KnowledgeProjection` selective consolidation (never drops counterexamples); `ReopenAssessment(9 scopes) → superseding Work`.
 - **Failure-domain Routing (V1.6):** `ProviderDescriptor` 9 domains (`provider_family / credential_domain / …`) + `ConstraintRouter` (`hard constraints → eligible → deterministic → cost`).
-- **Validation & Reliability (V1.7–1.8):** `ClosedVerification(pass/fail)` vs `OpenValidation(supports/weakens/…)` + `ExperimentPlan` + `CircuitBreaker / ReliabilityControls` (`t_detect+t_judge+t_correct < t_irreversible`).
+- **Validation & Reliability (V1.7–1.8):** `ClosedVerification(pass/fail)` vs `OpenValidation(supports/weakens/…)` + `ExperimentPlan` + `CircuitBreaker / ReliabilityControls`; structural observations, risk assessments and the versioned `DefaultLocalReliabilityPolicy` remain separate.
 - **Protocol (V2.0):** `Event Journal` append-only, `Bundle v1` (`manifest + 17 kinds jsonl + artifacts/ + sha256 checksums`) with full ref/lifecycle validation, 4-category HTTP API + `explain/why/lineage/affected-by/reopen` CLI, and strict negative-path conformance.
 - **P1/P2 strict semantics:** qualification facts resolve from typed store references into an immutable assessment/permit and authority-sensitive invocation snapshot; compatibility views are non-reentrant into canonical consolidation; derivation and verification judgment remain distinct; deep reopen reroutes to reframing without auto-rerunning the original workflow; dependency impact, risk assessment and revalidation disposition remain separate; state/bundle imports are graph-validated atomically.
 

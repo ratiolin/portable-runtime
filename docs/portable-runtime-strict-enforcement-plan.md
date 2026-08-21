@@ -17,21 +17,28 @@
 
 | 范围 | 已落地的强制路径 | 新鲜本地证据 |
 |---|---|---|
-| P1-1 qualification/procedure | typed qualification refs → deeply immutable AssessmentContext snapshot → internally scoped InvocationPermit → immutable authority-sensitive request snapshot → pre-provider digest recheck；inline proof facts fail closed | E021–E023、全量 253 tests |
+| P1-1 qualification/procedure | typed qualification refs → deeply immutable AssessmentContext snapshot → internally scoped InvocationPermit → immutable authority-sensitive request snapshot → pre-provider digest recheck；inline proof facts fail closed | E021–E023、全量 261 tests |
 | P1-2 routing | failure-domain/independence hard filtering、circuit breaker actual path、caller reference descriptor 不再作为 proof | `tests/test_p1_routing.py` |
-| P1-3 reliability | rate、parallel、blast radius、cooldown、exposure、side-effect budget、enhanced timing gate | `tests/test_reliability_controls_p2.py` |
+| P1-3 reliability | rate、parallel、blast radius、cooldown、exposure、side-effect budget、enhanced timing gate；`ReliabilityObservation`、`ReliabilityRiskAssessment`、`ReliabilityDisposition` 与 `DefaultLocalReliabilityPolicy` 分离 | `tests/test_reliability_controls_p2.py` |
 | P1-4/P1-5/P1-6 semantic workflows | canonical reopen/projection/derivation、verification judgment 与 execution status 分离、incident repair 不再新写 legacy knowledge/evidence | `tests/conformance/test_p1_semantic.py`、全量回归 |
 | P2-1/P2-2/P2-3 protocol | transition journal、atomic graph validation/import、17-kind bundle、HTTP loopback governance | `tests/conformance/test_p2_protocol.py`、bundle round-trip、CI strict job |
 
 本轮 freeze blockers 也已收口：Knowledge/Evidence compatibility view 现在是 canonical ingestion 的单向 sink；`Derivation` 只能记录产生过程，epistemic status 采用 proposition whitelist；revalidation 形成 `DependencyImpact → RiskAssessment → RevalidationDisposition` 三层责任；Memory/SQLite 通过 typed record restoration 和 fixed-point/adversarial conformance 保持语义对等；普通 canonical record write 拒绝 undeclared top-level fields，legacy/import boundary 保留 forward-field 兼容。
 
-当前本地证据为 `uv run pytest -q` → `253 passed`、strict-conformance → `56 passed`，另有 `ruff`/`mypy` 通过。新增协议稳定化证据包括 `DefaultRevalidationPolicyProfile`、authoritative `ReopenAssembler`、deep immutable qualification snapshot，以及 Boundary-only provider invocation architecture lock。提交 `20c81ae32f6bf33d38209d27a463555d88003e23` 已通过 [main CI run 32442371727](https://github.com/ratiolin/portable-runtime/actions/runs/32442371727) 的 lint/test、strict-conformance 与 SonarCloud；SonarCloud quality gate 为 `OK`，new-code coverage 为 `80.6%`。
+当前本地证据为 `uv run pytest -q` → `261 passed`、strict-conformance → `63 passed`，另有 `ruff`/`mypy` 通过。四个连续提交依次收口 semantic contract、Boundary internal stage seam、reliability policy profile 和 authorization compatibility contraction；新增架构测试锁定 Boundary-only provider invocation，canonical authorization primitive 只接受 typed request，legacy normalization 留在 compat。远端结果将在本序列推送后由 GitHub/SonarCloud 产生。
 
 ## 协议稳定化起点（2026-08-21）
 
 semantic vocabulary 不再扩展。本阶段只允许收紧既有接口的机械保证：默认 revalidation 映射属于显式 policy profile，legacy flat `AffectedAssessment.impact_type` 只表示 observed impact 且已降格为兼容字段；reopen handoff 必须由 authoritative graph 组装，Work metadata 只能作为 display/cache hint；AssessmentContext 深冻结，InvocationPermit 明确为可重复 materialize 的内部 snapshot permit，不声称 linear consumption；架构测试锁定 `provider.invoke` 只能从 `RealityBoundary` 现实出口取得。
 
 本状态不以提交信息代替执行证据；远端 CI 和 SonarCloud 已对该提交完成绿灯闭合。
+
+## 四提交协议收敛序列（2026-08-21）
+
+1. `semantic-contract`：统一 Assertion / Observation / Derivation 的认识状态归属；补齐 Observation 来源、Revision 本地语义、promotion graph 证据、supersedes lineage 与 canonical relation 集合。
+2. `boundary-internals`：保持 `RealityBoundary` 为唯一现实出口，提取显式内部 stage value objects，并将 Boundary 纳回 Python 3.12 的 mypy 检查。
+3. `governance-profiles`：将 reliability observation、risk assessment、disposition 与 `DefaultLocalReliabilityPolicy` 分开；默认阈值成为 profile 配置而非框架不变量。
+4. `compatibility-contraction`：canonical authorization 只接受 frozen typed request；历史 dict/object 通过显式 compat adapter 进入，不能再让 permissive 分支成为 canonical security primitive。
 
 > 核心原则：
 >

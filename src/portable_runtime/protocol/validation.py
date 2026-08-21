@@ -276,12 +276,11 @@ def _has_effective_authorization(
         refs = raw.get("subject_version_refs")
         if not isinstance(refs, list) or not any(str(ref) in expected_refs for ref in refs):
             continue
-        if raw.get("revoked_at") or raw.get("expires_at"):
-            # Expiry is evaluated by AuthorizationGrant; graph validation only
-            # rejects explicit revocation and preserves time-based checks for
-            # the boundary's current clock.
-            if raw.get("revoked_at"):
-                continue
+        # Expiry is evaluated by AuthorizationGrant; graph validation only
+        # rejects explicit revocation and preserves time-based checks for the
+        # boundary's current clock.
+        if raw.get("revoked_at"):
+            continue
         return True
     return any(
         rel.relation_type == "authorizes" and (rel.object_ref == target_id or rel.subject_ref == target_id)

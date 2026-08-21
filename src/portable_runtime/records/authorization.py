@@ -37,6 +37,19 @@ class TypedCondition(BaseModel):
     authority_ref: str | None = None
 
 
+class CanonicalAuthorizationRequest(BaseModel):
+    """Strict, typed authorization input used by the canonical primitive."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    capability: str
+    actor_ref: str
+    resource_ref: str | None = None
+    subject_version_refs: list[str] = Field(default_factory=list)
+    effect_class: EffectClass = "read"
+    lease_generation: int | None = None
+
+
 class AuthorizationGrant(BaseModel):
     """Authorization that allows a grantee to make a decision effective.
 
@@ -269,7 +282,7 @@ def _extract_action_fields(action: Any) -> tuple[str, str | None, list[str], str
     return capability, resource, subject_versions, actor_ref, effect_class, lease_generation
 
 
-def is_authorized_for(
+def _legacy_is_authorized_for(
     action: Any,
     grant: AuthorizationGrant,
     *,
@@ -382,8 +395,70 @@ def is_authorized_for(
     return True
 
 
-def is_authorized_for_any(action: Any, grants: list[AuthorizationGrant], *, now: datetime | None = None) -> bool:
-    return any(is_authorized_for(action, g, now=now) for g in grants)
+def is_authorized_for(
+    action: CanonicalAuthorizationRequest,
+    grant: AuthorizationGrant,
+    *,
+    now: datetime | None = None,
+) -> bool:
+    """Authorize one typed request; legacy shapes are rejected fail-closed."""
+
+    if not isinstance(action, CanonicalAuthorizationRequest):
+        return False
+    ts = now or datetime.now(UTC)
+    if grant.revoked_at is not None or (grant.expires_at is not None and ts >= grant.expires_at) or ts < grant.valid_from:
+        return False
+    if not _conditions_satisfied(grant):
+        return False
+    if not action.capability.strip() or not action.actor_ref.strip():
+        return False
+    if not _capability_matches(grant.allowed_capabilities, action.capability):
+        return False
+    if grant.resource_scope and not _resource_matches(grant.resource_scope, action.resource_ref):
+        return False
+    if action.actor_ref != grant.grantee_ref:
+        return False
+    if not _effect_allows(grant.effect_ceiling, action.effect_class, has_effect_key=True):
+        return False
+    if grant.subject_version_refs:
+        if not action.subject_version_refs:
+            return False
+        if not any(value in grant.subject_version_refs for value in action.subject_version_refs):
+            return False
+    elif action.subject_version_refs:
+        return False
+    return True
+
+
+def is_authorized_for_any(
+    action: CanonicalAuthorizationRequest,
+    grants: list[AuthorizationGrant],
+    *,
+    now: datetime | None = None,
+) -> bool:
+    return any(is_authorized_for(action, grant, now=now) for grant in grants)
+
+
+def is_authorized_for_legacy(
+    action: Any,
+    grant: AuthorizationGrant,
+    *,
+    now: datetime | None = None,
+) -> bool:
+    """Normalize a historical input outside the canonical authorization path."""
+
+    # The compatibility adapter intentionally retains historical permissive
+    # decoding.  The canonical primitive above never sees these shapes.
+    return _legacy_is_authorized_for(action, grant, now=now)
+
+
+def is_authorized_for_any_legacy(
+    action: Any,
+    grants: list[AuthorizationGrant],
+    *,
+    now: datetime | None = None,
+) -> bool:
+    return any(is_authorized_for_legacy(action, grant, now=now) for grant in grants)
 
 
 def create_grant_for_approval(

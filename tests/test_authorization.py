@@ -16,7 +16,7 @@ from portable_runtime.core.policies import (
 from portable_runtime.records.authorization import (
     AuthorizationGrant,
     create_grant_for_approval,
-    is_authorized_for,
+    is_authorized_for_legacy as is_authorized_for,
     validate_grant,
 )
 from portable_runtime.stores.memory import InMemoryStateStore
@@ -102,7 +102,7 @@ def test_unauthorized_action_cannot_pass_execution_gate():
 
     def execution_gate(action: dict, grants: list[AuthorizationGrant]) -> bool:
         # gate passes only if any grant authorizes
-        from portable_runtime.records.authorization import is_authorized_for_any
+        from portable_runtime.records.authorization import is_authorized_for_any_legacy as is_authorized_for_any
         return is_authorized_for_any(action, grants)
 
     # correct grantee version passes

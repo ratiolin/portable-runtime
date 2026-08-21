@@ -4,7 +4,7 @@ import hashlib
 import inspect
 import json
 from datetime import UTC, datetime
-from typing import Any, Literal
+from typing import Any, Literal, cast
 
 from portable_runtime.core.boundary_stages import BoundaryStagePlan, InvocationStagePlan, ReliabilityStageInput
 from portable_runtime.core.capabilities import (
@@ -28,6 +28,8 @@ from portable_runtime.core.qualification import (
 )
 from portable_runtime.core.reliability import CircuitBreaker, ReliabilityControls
 from portable_runtime.core.router import ConstraintRouter
+from portable_runtime.records.authorization import CanonicalAuthorizationRequest
+from portable_runtime.records.authorization import EffectClass as AuthorizationEffectClass
 
 CODE_FENCING_REJECTED = "FencingRejected"
 CODE_FENCING_UNAVAILABLE = "FencingUnavailable"
@@ -328,7 +330,14 @@ class RealityBoundary:
         from portable_runtime.records.authorization import is_authorized_for  # noqa: PLC0415
         resource = self._extract_resource(request)
         svr = self._extract_versions(request)
-        action = {"capability": request.capability, "resource": resource, "subject_version_refs": svr, "actor_ref": actor, "effect_class": effective}
+        action = CanonicalAuthorizationRequest(
+            capability=request.capability,
+            resource_ref=resource,
+            subject_version_refs=svr,
+            actor_ref=actor,
+            effect_class=cast(AuthorizationEffectClass, effective),
+            lease_generation=_extract_lease_generation(request),
+        )
         any_match = False
         for g in grants:
             try:
