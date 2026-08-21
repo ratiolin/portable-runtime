@@ -114,6 +114,31 @@ def test_state_graph_validator_checks_core_edges_projection_refs_and_authorizati
     assert any("missing_payload" in error for error in errors)
 
 
+def test_state_graph_validator_reports_invalid_relation_shape_and_revision_lifecycle() -> None:
+    state = _valid_state()
+    state["relation"].append({
+        "id": "bad_relation_p2",
+        "relation_type": "not-a-relation",
+        "subject_ref": "record_p2",
+        "object_ref": "missing_object",
+    })
+    state["record"].append({
+        "id": "bad_revision_p2",
+        "record_type": "Revision",
+        "lifecycle_status": "applied",
+        "version": 1,
+        "metadata": {"previous_lifecycle_status": "proposed", "from_version": "2", "to_version": "1"},
+        "revises_ref": "record_p2",
+        "produces_ref": "record_p2",
+        "supersedes_ref": "record_p2",
+    })
+
+    errors = validate_state_graph(state, strict=False)
+
+    assert any("invalid relation" in error for error in errors)
+    assert any("invalid version lineage" in error for error in errors)
+
+
 def test_sqlite_import_is_atomic_on_graph_failure(tmp_path: Path) -> None:
     store = SQLiteStateStore(tmp_path / "p2.db")
     store.save_work(Work(id="kept_sqlite", title="kept"))

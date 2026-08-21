@@ -121,3 +121,7 @@ def test_qualification_refs_accept_legacy_aliases_but_reject_inline_shapes() -> 
         QualificationRef.parse({"record_id": ""})
     with pytest.raises(QualificationResolutionError):
         QualificationRef.parse(["record:bad"])
+    with pytest.raises(ValueError, match="reference id"):
+        QualificationRef(id=" ")
+    with pytest.raises(ValueError, match="reference kind"):
+        QualificationRef(id="record:five", kind=" ")
