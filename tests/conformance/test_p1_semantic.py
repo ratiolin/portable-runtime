@@ -6,14 +6,16 @@ import pytest
 
 from portable_runtime.core.capabilities import CapabilityRequest
 from portable_runtime.core.models import Evidence, Run, Work
-from portable_runtime.core.qualification import InvocationPermit
+from portable_runtime.core.qualification import AssessmentContext, InvocationPermit
 from portable_runtime.records.knowledge import KnowledgeProjection
 from portable_runtime.records.models import Assertion, BaseRecord, Derivation, EvidenceArtifact
 from portable_runtime.records.reopen import ReopenAssessment, create_reopen_work
 from portable_runtime.records.revalidation import (
+    DefaultRevalidationPolicyProfile,
     assess_revalidation,
     detect_dependency_impacts,
     derive_revalidation_disposition,
+    derive_risk_assessment,
 )
 from portable_runtime.records.relations import RecordRelation
 from portable_runtime.core.qualification import QualificationRef, QualificationResolutionError
@@ -24,20 +26,31 @@ from portable_runtime.workflows.daily_scan.workflow import KnowledgeConsolidatio
 
 
 def test_deep_reopen_carries_handoff_and_never_reuses_original_workflow() -> None:
+    store = InMemoryStateStore()
     original = Work(
         id="work_original",
         title="original problem",
         kind="incident",
         acceptance_criteria=["restore service"],
-        metadata={"assumptions": ["old frame"], "unknown_scopes": ["cause"]},
+        metadata={"assumptions": ["metadata-only"], "unknown_scopes": ["metadata-unknown"]},
     )
+    assertion = Assertion(
+        id="assertion_reopen",
+        statement="old frame",
+        lifecycle_status="current",
+        epistemic_status="supported",
+        assumptions=["old frame"],
+    )
+    store.save_work(original)
+    store.save_record(assertion)
+    store.save_relation(RecordRelation(relation_type="supports", subject_ref=assertion.id, object_ref=original.id))
     assessment = ReopenAssessment(
         record_ref=original.id,
         revision_scope="problem-definition",
         reason="the problem frame was wrong",
     )
 
-    reopened = create_reopen_work(assessment, original)
+    reopened = create_reopen_work(assessment, original, store=store)
 
     assert reopened.kind == "reframing"
     assert reopened.metadata["auto_rerun_original_work"] is False
@@ -63,6 +76,31 @@ def test_dependency_impact_detection_is_separate_from_revalidation_disposition()
     assert assessed[0].dependency_impact is not None
     assert assessed[0].revalidation_disposition is not None
     assert assessed[0].revalidation_disposition.action == "block-next-use"
+
+
+def test_revalidation_policy_profile_owns_risk_and_action_interpretation() -> None:
+    relation = RecordRelation(
+        subject_ref="goal_1",
+        object_ref="state:v2",
+        relation_type="scoped-to",
+    )
+    profile = DefaultRevalidationPolicyProfile(
+        profile_id="deployment-profile",
+        risk_rules={"state_space": ("medium", "elevated", "bounded")},
+        required_action_rules={"state_space": {"scoped-to": "warn"}},
+    )
+    impact = detect_dependency_impacts("state:v2", "state_space", [relation])[0]
+    risk = derive_risk_assessment(impact, change_type="state_space", profile=profile)
+    disposition = derive_revalidation_disposition(impact, change_type="state_space", profile=profile)
+    assessed = assess_revalidation("state:v2", "state_space", [relation], profile=profile)[0]
+
+    assert impact.impact_type == "warn"
+    assert risk.severity == "medium"
+    assert risk.blast_radius == "bounded"
+    assert disposition.action == "warn"
+    assert disposition.policy_ref == "deployment-profile"
+    assert assessed.impact_type == "warn"
+    assert assessed.required_action == "warn"
 
 
 @pytest.mark.asyncio
@@ -217,6 +255,31 @@ def test_invocation_permit_binds_an_immutable_authority_sensitive_snapshot() -> 
         "resource": "repo/app",
         "subject_version_refs": ["patch:v1"],
     }
+    assert permit.materialize_request().parameters == materialized.parameters
+
+
+def test_assessment_context_is_deeply_immutable_but_compatible_on_read() -> None:
+    work = Work(id="work_immutable", title="immutable", metadata={"hint": {"value": 1}})
+    context = AssessmentContext(
+        work=work,
+        run=None,
+        proofs={"grants": [{"id": "grant-1"}]},
+        refs=(),
+        digest="digest",
+    )
+
+    with pytest.raises(TypeError, match="immutable"):
+        context.proofs["grants"].append({"id": "grant-2"})
+    compatible_read = context.proofs.get("grants")
+    assert isinstance(compatible_read, list)
+    compatible_read.append({"id": "grant-2"})
+    assert len(context.proofs["grants"]) == 1
+
+    metadata_read = context.work.metadata
+    metadata_read["hint"]["value"] = 2
+    assert context.work.metadata["hint"]["value"] == 1
+    with pytest.raises(TypeError, match="immutable"):
+        context.work.title = "mutated"
 
 
 def test_qualification_refs_accept_legacy_aliases_but_reject_inline_shapes() -> None:

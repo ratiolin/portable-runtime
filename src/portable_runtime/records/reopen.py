@@ -26,6 +26,10 @@ HandoffDisposition = Literal["carry-forward", "reconsider", "invalidated", "unre
 _DEEP_REOPEN_SCOPES = {"representation", "goal", "problem-definition"}
 
 
+class ReopenAssemblyError(ValueError):
+    """Authoritative semantic graph required to assemble a reopen package."""
+
+
 class HandoffEnvelope(BaseModel):
     """Explicit responsibility handoff for a reopened work item."""
 
@@ -100,48 +104,183 @@ class ReopenAssessment(BaseModel):
         return self
 
 
+class ReopenAssembler:
+    """Resolve reopen responsibility from the authoritative semantic graph.
+
+    Work metadata is intentionally not consulted.  It may remain useful to a
+    UI as a cache/display hint, but it cannot become a canonical handoff fact.
+    """
+
+    def __init__(self, store: Any | None) -> None:
+        self.store = store
+
+    def _records_and_relations(self, assessment: ReopenAssessment, original_work: Work) -> tuple[dict[str, Any], list[Any]]:
+        if self.store is None:
+            return {}, []
+        records: dict[str, Any] = {}
+        relations = list(self.store.list_relations()) if hasattr(self.store, "list_relations") else []
+        queue = [original_work.id, assessment.record_ref or original_work.id]
+        seen = set(queue)
+        while queue:
+            current = queue.pop(0)
+            for rel in relations:
+                if rel.subject_ref != current and rel.object_ref != current:
+                    continue
+                other = rel.object_ref if rel.subject_ref == current else rel.subject_ref
+                if other in seen:
+                    continue
+                candidate = self.store.get_record(other) if hasattr(self.store, "get_record") else None
+                if candidate is None and hasattr(self.store, "get_authorization"):
+                    candidate = self.store.get_authorization(other)
+                if candidate is None:
+                    continue
+                seen.add(other)
+                queue.append(other)
+                records[other] = candidate
+        target = self.store.get_record(assessment.record_ref) if hasattr(self.store, "get_record") else None
+        if target is not None:
+            records[assessment.record_ref] = target
+        return records, relations
+
+    @staticmethod
+    def _record_type(value: Any) -> str:
+        return str(getattr(value, "record_type", "") or value.__class__.__name__)
+
+    def assemble(
+        self,
+        assessment: ReopenAssessment,
+        original_work: Work,
+        *,
+        handoff: HandoffEnvelope | None = None,
+    ) -> ReopenPackage:
+        records, relations = self._records_and_relations(assessment, original_work)
+        if self.store is None and handoff is None and assessment.handoff is None:
+            raise ReopenAssemblyError(
+                "authoritative store or explicit handoff envelope is required for reopen assembly"
+            )
+
+        evidence_refs: list[str] = []
+        observation_refs: list[str] = []
+        assertion_refs: list[str] = []
+        goal_refs: list[str] = []
+        constraint_refs: list[str] = []
+        authorization_refs: list[str] = []
+        candidate_refs: list[str] = []
+        rejected_refs: list[str] = []
+        counterevidence_refs: list[str] = []
+        assumptions: list[str] = []
+        unknown_scopes: list[str] = []
+        reopen_condition_refs: list[str] = []
+        invalidation_refs: list[str] = []
+        closure_refs: list[str] = []
+        environment_versions: dict[str, str] = {}
+        scope: dict[str, Any] = {}
+        dispositions: dict[str, HandoffDisposition] = {}
+
+        for ref, record in records.items():
+            record_type = self._record_type(record)
+            lifecycle = str(getattr(record, "lifecycle_status", "") or "")
+            if record_type == "EvidenceArtifact":
+                evidence_refs.append(ref)
+            elif record_type == "Observation":
+                observation_refs.append(ref)
+            elif record_type == "Assertion":
+                assertion_refs.append(ref)
+            elif record_type == "Goal":
+                goal_refs.append(ref)
+            elif record_type == "Constraint":
+                constraint_refs.append(ref)
+            elif record_type == "AuthorizationGrant":
+                authorization_refs.append(ref)
+            if lifecycle == "candidate":
+                candidate_refs.append(ref)
+            if lifecycle in {"rejected", "deprecated", "archived"}:
+                rejected_refs.append(ref)
+            if lifecycle in {"verified", "accepted", "confirmed", "official"}:
+                closure_refs.append(ref)
+            assumptions.extend(str(item) for item in (getattr(record, "assumptions", None) or []) if str(item).strip())
+            unknown_scopes.extend(str(item) for item in (getattr(record, "unknown_scopes", None) or []) if str(item).strip())
+            reopen_condition_refs.extend(str(item) for item in (getattr(record, "invalidation_conditions", None) or []) if str(item).strip())
+            environment_versions.update(dict(getattr(record, "environment_versions", None) or {}))
+            if not scope and isinstance(getattr(record, "scope", None), dict):
+                scope = dict(record.scope)
+            dispositions[ref] = "invalidated" if lifecycle in {"rejected", "deprecated", "archived", "superseded"} else "carry-forward"
+
+        for rel in relations:
+            if rel.subject_ref not in records and rel.object_ref not in records:
+                continue
+            if rel.relation_type == "authorizes":
+                authorization_refs.extend([ref for ref in (rel.subject_ref, rel.object_ref) if ref in records])
+            elif rel.relation_type == "contradicts":
+                counterevidence_refs.extend([ref for ref in (rel.subject_ref, rel.object_ref) if ref in records])
+                for ref in (rel.subject_ref, rel.object_ref):
+                    if ref in records:
+                        dispositions[ref] = "invalidated"
+            elif rel.relation_type == "requires-revalidation":
+                invalidation_refs.append(rel.id)
+                if rel.subject_ref in records:
+                    dispositions[rel.subject_ref] = "reconsider"
+            elif rel.relation_type == "supports":
+                for ref in (rel.subject_ref, rel.object_ref):
+                    if ref in records and self._record_type(records[ref]) == "Assertion":
+                        assertion_refs.append(ref)
+
+        def unique(values: list[str]) -> list[str]:
+            return list(dict.fromkeys(values))
+        handoff_envelope = handoff or assessment.handoff or HandoffEnvelope(
+            subject_refs=unique([original_work.id, assessment.record_ref or original_work.id]),
+            goal_refs=unique(goal_refs),
+            constraint_refs=unique(constraint_refs),
+            assumption_refs=unique(assumptions),
+            evidence_refs=unique(evidence_refs),
+            observation_refs=unique(observation_refs),
+            current_assertion_refs=unique(assertion_refs),
+            unknown_refs=unique(unknown_scopes),
+            counterevidence_refs=unique(counterevidence_refs),
+            still_qualified_candidate_refs=unique(candidate_refs),
+            authorization_refs=unique(authorization_refs),
+            closure_refs=unique(closure_refs),
+            invalidation_refs=unique(invalidation_refs),
+            reopen_condition_refs=unique(reopen_condition_refs),
+            dispositions=dispositions,
+        )
+        return ReopenPackage(
+            original_work_ref=original_work.id,
+            target_record_ref=assessment.record_ref or original_work.id,
+            current_conclusion_refs=unique(assertion_refs),
+            scope=scope,
+            assumptions=unique(assumptions),
+            evidence_refs=unique(evidence_refs),
+            counterevidence_refs=unique(counterevidence_refs),
+            unknown_scopes=unique(unknown_scopes),
+            still_qualified_candidate_refs=unique(candidate_refs),
+            rejected_candidate_refs=unique(rejected_refs),
+            acceptance_criteria=list(original_work.acceptance_criteria),
+            constraints=dict(original_work.constraints),
+            inputs=list(original_work.inputs),
+            artifact_refs=list(original_work.artifact_refs),
+            reopen_reason=assessment.reason,
+            revision_scope=assessment.revision_scope,
+            environment_versions=environment_versions,
+            authorization_context={"authorization_refs": unique(authorization_refs)},
+            failure_history_refs=unique(invalidation_refs),
+            handoff=handoff_envelope,
+        )
+
+
 def build_reopen_package(
     assessment: ReopenAssessment,
     original_work: Work,
     *,
     handoff: HandoffEnvelope | None = None,
+    store: Any | None = None,
 ) -> ReopenPackage:
-    """Build an explicit handoff package from the original Work and assessment."""
-    metadata = original_work.metadata if isinstance(original_work.metadata, dict) else {}
-    envelope = handoff or assessment.handoff or HandoffEnvelope(
-        subject_refs=[original_work.id],
-        assumption_refs=list(metadata.get("assumptions") or []),
-        evidence_refs=list(metadata.get("evidence_refs") or []),
-        unknown_refs=list(metadata.get("unknown_refs") or []),
-        authorization_refs=list(metadata.get("authorization_refs") or metadata.get("authorization_grant_ids") or []),
-        reopen_condition_refs=list(metadata.get("reopen_conditions") or []),
-    )
-    return ReopenPackage(
-        original_work_ref=original_work.id,
-        target_record_ref=assessment.record_ref or original_work.id,
-        current_conclusion_refs=list(metadata.get("current_conclusion_refs") or []),
-        scope=dict(metadata.get("valid_scope") or metadata.get("scope") or {}),
-        assumptions=list(metadata.get("assumptions") or []),
-        evidence_refs=list(metadata.get("evidence_refs") or []),
-        counterevidence_refs=list(metadata.get("counterevidence_refs") or []),
-        unknown_scopes=list(metadata.get("unknown_scopes") or []),
-        still_qualified_candidate_refs=list(metadata.get("still_qualified_candidate_refs") or []),
-        rejected_candidate_refs=list(metadata.get("rejected_candidate_refs") or []),
-        acceptance_criteria=list(original_work.acceptance_criteria),
-        constraints=dict(original_work.constraints),
-        inputs=list(original_work.inputs),
-        artifact_refs=list(original_work.artifact_refs),
-        reopen_reason=assessment.reason,
-        revision_scope=assessment.revision_scope,
-        environment_versions=dict(metadata.get("environment_versions") or {}),
-        authorization_context=dict(metadata.get("authorization_context") or {}),
-        failure_history_refs=list(metadata.get("failure_history_refs") or []),
-        handoff=envelope,
-    )
+    """Build an explicit handoff package from the authoritative graph."""
+    return ReopenAssembler(store).assemble(assessment, original_work, handoff=handoff)
 
-def create_reopen_work(assessment: ReopenAssessment, original_work: Work) -> Work:
+def create_reopen_work(assessment: ReopenAssessment, original_work: Work, *, store: Any | None = None) -> Work:
     """Create superseding Work for reopen; preserves old history via supersedes relation."""
-    package = assessment.package or build_reopen_package(assessment, original_work)
+    package = assessment.package or build_reopen_package(assessment, original_work, store=store)
     deep = assessment.revision_scope in _DEEP_REOPEN_SCOPES
     # Deep reopen changes the problem frame.  It must not resolve to the old
     # workflow, so route it to a neutral reframing work kind and mark the

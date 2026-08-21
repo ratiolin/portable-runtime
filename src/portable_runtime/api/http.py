@@ -539,7 +539,7 @@ def create_app(runtime: Runtime | None = None) -> FastAPI:
                 raise
             except Exception as exc:
                 raise HTTPException(status_code=400, detail=str(exc)) from exc
-        new_work = create_reopen_work(assess, work)
+        new_work = create_reopen_work(assess, work, store=runtime.store)
         runtime.store.save_work(new_work)
         try:
             from portable_runtime.records.relations import RecordRelation
