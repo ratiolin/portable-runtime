@@ -8,6 +8,7 @@ from portable_runtime.core.capabilities import CapabilityRequest
 from portable_runtime.core.models import Evidence, Run, Work
 from portable_runtime.core.qualification import AssessmentContext, InvocationPermit
 from portable_runtime.records.knowledge import KnowledgeProjection
+from portable_runtime.records.experiment import ExperimentPlan, create_experiment_work, is_low_cost_discriminative
 from portable_runtime.records.models import Assertion, BaseRecord, Derivation, EvidenceArtifact
 from portable_runtime.records.reopen import ReopenAssessment, create_reopen_work
 from portable_runtime.records.revalidation import (
@@ -57,6 +58,19 @@ def test_deep_reopen_carries_handoff_and_never_reuses_original_workflow() -> Non
     assert reopened.metadata["reopen_package"]["original_work_ref"] == original.id
     assert reopened.metadata["handoff_envelope"]["assumption_refs"] == ["old frame"]
     assert original.kind == "incident"
+
+
+def test_experiment_plan_creates_discriminative_work_without_promoting_a_judgment() -> None:
+    plan = ExperimentPlan(
+        hypothesis_refs=["h1"],
+        discriminates_between=["h1", "h2"],
+        expected_outcomes=["o1"],
+        risk_profile={"cost": "low"},
+    )
+    work = create_experiment_work(plan, title="experiment")
+    assert work.kind == "experiment"
+    assert is_low_cost_discriminative(plan)
+    assert work.metadata["experiment_plan_id"] == plan.id
 
 
 def test_dependency_impact_detection_is_separate_from_revalidation_disposition() -> None:
