@@ -10,7 +10,9 @@ from portable_runtime.core.boundary_stages import (
     BoundaryStagePlan,
     InvocationStagePlan,
     ReliabilityStageInput,
+    commit_execution_projection,
     evaluate_reliability_stage,
+    precommit_execution_records,
     select_provider_stage,
 )
 from portable_runtime.core.capabilities import (
@@ -820,80 +822,33 @@ class RealityBoundary:
         execution_request = permit.materialize_request()
         request = execution_request
 
-        # Precommit is mandatory for all action-critical effects.  A missing
-        # durable store or identity is itself a STOP, never a bypass.
-        step_id: str | None = None
-        attempt_id: str | None = None
-        action_id: str | None = None
+        # Precommit is a persistence-only stage.  Action-critical requests
+        # fail closed; pure observations retain best-effort records.
+        precommit = precommit_execution_records(
+            store,
+            request,
+            provider_id=provider_id,
+            permit_digest=permit.request_digest,
+            lease_generation=_extract_lease_generation(request) or 0,
+            side_effect=side_effect,
+            side_effect_class=side_effect_class,
+            effect_semantics=effect_semantics,
+            reversibility=invocation_plan.reversibility,
+        )
+        records = precommit.records
+        step_id = records.step_id
+        attempt_id = records.attempt_id
+        if precommit.error is not None:
+            reason = str(precommit.error)
+            _append_event(store, CODE_PRECOMMIT_FAILED, request.id, {"reason": reason})
+            return self._error_result(request, CODE_PRECOMMIT_FAILED, f"precommit failed: {reason}", provider_id=provider_id)
         if side_effect:
-            if store is None or not request.work_id or not request.run_id:
-                reason = "side-effect invocation requires durable work/run precommit"
-                _append_event(store, CODE_PRECOMMIT_FAILED, request.id, {"reason": reason})
-                return self._error_result(request, CODE_PRECOMMIT_FAILED, reason, provider_id=provider_id)
-            try:
-                if not all(hasattr(store, method) for method in ("save_step", "save_attempt", "save_action")):
-                    raise RuntimeError("store lacks precommit methods")
-                existing_steps = store.list_steps(request.run_id) if hasattr(store, "list_steps") else []
-                step_key = request.step_key or f"{request.capability}:{request.idempotency_key or request.id}"
-                step = next((candidate for candidate in existing_steps if candidate.step_key == step_key), None)
-                lease_gen = _extract_lease_generation(request) or 0
-                if step is None:
-                        step = Step(id=new_id("step"), run_id=request.run_id, step_key=step_key, kind=request.capability.split(".")[0] if "." in request.capability else "generic", status="running", effect_semantics=effect_semantics, side_effect_class=side_effect_class, reversibility=invocation_plan.reversibility, input_digest=permit.request_digest, lease_generation=lease_gen)
-                else:
-                    step = step.model_copy(update={"status": "running", "updated_at": utcnow(), "input_digest": permit.request_digest, "effect_semantics": effect_semantics, "side_effect_class": side_effect_class, "lease_generation": lease_gen, "version": (step.version or 0) + 1})
-                step_id = step.id
-                attempts = store.list_attempts(step_id) if hasattr(store, "list_attempts") else []
-                attempt_no = max((a.attempt_no for a in attempts), default=0) + 1
-                attempt = StepAttempt(id=new_id("attempt"), step_id=step_id, attempt_no=attempt_no, provider_id=provider_id, request_ref=request.id, idempotency_key=request.idempotency_key or request.id, status="running", lease_generation=lease_gen)
-                attempt_id = attempt.id
-                action_id = new_id("action")
-                action = Action(id=action_id, work_id=request.work_id, run_id=request.run_id, capability=request.capability, provider_id=provider_id, request_ref=request.id, status="running")
-                if hasattr(store, "transaction"):
-                    with store.transaction():
-                        store.save_step(step)
-                        step.current_attempt = attempt_no
-                        store.save_step(step)
-                        store.save_attempt(attempt)
-                        store.save_action(action)
-                else:
-                    store.save_step(step)
-                    step.current_attempt = attempt_no
-                    store.save_step(step)
-                    store.save_attempt(attempt)
-                    store.save_action(action)
-                _append_event(
-                    store,
-                    "StepPrecommitted",
-                    request.id,
-                    {"step_id": step_id, "attempt_id": attempt_id, "action_id": action_id, "provider_id": provider_id},
-                )
-            except Exception as exc:
-                _append_event(store, CODE_PRECOMMIT_FAILED, request.id, {"reason": str(exc)})
-                return self._error_result(request, CODE_PRECOMMIT_FAILED, f"precommit failed: {exc}", provider_id=provider_id)
-        else:
-            # Pure invocations may still retain execution records where the
-            # store supports them, but persistence failures must not create a
-            # false authorization path before provider execution.
-            if store is not None and request.work_id and request.run_id and hasattr(store, "save_step"):
-                try:
-                    existing_steps = store.list_steps(request.run_id) if hasattr(store, "list_steps") else []
-                    step_key = request.step_key or f"{request.capability}:{request.idempotency_key or request.id}"
-                    step = next((candidate for candidate in existing_steps if candidate.step_key == step_key), None)
-                    if step is None:
-                        step = Step(id=new_id("step"), run_id=request.run_id, step_key=step_key, kind=request.capability.split(".")[0] if "." in request.capability else "generic", status="running", effect_semantics=effect_semantics, side_effect_class=side_effect_class, reversibility=invocation_plan.reversibility, input_digest=permit.request_digest, lease_generation=_extract_lease_generation(request) or 0)
-                    else:
-                        step = step.model_copy(update={"status": "running", "updated_at": utcnow(), "input_digest": permit.request_digest})
-                    step_id = step.id
-                    store.save_step(step)
-                    if hasattr(store, "save_attempt"):
-                        attempt = StepAttempt(id=new_id("attempt"), step_id=step_id, attempt_no=1, provider_id=provider_id, request_ref=request.id, idempotency_key=request.idempotency_key or request.id, status="running", lease_generation=_extract_lease_generation(request) or 0)
-                        attempt_id = attempt.id
-                        store.save_attempt(attempt)
-                except Exception:
-                    # Pure observation does not get an action-critical
-                    # precommit, so preserve historical best-effort records.
-                    step_id = None
-                    attempt_id = None
+            _append_event(
+                store,
+                "StepPrecommitted",
+                request.id,
+                {"step_id": step_id, "attempt_id": attempt_id, "action_id": records.action_id, "provider_id": provider_id},
+            )
 
         reliability_started = False
         try:
@@ -969,37 +924,30 @@ class RealityBoundary:
 
         # Durable projection is part of the authoritative outcome.  A commit
         # failure after provider success is recoverable/unknown, never success.
-        if store is not None and step_id is not None:
-            try:
-                step = store.get_step(step_id) if hasattr(store, "get_step") else None
-                attempt_record = store.get_attempt(attempt_id) if attempt_id and hasattr(store, "get_attempt") else None
-                projected_status = result.status if result.status in ("succeeded", "failed", "cancelled", "unknown") else "failed"
-                if step is None or attempt_record is None:
-                    raise RuntimeError("execution projection missing precommitted records")
-                step_update = step.model_copy(update={"status": projected_status, "updated_at": utcnow()})
-                attempt_update = attempt_record.model_copy(update={"status": projected_status, "ended_at": utcnow(), "result_ref": result.request_id, "error": result.error})
-                action = Action(id=action_id or new_id("action"), work_id=request.work_id or "", run_id=request.run_id or "", capability=request.capability, provider_id=provider_id, request_ref=request.id, status=projected_status)
-                outcome = Outcome(id=new_id("outcome"), action_id=action.id, artifact_refs=result.output_artifact_refs, evidence_refs=result.evidence_refs, status=projected_status)
-                if hasattr(store, "transaction"):
-                    with store.transaction():
-                        store.save_step(step_update)
-                        store.save_attempt(attempt_update)
-                        store.save_action(action)
-                        store.save_outcome(outcome)
-                else:
-                    store.save_step(step_update)
-                    store.save_attempt(attempt_update)
-                    store.save_action(action)
-                    store.save_outcome(outcome)
-                _append_event(store, "CapabilitySucceeded" if projected_status == "succeeded" else "CapabilityCompleted", request.id, {"provider_id": provider_id, "status": projected_status, "capability": request.capability})
-                _append_event(store, "OutcomeRecorded", request.id, {"outcome_id": outcome.id, "status": projected_status, "provider_id": provider_id})
-            except Exception as exc:
-                # The provider may have changed the world even though the
-                # runtime could not persist the projection.  Preserve the
-                # uncertainty explicitly.
-                reason = f"result commit failed: {exc}"
-                _append_event(store, CODE_RESULT_COMMIT_FAILED, request.id, {"reason": reason, "provider_id": provider_id})
-                return result.model_copy(update={"status": "unknown", "error": {"code": CODE_RESULT_COMMIT_FAILED, "reason": reason}})
+        projection = commit_execution_projection(
+            store,
+            request,
+            result,
+            provider_id=provider_id,
+            records=records,
+        )
+        if projection.error is not None:
+            reason = f"result commit failed: {projection.error}"
+            _append_event(store, CODE_RESULT_COMMIT_FAILED, request.id, {"reason": reason, "provider_id": provider_id})
+            return result.model_copy(update={"status": "unknown", "error": {"code": CODE_RESULT_COMMIT_FAILED, "reason": reason}})
+        if projection.projected_status is not None:
+            _append_event(
+                store,
+                "CapabilitySucceeded" if projection.projected_status == "succeeded" else "CapabilityCompleted",
+                request.id,
+                {"provider_id": provider_id, "status": projection.projected_status, "capability": request.capability},
+            )
+            _append_event(
+                store,
+                "OutcomeRecorded",
+                request.id,
+                {"outcome_id": projection.outcome_id, "status": projection.projected_status, "provider_id": provider_id},
+            )
         return result
 
     async def reconcile(

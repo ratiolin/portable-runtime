@@ -1,13 +1,25 @@
 from __future__ import annotations
 
 from portable_runtime.core.reliability import (
+    CircuitBreaker,
     DefaultLocalReliabilityPolicy,
     ReliabilityControls,
     ReliabilityDisposition,
+    ReliabilityLimits,
     ReliabilityObservation,
     ReliabilityRiskEvaluator,
     ReliabilityRiskAssessment,
 )
+
+
+def test_circuit_breaker_reopens_after_recovery_and_closes_on_probe_success() -> None:
+    breaker = CircuitBreaker(failure_threshold=2, recovery_timeout=0)
+    assert breaker.allow()
+    breaker.record_failure()
+    breaker.record_failure()
+    assert breaker.allow()
+    breaker.record_success()
+    assert breaker.state == "closed"
 
 
 def test_reliability_blocks_parallel_side_effects_and_releases_capacity() -> None:
@@ -92,9 +104,10 @@ def test_risk_evaluator_and_policy_decision_are_independent() -> None:
         requested_exposure=1,
         cooldown_remaining=0,
     )
-    evaluator = ReliabilityRiskEvaluator(blast_radius=2)
+    evaluator = ReliabilityRiskEvaluator()
     risk = evaluator.evaluate(
         observation,
+        ReliabilityLimits(blast_radius=2),
         side_effect=True,
         irreversible=False,
         procedure_profile=None,

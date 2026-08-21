@@ -101,12 +101,8 @@ class ReliabilityDisposition:
 
 
 @dataclass(frozen=True)
-class ReliabilityRiskEvaluator:
-    """Interpret an observation into structural risk reasons.
-
-    This component owns the mechanical threshold checks.  It does not choose
-    whether execution is allowed; that decision belongs to a policy profile.
-    """
+class ReliabilityLimits:
+    """Single owner for local reliability threshold values."""
 
     max_action_rate: int = 100
     max_parallel_side_effects: int = 10
@@ -114,9 +110,19 @@ class ReliabilityRiskEvaluator:
     exposure_budget: int = 1000
     side_effect_budget: int = 100
 
+
+@dataclass(frozen=True)
+class ReliabilityRiskEvaluator:
+    """Interpret an observation into structural risk reasons.
+
+    This component owns the mechanical threshold checks.  It does not choose
+    whether execution is allowed; that decision belongs to a policy profile.
+    """
+
     def evaluate(
         self,
         observation: ReliabilityObservation,
+        limits: ReliabilityLimits,
         *,
         side_effect: bool,
         irreversible: bool,
@@ -124,19 +130,19 @@ class ReliabilityRiskEvaluator:
         timing: dict[str, Any] | None,
     ) -> ReliabilityRiskAssessment:
         reasons: list[str] = []
-        if observation.action_rate >= self.max_action_rate:
+        if observation.action_rate >= limits.max_action_rate:
             reasons.append("max_action_rate")
         elif side_effect and observation.requested_blast_radius < 1:
             reasons.append("blast_radius_positive")
-        elif side_effect and observation.requested_blast_radius > self.blast_radius:
+        elif side_effect and observation.requested_blast_radius > limits.blast_radius:
             reasons.append("blast_radius_limit")
         elif side_effect and observation.requested_exposure < 1:
             reasons.append("exposure_positive")
-        elif side_effect and observation.active_side_effects >= self.max_parallel_side_effects:
+        elif side_effect and observation.active_side_effects >= limits.max_parallel_side_effects:
             reasons.append("parallel_side_effect_limit")
-        elif side_effect and observation.side_effect_count >= self.side_effect_budget:
+        elif side_effect and observation.side_effect_count >= limits.side_effect_budget:
             reasons.append("side_effect_budget")
-        elif side_effect and observation.exposure_used + observation.requested_exposure > self.exposure_budget:
+        elif side_effect and observation.exposure_used + observation.requested_exposure > limits.exposure_budget:
             reasons.append("exposure_budget")
         elif side_effect and observation.cooldown_remaining > 0:
             reasons.append("cooldown")
@@ -162,7 +168,7 @@ class ReliabilityRiskEvaluator:
         return ReliabilityRiskAssessment(severity=severity, reason_refs=tuple(reasons))
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, init=False)
 class DefaultLocalReliabilityPolicy:
     """Versioned local policy profile for default governance thresholds.
 
@@ -173,12 +179,57 @@ class DefaultLocalReliabilityPolicy:
 
     profile_id: str = "personal-local-v1"
     version: str = "1"
-    max_action_rate: int = 100
-    max_parallel_side_effects: int = 10
-    blast_radius: int = 5
+    limits: ReliabilityLimits = field(default_factory=ReliabilityLimits)
     cooldown_seconds: float = 5.0
-    exposure_budget: int = 1000
-    side_effect_budget: int = 100
+
+    def __init__(
+        self,
+        profile_id: str = "personal-local-v1",
+        version: str = "1",
+        limits: ReliabilityLimits | None = None,
+        cooldown_seconds: float = 5.0,
+        *,
+        max_action_rate: int = 100,
+        max_parallel_side_effects: int = 10,
+        blast_radius: int = 5,
+        exposure_budget: int = 1000,
+        side_effect_budget: int = 100,
+    ) -> None:
+        object.__setattr__(self, "profile_id", profile_id)
+        object.__setattr__(self, "version", version)
+        object.__setattr__(
+            self,
+            "limits",
+            limits
+            or ReliabilityLimits(
+                max_action_rate=max_action_rate,
+                max_parallel_side_effects=max_parallel_side_effects,
+                blast_radius=blast_radius,
+                exposure_budget=exposure_budget,
+                side_effect_budget=side_effect_budget,
+            ),
+        )
+        object.__setattr__(self, "cooldown_seconds", cooldown_seconds)
+
+    @property
+    def max_action_rate(self) -> int:
+        return self.limits.max_action_rate
+
+    @property
+    def max_parallel_side_effects(self) -> int:
+        return self.limits.max_parallel_side_effects
+
+    @property
+    def blast_radius(self) -> int:
+        return self.limits.blast_radius
+
+    @property
+    def exposure_budget(self) -> int:
+        return self.limits.exposure_budget
+
+    @property
+    def side_effect_budget(self) -> int:
+        return self.limits.side_effect_budget
 
     @property
     def policy_ref(self) -> str:
@@ -196,7 +247,7 @@ class DefaultLocalReliabilityPolicy:
         elif reason == "blast_radius_positive":
             reason_text = "blast_radius must be positive"
         elif reason == "blast_radius_limit":
-            reason_text = f"blast_radius {observation.requested_blast_radius} exceeds limit {self.blast_radius}"
+            reason_text = f"blast_radius {observation.requested_blast_radius} exceeds limit {self.limits.blast_radius}"
         elif reason == "exposure_positive":
             reason_text = "exposure must be positive"
         elif reason == "parallel_side_effect_limit":
@@ -230,15 +281,10 @@ class DefaultLocalReliabilityPolicy:
         procedure_profile: str | None,
         timing: dict[str, Any] | None,
     ) -> tuple[ReliabilityRiskAssessment, ReliabilityDisposition]:
-        evaluator = ReliabilityRiskEvaluator(
-            max_action_rate=self.max_action_rate,
-            max_parallel_side_effects=self.max_parallel_side_effects,
-            blast_radius=self.blast_radius,
-            exposure_budget=self.exposure_budget,
-            side_effect_budget=self.side_effect_budget,
-        )
+        evaluator = ReliabilityRiskEvaluator()
         risk = evaluator.evaluate(
             observation,
+            self.limits,
             side_effect=side_effect,
             irreversible=irreversible,
             procedure_profile=procedure_profile,
@@ -247,16 +293,11 @@ class DefaultLocalReliabilityPolicy:
         return risk, self.decide(observation, risk)
 
 
-@dataclass
+@dataclass(init=False)
 class ReliabilityControls:
     """V1.8 reliability controls: rate, blast radius, budgets."""
 
-    max_action_rate: int = 100  # per minute
-    max_parallel_side_effects: int = 10
-    blast_radius: int = 5
-    cooldown_seconds: float = 5.0
-    exposure_budget: int = 1000
-    side_effect_budget: int = 100
+    cooldown_seconds: float
     _action_timestamps: list[float] = field(default_factory=list)
     _side_effect_count: int = 0
     _active_side_effects: int = 0
@@ -268,31 +309,55 @@ class ReliabilityControls:
     _last_risk_assessment: ReliabilityRiskAssessment | None = field(default=None, init=False, repr=False)
     _last_disposition: ReliabilityDisposition | None = field(default=None, init=False, repr=False)
 
-    def __post_init__(self) -> None:
-        if self.policy is None:
-            self.policy = DefaultLocalReliabilityPolicy(
-                max_action_rate=self.max_action_rate,
-                max_parallel_side_effects=self.max_parallel_side_effects,
-                blast_radius=self.blast_radius,
-                cooldown_seconds=self.cooldown_seconds,
-                exposure_budget=self.exposure_budget,
-                side_effect_budget=self.side_effect_budget,
-            )
-        else:
-            self.max_action_rate = self.policy.max_action_rate
-            self.max_parallel_side_effects = self.policy.max_parallel_side_effects
-            self.blast_radius = self.policy.blast_radius
-            self.cooldown_seconds = self.policy.cooldown_seconds
-            self.exposure_budget = self.policy.exposure_budget
-            self.side_effect_budget = self.policy.side_effect_budget
-        if self.risk_evaluator is None:
-            self.risk_evaluator = ReliabilityRiskEvaluator(
-                max_action_rate=self.max_action_rate,
-                max_parallel_side_effects=self.max_parallel_side_effects,
-                blast_radius=self.blast_radius,
-                exposure_budget=self.exposure_budget,
-                side_effect_budget=self.side_effect_budget,
-            )
+    def __init__(
+        self,
+        max_action_rate: int = 100,
+        max_parallel_side_effects: int = 10,
+        blast_radius: int = 5,
+        cooldown_seconds: float = 5.0,
+        exposure_budget: int = 1000,
+        side_effect_budget: int = 100,
+        policy: DefaultLocalReliabilityPolicy | None = None,
+        risk_evaluator: ReliabilityRiskEvaluator | None = None,
+    ) -> None:
+        self.policy = policy or DefaultLocalReliabilityPolicy(
+            cooldown_seconds=cooldown_seconds,
+            max_action_rate=max_action_rate,
+            max_parallel_side_effects=max_parallel_side_effects,
+            blast_radius=blast_radius,
+            exposure_budget=exposure_budget,
+            side_effect_budget=side_effect_budget,
+        )
+        self.cooldown_seconds = self.policy.cooldown_seconds
+        self.risk_evaluator = risk_evaluator or ReliabilityRiskEvaluator()
+        self._action_timestamps = []
+        self._side_effect_count = 0
+        self._active_side_effects = 0
+        self._exposure_used = 0
+        self._last_side_effect_at = None
+        self._last_block_reason = None
+        self._last_risk_assessment = None
+        self._last_disposition = None
+
+    @property
+    def max_action_rate(self) -> int:
+        return self.policy.limits.max_action_rate if self.policy is not None else 100
+
+    @property
+    def max_parallel_side_effects(self) -> int:
+        return self.policy.limits.max_parallel_side_effects if self.policy is not None else 10
+
+    @property
+    def blast_radius(self) -> int:
+        return self.policy.limits.blast_radius if self.policy is not None else 5
+
+    @property
+    def exposure_budget(self) -> int:
+        return self.policy.limits.exposure_budget if self.policy is not None else 1000
+
+    @property
+    def side_effect_budget(self) -> int:
+        return self.policy.limits.side_effect_budget if self.policy is not None else 100
 
     def assess(
         self,
@@ -343,6 +408,7 @@ class ReliabilityControls:
             raise RuntimeError("reliability risk evaluator is unavailable")
         risk = self.risk_evaluator.evaluate(
             observation,
+            self.policy.limits,
             side_effect=side_effect,
             irreversible=irreversible,
             procedure_profile=procedure_profile,

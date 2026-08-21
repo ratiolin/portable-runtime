@@ -17,7 +17,7 @@
 
 | 范围 | 已落地的强制路径 | 新鲜本地证据 |
 |---|---|---|
-| P1-1 qualification/procedure | typed qualification refs → deeply immutable AssessmentContext snapshot → internally scoped InvocationPermit → immutable authority-sensitive request snapshot → pre-provider digest recheck；inline proof facts fail closed | E021–E023、全量 264 tests |
+| P1-1 qualification/procedure | typed qualification refs → deeply immutable AssessmentContext snapshot → internally scoped InvocationPermit → immutable authority-sensitive request snapshot → pre-provider digest recheck；inline proof facts fail closed | E021–E023、全量 244 tests |
 | P1-2 routing | failure-domain/independence hard filtering、circuit breaker actual path、caller reference descriptor 不再作为 proof | `tests/test_p1_routing.py` |
 | P1-3 reliability | rate、parallel、blast radius、cooldown、exposure、side-effect budget、enhanced timing gate；`ReliabilityObservation`、`ReliabilityRiskAssessment`、`ReliabilityDisposition` 与 `DefaultLocalReliabilityPolicy` 分离 | `tests/test_reliability_controls_p2.py` |
 | P1-4/P1-5/P1-6 semantic workflows | canonical reopen/projection/derivation、verification judgment 与 execution status 分离、incident repair 不再新写 legacy knowledge/evidence | `tests/conformance/test_p1_semantic.py`、全量回归 |
@@ -25,7 +25,7 @@
 
 本轮 freeze blockers 也已收口：Knowledge/Evidence compatibility view 现在是 canonical ingestion 的单向 sink；`Derivation` 只能记录产生过程，epistemic status 采用 proposition whitelist；revalidation 形成 `DependencyImpact → RiskAssessment → RevalidationDisposition` 三层责任；Memory/SQLite 通过 typed record restoration 和 fixed-point/adversarial conformance 保持语义对等；普通 canonical record write 拒绝 undeclared top-level fields，legacy/import boundary 保留 forward-field 兼容。
 
-当前本地证据为 `uv run pytest -q` → `264 passed`、strict-conformance → `59 passed`，另有 `ruff`/`mypy` 通过。协议收敛序列依次收口 semantic contract、Boundary internal stage seam、reliability policy profile 和 authorization compatibility contraction；新增架构测试锁定 Boundary-only provider invocation，canonical authorization primitive 只接受 typed request，legacy normalization 留在 compat。远端闭合证据为 [main CI run 32446261971](https://github.com/ratiolin/portable-runtime/actions/runs/32446261971)，SonarCloud new-code coverage 为 `80.3%`。
+当前本地证据为 `uv run pytest -q` → `244 passed`、strict-conformance → `61 passed`，另有 `ruff`/`mypy` 通过。协议收敛序列依次收口 semantic contract、Boundary internal stage seam、reliability policy profile 和 authorization compatibility contraction；本轮继续收敛 Boundary、阈值配置与历史覆盖率测试，并保持 Boundary-only provider invocation。远端闭合证据将在本轮提交的 main CI/SonarCloud 运行完成后回写。
 
 ## 协议稳定化起点（2026-08-21）
 
