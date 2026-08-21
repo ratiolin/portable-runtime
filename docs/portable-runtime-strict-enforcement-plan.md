@@ -3,8 +3,8 @@
 
 > **当前范围说明（2026-08-21）：** 聚焦的 RealityBoundary / SQLite Store P0 闭合范围已由
 > [最终闭合方案](portable-runtime-strict-enforcement-closure-plan.md)及历史主分支 CI/SonarCloud
-> 证据确认完成；本轮 P1/P2 条目也已具备独立实现和 executable evidence。待推送提交的远端
-> CI/SonarCloud 结果仍需作为发布闭合的最后证据，不能由本地测试单独推导。
+> 证据确认完成；本轮 P1/P2 条目也已具备独立实现和 executable evidence。最终主分支
+> CI/SonarCloud 结果已作为发布闭合证据记录，不能由本地测试单独推导。
 
 > 目标：停止继续扩展核心语义表面，把当前已经存在的 responsibility-preserving architecture 收缩为**不可绕过的运行时协议**。
 >
@@ -13,11 +13,11 @@
 
 ## 2026-08-21 执行状态
 
-本轮已按本计划完成 P1/P2 的代码与负路径闭环；提交 `2cb5b18cee5f517a43817a5d645312baea5e0f53` 已通过[主分支 CI](https://github.com/ratiolin/portable-runtime/actions/runs/32438273097)和 SonarCloud quality gate（`OK`，new-code coverage `80.17%`）：
+本轮已按本计划完成 P1/P2 的代码与负路径闭环；提交 `e6cbe884edbdca417ba2326b698db0fb51587f7a` 已通过[主分支 CI](https://github.com/ratiolin/portable-runtime/actions/runs/32438470023)和 SonarCloud quality gate（`OK`，new-code coverage `80.2%`）：
 
 | 范围 | 已落地的强制路径 | 新鲜本地证据 |
 |---|---|---|
-| P1-1 qualification/procedure | typed qualification refs → AssessmentContext snapshot → InvocationPermit → pre-provider digest recheck；inline proof facts fail closed | E021–E023、全量 242 tests |
+| P1-1 qualification/procedure | typed qualification refs → AssessmentContext snapshot → InvocationPermit → pre-provider digest recheck；inline proof facts fail closed | E021–E023、全量 245 tests |
 | P1-2 routing | failure-domain/independence hard filtering、circuit breaker actual path、caller reference descriptor 不再作为 proof | `tests/test_p1_routing.py` |
 | P1-3 reliability | rate、parallel、blast radius、cooldown、exposure、side-effect budget、enhanced timing gate | `tests/test_reliability_controls_p2.py` |
 | P1-4/P1-5/P1-6 semantic workflows | canonical reopen/projection/derivation、verification judgment 与 execution status 分离、incident repair 不再新写 legacy knowledge/evidence | `tests/conformance/test_p1_semantic.py`、全量回归 |
