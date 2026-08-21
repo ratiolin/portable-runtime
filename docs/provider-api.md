@@ -74,4 +74,11 @@ use `read-only`; `code.edit`, `code.test`, and `shell.exec` use
 `workspace-write`; unknown capabilities fail closed to `read-only`. A caller
 cannot request `danger-full-access` through the capability request.
 
+Deployment-specific process isolation is an optional injected
+`ExecutionBoundary`. The provider-neutral contract supplies a prepared
+working directory/environment, a session directory, transcript redaction, and
+cleanup; the base provider does not import or know about any deployment
+package. Personal profiles may inject host-specific worktree, credential, or
+container isolation while keeping those policies outside the portable runtime.
+
 See `docs/provider-protocol.md` for the language-neutral stdio JSONL transport, `docs/plugin-authoring.md` for the file layout.
