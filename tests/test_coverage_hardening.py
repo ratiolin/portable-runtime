@@ -209,7 +209,9 @@ def test_api_http_work_run_capability():
     assert resp_sched["source"] == "schedule"
     w2 = client.post("/v1/work", json={"title": "wf", "description": ""}).json()
     resp_wf = client.post(f"/v1/work/{w2['id']}/workflow/generic-task").json()
-    assert resp_wf["status"] in ("succeeded", "failed", "completed")
+    # Generic provider success is execution evidence only; without an
+    # objective verifier the built-in workflow remains recoverable/waiting.
+    assert resp_wf["status"] == "waiting"
     assert client.post(f"/v1/work/{w2['id']}/workflow/unknown-xyz").status_code == 404
     resp_cancel = client.post(f"/v1/work/{work_id}/cancel").json()
     assert resp_cancel["status"] == "cancelled"

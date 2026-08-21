@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
+
 import pytest
 
 from portable_runtime.core.capabilities import (
@@ -32,6 +34,7 @@ from portable_runtime.workflows.context import (
     validate_run_transition,
 )
 from portable_runtime.workflows.daily_scan.workflow import DailyScanWorkflow, KnowledgeConsolidationWorkflow
+from portable_runtime.workflows.generic_task.workflow import GenericTaskWorkflow
 from portable_runtime.workflows.incident_repair.workflow import IncidentRepairWorkflow
 from tests._strict_fixtures import seed_action_governance
 
@@ -62,6 +65,18 @@ class AnySucceedProvider:
 
     async def cancel(self, request_id: str) -> None:
         return None
+
+
+class TaskArtifactProvider(AnySucceedProvider):
+    async def invoke(self, request: CapabilityRequest, context: InvocationContext) -> CapabilityResult:
+        self.calls.append(request.capability)
+        return CapabilityResult(
+            request_id=request.id,
+            provider_id=self.descriptor.id,
+            status="succeeded",
+            message="I could not fix bug X; tests were not run",
+            output_artifact_refs=["artifact-task-transcript"],
+        )
 
 
 class FailingProvider(AnySucceedProvider):
@@ -500,6 +515,88 @@ def test_workflow_registry() -> None:
         version = ""
 
     assert validate_workflow(Bad()) != []
+
+
+def test_workflow_registry_routes_specialized_kinds_before_generic_fallback() -> None:
+    """A catch-all generic workflow must not swallow specialized work kinds."""
+    reg = WorkflowRegistry()
+    generic = GenericTaskWorkflow()
+    incident = IncidentRepairWorkflow()
+    maintenance = DailyScanWorkflow()
+
+    # Register generic first to exercise the order-sensitive failure mode.
+    reg.register(generic)
+    reg.register(incident)
+    reg.register(maintenance)
+
+    assert reg.resolve_for_work(Work(id=new_id("work"), title="incident", kind="incident")) is incident
+    assert (
+        reg.resolve_for_work(Work(id=new_id("work"), title="maintenance", kind="maintenance-scan")) is maintenance
+    )
+    assert reg.resolve_for_work(Work(id=new_id("work"), title="task", kind="generic-task")) is generic
+    assert reg.resolve_for_work(Work(id=new_id("work"), title="unknown", kind="future-kind")) is None
+
+
+def test_generic_task_workflow_accepts_only_canonical_kind() -> None:
+    wf = GenericTaskWorkflow()
+    assert wf.accepts(Work(id=new_id("work"), title="task", kind="generic-task")) is True
+    for kind in ("incident", "maintenance-scan", "knowledge-consolidation", "generic", "future-kind"):
+        assert wf.accepts(Work(id=new_id("work"), title=kind, kind=kind)) is False
+
+
+@pytest.mark.asyncio
+async def test_generic_task_delivery_does_not_prove_objective() -> None:
+    """A successful transcript cannot prove a free-form task objective."""
+    store = InMemoryStateStore()
+    work = Work(
+        id=new_id("work"),
+        title="Fix bug X",
+        description="Fix bug X and prove all tests pass",
+        kind="generic-task",
+        requested_capabilities=["reason.generate"],
+    )
+    store.save_work(work)
+    run = Run(id=new_id("run"), work_id=work.id, status="running")
+    store.save_run(run)
+    provider = TaskArtifactProvider("p_task", ["reason.generate"])
+    ctx = _make_context(work, run, store, [provider])
+
+    result = await GenericTaskWorkflow().run(ctx, work, run)
+
+    assert result == "waiting"
+    assert provider.calls == ["reason.generate"]
+    # The provider returned a durable artifact and exit-success, but its own
+    # message says the objective was not achieved and no tests ran.
+    assert run.status == "running"
+
+
+@pytest.mark.asyncio
+async def test_generic_task_can_close_only_with_explicit_objective_verifier() -> None:
+    store = InMemoryStateStore()
+    work = Work(
+        id=new_id("work"),
+        title="Fix bug X",
+        description="Fix bug X and prove all tests pass",
+        kind="generic-task",
+        requested_capabilities=["reason.generate"],
+    )
+    store.save_work(work)
+    run = Run(id=new_id("run"), work_id=work.id, status="running")
+    store.save_run(run)
+    provider = TaskArtifactProvider("p_task", ["reason.generate"])
+    ctx = _make_context(work, run, store, [provider])
+
+    async def verifier(
+        _context: WorkflowContext,
+        _work: Work,
+        _run: Run,
+        results: Sequence[CapabilityResult],
+    ) -> bool:
+        return bool(results)
+
+    result = await GenericTaskWorkflow(objective_verifier=verifier).run(ctx, work, run)
+
+    assert result == "succeeded"
 
 
 def test_workflow_compatibility_signatures() -> None:
