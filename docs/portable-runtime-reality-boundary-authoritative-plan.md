@@ -2,7 +2,7 @@
 
 ## Current status
 
-The P0 RealityBoundary/SQLite kernel plus the P1 semantic and P2 protocol hardening are closed on 2026-08-21. The semantic freeze-candidate blocker set is closed; protocol stabilization now tightens revalidation profiles, authoritative reopen assembly, deep qualification immutability, and the Boundary-only provider invocation seam. Fresh local evidence is `ruff` clean, `mypy src` clean, `uv run pytest -q` → `253 passed`, and the CI-equivalent strict-conformance selection → `56 passed`; remote CI/SonarCloud proof for this delta will be recorded after push.
+The P0 RealityBoundary/SQLite kernel plus the P1 semantic and P2 protocol hardening are closed on 2026-08-21. The semantic freeze-candidate blocker set is closed; protocol stabilization now tightens revalidation profiles, authoritative reopen assembly, deep qualification immutability, and the Boundary-only provider invocation seam. Fresh local evidence is `ruff` clean, `mypy src` clean, `uv run pytest -q` → `253 passed`, and the CI-equivalent strict-conformance selection → `56 passed`. Commit `20c81ae32f6bf33d38209d27a463555d88003e23` is green in [main CI run 32442371727](https://github.com/ratiolin/portable-runtime/actions/runs/32442371727), including strict-conformance and SonarCloud; the SonarCloud quality gate is `OK` with `80.6%` new-code coverage.
 
 The P0 enforcement kernel is implemented and has executable evidence in:
 
