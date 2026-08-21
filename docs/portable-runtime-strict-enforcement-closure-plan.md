@@ -1,6 +1,17 @@
 # Portable Runtime Strict Enforcement Closure Plan
 ## RealityBoundary / Store 最终闭合方案
 
+## 已验证闭合状态（2026-08-21）
+
+本方案定义的 P0 RealityBoundary / SQLite Store 闭合范围已完成，并由可执行证据和主分支远端检查共同确认：
+
+- 全量本地验证：`uv run pytest -q` → `223 passed`，仅保留两个既有 collection/deprecation warnings；
+- 严格一致性验证：E001–E020（21 cases）与 S001–S006（6 cases）；
+- [主分支 CI](https://github.com/ratiolin/portable-runtime/actions/runs/32432839060)：lint/test、strict-conformance、SonarCloud 全部通过；
+- [SonarCloud](https://sonarcloud.io/project/overview?id=portable-runtime)：commit `bdec663509ab7d6ad4e5bf7740838f6f6f852179` 的 quality gate 为 `OK`。
+
+这里的“闭合”只覆盖本文件的 P0 范围，不代表更宽的语义改进方案中的 P1/P2 已完成；后者仍以 `docs/portable-runtime-strict-enforcement-plan.md` 为跟踪入口。
+
 > 目标：停止新增抽象，停止用 commit message 或 test name 代替实际 enforcement。
 >
 > 本轮唯一目标：
@@ -13,7 +24,7 @@
 > }
 > \]
 >
-> 适用状态：
+> 方案编写时的基线（保留为历史记录）：
 >
 > ```text
 > architecture direction stable

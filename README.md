@@ -6,6 +6,17 @@ Portable runtime for durable **Work / Run** orchestration with pluggable **Provi
 
 > **V2.0 motto:** *Portable Runtime does not guarantee correctness; it guarantees that judgment, authorization, execution, verification and revision are never silently conflated, and that errors remain traceable, recoverable and reopenable.*
 
+## Strict enforcement status
+
+The focused P0 closure scope for the RealityBoundary and SQLite Store is closed and backed by executable evidence. The current release proof is:
+
+- `uv run pytest -q` — `223 passed` (two existing collection/deprecation warnings only);
+- strict conformance — E001–E020 (21 cases) plus S001–S006 (6 atomicity cases);
+- [main CI run](https://github.com/ratiolin/portable-runtime/actions/runs/32432839060) — lint/test, strict-conformance and SonarCloud all green;
+- [SonarCloud quality gate](https://sonarcloud.io/project/overview?id=portable-runtime) — `OK` for commit `bdec663509ab7d6ad4e5bf7740838f6f6f852179`.
+
+This status covers the focused P0 closure plan only. The broader semantic hardening backlog remains tracked separately; its P1/P2 items are not implied to be complete by this release.
+
 ## Highlights (V1.1–V2.0)
 
 - **Execution Integrity (V1.1):** `Step / StepAttempt / Checkpoint / Compensation` with `CAS / Lease+Fencing / idempotency` and `effect semantics` (`pure / idempotent / deduplicatable / reconcilable / irreversible-opaque → unknown`) — crash after provider no silent double-execution.
@@ -85,6 +96,8 @@ Cross-cutting: `append-only history / provenance / versioning / authorization / 
 
 See [docs/architecture.md](docs/architecture.md),
 [docs/portable-runtime-reality-boundary-authoritative-plan.md](docs/portable-runtime-reality-boundary-authoritative-plan.md),
+[docs/portable-runtime-strict-enforcement-closure-plan.md](docs/portable-runtime-strict-enforcement-closure-plan.md),
+[docs/portable-runtime-strict-enforcement-plan.md](docs/portable-runtime-strict-enforcement-plan.md),
 [docs/provider-api.md](docs/provider-api.md),
 [docs/provider-protocol.md](docs/provider-protocol.md),
 [docs/plugin-authoring.md](docs/plugin-authoring.md),
@@ -150,11 +163,11 @@ Reference profile: `examples/personal-platform-profile` is a minimal trigger/pro
 uv sync --extra dev
 uv run ruff check .
 uv run mypy src
-uv run pytest              # 173 tests, 78% overall, 83.1% new-code
+uv run pytest              # 223 tests; current local verification
 uv run pytest --cov=src --cov-report=xml  # for SonarCloud
 ```
 
-Quality gate: `sonar-project.properties` pins `sonar.python.version=3.12`, `sonar.cpd.exclusions=tests/**,...` and `sonar.issue.ignore.multicriteria` for the 2 intentional `tests/**` S5779 and the 2 retained `hashlib.sha1` compat branches.
+The fresh local coverage run reports 76% overall coverage. The quality gate is enforced in CI: `sonar-project.properties` pins `sonar.python.version=3.12`, `sonar.qualitygate.wait=true`, `sonar.cpd.exclusions=tests/**,...`, and `sonar.issue.ignore.multicriteria` for the 2 intentional `tests/**` S5779 and the 2 retained `hashlib.sha1` compat branches.
 
 ---
 
