@@ -4,6 +4,8 @@ from portable_runtime.core.reliability import (
     DefaultLocalReliabilityPolicy,
     ReliabilityControls,
     ReliabilityDisposition,
+    ReliabilityObservation,
+    ReliabilityRiskEvaluator,
     ReliabilityRiskAssessment,
 )
 
@@ -78,3 +80,28 @@ def test_enhanced_profile_requires_fast_recovery_loop() -> None:
         timing=timing,
     )
     assert controls.last_block_reason == "recovery loop exceeds irreversible window"
+
+
+def test_risk_evaluator_and_policy_decision_are_independent() -> None:
+    observation = ReliabilityObservation(
+        action_rate=0,
+        active_side_effects=0,
+        side_effect_count=0,
+        exposure_used=0,
+        requested_blast_radius=4,
+        requested_exposure=1,
+        cooldown_remaining=0,
+    )
+    evaluator = ReliabilityRiskEvaluator(blast_radius=2)
+    risk = evaluator.evaluate(
+        observation,
+        side_effect=True,
+        irreversible=False,
+        procedure_profile=None,
+        timing=None,
+    )
+    policy = DefaultLocalReliabilityPolicy(profile_id="split", version="1", blast_radius=2)
+    disposition = policy.decide(observation, risk)
+    assert risk.reason_refs == ("blast_radius_limit",)
+    assert disposition.action == "deny"
+    assert disposition.reason == "blast_radius 4 exceeds limit 2"

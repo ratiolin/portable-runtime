@@ -69,11 +69,17 @@ def test_provider_invoke_is_boundary_owned_and_legacy_shim_is_unreachable() -> N
 
 
 def test_boundary_stage_seam_has_explicit_order_and_no_provider_capability() -> None:
-    from portable_runtime.core.boundary_stages import BoundaryStagePlan
+    from portable_runtime.core.boundary_stages import (
+        BoundaryStagePlan,
+        evaluate_reliability_stage,
+        select_provider_stage,
+    )
 
     plan = BoundaryStagePlan()
     assert plan.names[:4] == ("qualification", "policy", "authorization", "procedure")
     assert plan.names[-3:] == ("invocation", "postcondition", "projection")
     assert plan.provider_invocation_owner == "RealityBoundary"
+    assert callable(evaluate_reliability_stage)
+    assert callable(select_provider_stage)
     stage_source = (ROOT / "src" / "portable_runtime" / "core" / "boundary_stages.py").read_text(encoding="utf-8")
     assert "provider.invoke" not in stage_source

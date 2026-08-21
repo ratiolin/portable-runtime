@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from portable_runtime.records.models import Assertion, PolicyRecord, RevisionRecord
+from portable_runtime.records.authorization import AuthorizationGrant
+from portable_runtime.records.models import Assertion, EvidenceArtifact, PolicyRecord, RevisionRecord
 from portable_runtime.records.relations import RecordRelation
 from portable_runtime.protocol.validation import validate_state_graph
 
@@ -40,5 +41,63 @@ def test_official_policy_requires_verification_and_authorization_graph_evidence(
         metadata={"previous_lifecycle_status": "candidate"},
     )
     errors = validate_state_graph({"record": [policy.model_dump(mode="json")]}, strict=False)
-    assert any("passing verification" in error for error in errors)
-    assert any("effective authorization" in error for error in errors)
+    assert any("ClosedVerificationResult" in error for error in errors)
+    assert any("AuthorizationGrant" in error for error in errors)
+
+
+def test_official_policy_rejects_open_support_and_bare_authorizes_edges() -> None:
+    policy = PolicyRecord(
+        id="policy_shortcut",
+        lifecycle_status="official",
+        version=1,
+        metadata={"previous_lifecycle_status": "candidate", "result": "pass"},
+    )
+    open_support = RecordRelation(
+        id="support_shortcut",
+        relation_type="supports",
+        subject_ref="assertion_support",
+        object_ref=policy.id,
+        metadata={"result": "pass"},
+    )
+    bare_authorizes = RecordRelation(
+        id="authorizes_shortcut",
+        relation_type="authorizes",
+        subject_ref="decision_shortcut",
+        object_ref=policy.id,
+    )
+    errors = validate_state_graph(
+        {"record": [policy.model_dump(mode="json")], "relation": [open_support.model_dump(mode="json"), bare_authorizes.model_dump(mode="json")]},
+        strict=False,
+    )
+    assert any("ClosedVerificationResult" in error for error in errors)
+    assert any("AuthorizationGrant" in error for error in errors)
+
+
+def test_official_policy_accepts_typed_closed_verification_and_version_bound_grant() -> None:
+    policy = PolicyRecord(
+        id="policy_verified",
+        lifecycle_status="official",
+        version=1,
+        metadata={"previous_lifecycle_status": "candidate", "verification_refs": ["verification_closed"]},
+    )
+    verification = EvidenceArtifact(
+        id="verification_closed",
+        kind="closed-verification",
+        metadata={"verification_result": {"result": "pass"}},
+    )
+    grant = AuthorizationGrant(
+        id="grant_policy_verified",
+        principal_ref="owner",
+        grantee_ref="runtime",
+        allowed_capabilities=["policy.promote"],
+        subject_version_refs=[f"{policy.id}:v{policy.version}"],
+    )
+    errors = validate_state_graph(
+        {
+            "record": [policy.model_dump(mode="json"), verification.model_dump(mode="json")],
+            "authorization": [grant.model_dump(mode="json")],
+        },
+        strict=False,
+    )
+    assert not any("ClosedVerificationResult" in error for error in errors)
+    assert not any("AuthorizationGrant" in error for error in errors)

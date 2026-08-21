@@ -2,9 +2,9 @@
 
 [![CI](https://github.com/ratiolin/portable-runtime/actions/workflows/ci.yml/badge.svg)](https://github.com/ratiolin/portable-runtime/actions/workflows/ci.yml) [![Quality Gate Status](https://sonarcloud.io/api/project_badges/measure?project=portable-runtime&metric=alert_status)](https://sonarcloud.io/summary/new_code?id=portable-runtime) [![Coverage](https://sonarcloud.io/api/project_badges/measure?project=portable-runtime&metric=coverage)](https://sonarcloud.io/summary/new_code?id=portable-runtime) [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE) [![Python 3.12](https://img.shields.io/badge/Python-3.12-blue.svg)](pyproject.toml)
 
-Portable runtime for durable **Work / Run** orchestration with pluggable **Provider / Trigger / Store / Workflow** — now a **responsibility-preserving, evidence-linked, authorized and revisable** runtime (V1.1–V2.0).
+Portable runtime for durable **Work / Run** orchestration with pluggable **Provider / Trigger / Store / Workflow** — now a **responsibility-preserving, evidence-linked, authorized and revisable** runtime (R1.1–R2.0).
 
-> **V2.0 motto:** *Portable Runtime does not guarantee correctness; it guarantees that judgment, authorization, execution, verification and revision are never silently conflated, and that errors remain traceable, recoverable and reopenable.*
+> **R2.0 motto:** *Portable Runtime does not guarantee correctness; it guarantees that judgment, authorization, execution, verification and revision are never silently conflated, and that errors remain traceable, recoverable and reopenable.*
 
 ## Strict enforcement status
 
@@ -16,22 +16,35 @@ The RealityBoundary, SQLite Store, semantic-plane P1 work and protocol P2 work a
 - canonical `KnowledgeProjection` state is bundle-portable; legacy `KnowledgeItem` remains read-compatible but is not a new workflow write target;
 - HTTP mutating control routes are loopback-only and explicitly not an authenticated multi-user boundary;
 - the CI `strict-conformance` job runs the same focused suite and is a prerequisite for SonarCloud analysis;
-- the prior remote proof for the already-pushed baseline remains green in [main CI run 32442371727](https://github.com/ratiolin/portable-runtime/actions/runs/32442371727); the four new commits are being pushed as one sequence and will be covered by the next CI/SonarCloud run.
+- the prior remote proof for the already-pushed baseline remains green in [main CI run 32442371727](https://github.com/ratiolin/portable-runtime/actions/runs/32442371727); local proof for this convergence sequence is closed, and its remote CI/SonarCloud proof is tracked by the current run.
 
-The remote evidence above is the final post-push proof for this change.
+The baseline link above is historical evidence; the current run is the authoritative post-push proof for this sequence.
 
 The control-plane HTTP API is local-only and is not an authenticated multi-user boundary. Mutating governance routes (state import, provider enable/disable/reload, capability execution and reopen) reject non-loopback callers; remote deployments must place an authenticated, authorized deployment boundary in front of the process.
 
-## Highlights (V1.1–V2.0)
+## Version axes
 
-- **Execution Integrity (V1.1):** `Step / StepAttempt / Checkpoint / Compensation` with `CAS / Lease+Fencing / idempotency` and `effect semantics` (`pure / idempotent / deduplicatable / reconcilable / irreversible-opaque → unknown`) — crash after provider no silent double-execution.
+These identifiers intentionally describe different compatibility surfaces:
+
+| Axis | Current value |
+|---|---|
+| Framework semantics | `1.0.0` |
+| Control Plane schema | `official-1.0.0` |
+| Portable Runtime implementation milestone | `R2.0` |
+| Runtime protocol | `2.0` |
+| Python package | `0.1.0` |
+| Framework compatibility | `framework-v1` |
+
+## Highlights (R1.1–R2.0)
+
+- **Execution Integrity (R1.1):** `Step / StepAttempt / Checkpoint / Compensation` with `CAS / Lease+Fencing / idempotency` and `effect semantics` (`pure / idempotent / deduplicatable / reconcilable / irreversible-opaque → unknown`) — crash after provider no silent double-execution.
 - **Semantic Records (V1.2):** `record_type ⊥ epistemic_status ⊥ lifecycle_status` — 13 types (`EvidenceArtifact / Observation / Assertion / Goal / Constraint / Experiment / Decision / Action / Outcome / Revision / ChangeObject / Policy / Derivation`) with `produces != causes` enforcement.
 - **Revision & Revalidation (V1.3):** `Revision(revises→old, produces→new, supersedes)` with retained history; `typed dependency` (`validated-under / executed-with / …`) → `AffectedAssessment` (`block-next-use` / `background-revalidate` etc., no recursive invalidation).
 - **Authorization & Policy (V1.4):** `AuthorizationGrant` isolated from `Decision` (`subject_version_refs` prevents v1→v2 reuse); `PolicyDecision(disposition=allow/deny/defer/require, obligations[])` with `deny > defer > union(needs) > allow` algebra and `waivable:false` hard boundaries; `ProcedureProfile` (`minimal / standard / enhanced`).
 - **Knowledge & Reopen (V1.5):** `KnowledgeProjection` selective consolidation (never drops counterexamples); `ReopenAssessment(9 scopes) → superseding Work`.
 - **Failure-domain Routing (V1.6):** `ProviderDescriptor` 9 domains (`provider_family / credential_domain / …`) + `ConstraintRouter` (`hard constraints → eligible → deterministic → cost`).
 - **Validation & Reliability (V1.7–1.8):** `ClosedVerification(pass/fail)` vs `OpenValidation(supports/weakens/…)` + `ExperimentPlan` + `CircuitBreaker / ReliabilityControls`; structural observations, risk assessments and the versioned `DefaultLocalReliabilityPolicy` remain separate.
-- **Protocol (V2.0):** `Event Journal` append-only, `Bundle v1` (`manifest + 17 kinds jsonl + artifacts/ + sha256 checksums`) with full ref/lifecycle validation, 4-category HTTP API + `explain/why/lineage/affected-by/reopen` CLI, and strict negative-path conformance.
+- **Protocol (R2.0):** `Event Journal` append-only, `Bundle v1` (`manifest + 17 kinds jsonl + artifacts/ + sha256 checksums`) with full ref/lifecycle validation, 4-category HTTP API + `explain/why/lineage/affected-by/reopen` CLI, and strict negative-path conformance.
 - **P1/P2 strict semantics:** qualification facts resolve from typed store references into an immutable assessment/permit and authority-sensitive invocation snapshot; compatibility views are non-reentrant into canonical consolidation; derivation and verification judgment remain distinct; deep reopen reroutes to reframing without auto-rerunning the original workflow; dependency impact, risk assessment and revalidation disposition remain separate; state/bundle imports are graph-validated atomically.
 
 ## Quick start
@@ -169,7 +182,7 @@ Reference profile: `examples/personal-platform-profile` is a minimal trigger/pro
 uv sync --extra dev
 uv run ruff check .
 uv run mypy src
-uv run pytest              # 253 tests; current local verification
+uv run pytest              # 261 tests; current local verification
 uv run pytest --cov=src --cov-report=xml  # for SonarCloud
 ```
 

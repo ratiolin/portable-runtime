@@ -246,24 +246,25 @@ def _metadata_refs(raw: dict[str, object], *names: str) -> list[str]:
 
 
 def _verification_result_is_passing(raw: dict[str, object]) -> bool:
-    """Accept only explicit typed verification results, never boolean hints."""
+    """Accept only an explicitly typed ClosedVerificationResult proof."""
 
-    result = raw.get("result") or raw.get("status")
-    if isinstance(result, str) and result.lower() in {"pass", "passed", "verified", "succeeded", "success"}:
-        return True
     metadata = raw.get("metadata")
+    nested = raw.get("verification_result")
+    kind = raw.get("kind")
     if isinstance(metadata, dict):
-        nested = metadata.get("verification_result") or metadata.get("result")
-        if isinstance(nested, dict):
-            value = nested.get("result") or nested.get("status")
-            return isinstance(value, str) and value.lower() in {"pass", "passed", "verified", "succeeded", "success"}
-    return False
+        nested = nested or metadata.get("verification_result")
+        kind = kind or metadata.get("kind")
+    typed_container = kind in {"closed-verification", "verification-result", "ClosedVerificationResult"}
+    typed_record = raw.get("record_type") in {"EvidenceArtifact", "VerificationResult"}
+    if not (typed_container or typed_record) or not isinstance(nested, dict):
+        return False
+    result = nested.get("result")
+    return isinstance(result, str) and result.lower() == "pass"
 
 
-def _has_effective_authorization(
+def _has_structural_authorization_proof(
     target: dict[str, object],
     state: dict[str, list[dict[str, object]]],
-    relations: list[RecordRelation],
 ) -> bool:
     target_id = target.get("id")
     if not isinstance(target_id, str):
@@ -276,16 +277,16 @@ def _has_effective_authorization(
         refs = raw.get("subject_version_refs")
         if not isinstance(refs, list) or not any(str(ref) in expected_refs for ref in refs):
             continue
-        # Expiry is evaluated by AuthorizationGrant; graph validation only
-        # rejects explicit revocation and preserves time-based checks for the
-        # boundary's current clock.
+        # This graph-level check proves shape, binding and non-revocation.  The
+        # live boundary remains responsible for current validity windows.
         if raw.get("revoked_at"):
             continue
+        try:
+            AuthorizationGrant.model_validate(raw)
+        except ValueError:
+            continue
         return True
-    return any(
-        rel.relation_type == "authorizes" and (rel.object_ref == target_id or rel.subject_ref == target_id)
-        for rel in relations
-    )
+    return False
 
 
 def _has_effective_verification(
@@ -306,12 +307,17 @@ def _has_effective_verification(
     if metadata_refs and all(ref in by_id and _verification_result_is_passing(by_id[ref]) for ref in metadata_refs):
         return True
     for rel in relations:
-        if rel.relation_type not in {"validated-under", "evaluated-by", "supports"}:
+        if rel.relation_type not in {"validated-under", "evaluated-by"}:
             continue
         if target_id not in {rel.subject_ref, rel.object_ref}:
             continue
-        result = rel.metadata.get("result") if isinstance(rel.metadata, dict) else None
-        if isinstance(result, str) and result.lower() in {"pass", "passed", "verified", "succeeded", "success"}:
+        relation_refs = _metadata_refs(
+            {"metadata": rel.metadata},
+            "verification_ref",
+            "verification_refs",
+            "result_ref",
+        )
+        if relation_refs and all(ref in by_id and _verification_result_is_passing(by_id[ref]) for ref in relation_refs):
             return True
     return False
 
@@ -491,9 +497,9 @@ def validate_state_graph(state: dict[str, list[dict[str, object]]], *, strict: b
             continue
         identifier = str(raw.get("id", "<unknown>"))
         if not _has_effective_verification(raw, normalized, relation_values):
-            errors.append(f"record {identifier} official promotion requires a passing verification relation/result")
-        if not _has_effective_authorization(raw, normalized, relation_values):
-            errors.append(f"record {identifier} official promotion requires effective authorization")
+            errors.append(f"record {identifier} official promotion requires a passing ClosedVerificationResult proof")
+        if not _has_structural_authorization_proof(raw, normalized):
+            errors.append(f"record {identifier} official promotion requires a structurally bound AuthorizationGrant")
 
     # Revision endpoints must exist locally and remain type-compatible.  The
     # single-object validator cannot prove this because it has no graph.

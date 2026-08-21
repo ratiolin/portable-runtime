@@ -6,7 +6,13 @@ import json
 from datetime import UTC, datetime
 from typing import Any, Literal, cast
 
-from portable_runtime.core.boundary_stages import BoundaryStagePlan, InvocationStagePlan, ReliabilityStageInput
+from portable_runtime.core.boundary_stages import (
+    BoundaryStagePlan,
+    InvocationStagePlan,
+    ReliabilityStageInput,
+    evaluate_reliability_stage,
+    select_provider_stage,
+)
 from portable_runtime.core.capabilities import (
     CapabilityRequest,
     CapabilityResult,
@@ -740,40 +746,28 @@ class RealityBoundary:
             procedure_profile=procedure_profile,
             timing=recovery_timing,
         )
-        reliability_kwargs = reliability_input.as_kwargs()
-        try:
-            if hasattr(self.reliability, "assess"):
-                allowed, reliability_reason = _call_supported(self.reliability.assess, **reliability_kwargs)
-            else:
-                allowed = _call_supported(self.reliability.can_execute, **reliability_kwargs)
-                reliability_reason = getattr(self.reliability, "last_block_reason", None) or "reliability budget exhausted"
-        except Exception as exc:
-            _append_event(store, CODE_RELIABILITY_UNAVAILABLE, request.id, {"reason": str(exc)})
-            return self._error_result(request, CODE_RELIABILITY_UNAVAILABLE, f"reliability evaluation failed: {exc}")
-        if not allowed:
-            reason = str(reliability_reason or "reliability budget exhausted")
+        reliability_decision = evaluate_reliability_stage(self.reliability, reliability_input, _call_supported)
+        if reliability_decision.error is not None:
+            reliability_error = reliability_decision.error
+            _append_event(store, CODE_RELIABILITY_UNAVAILABLE, request.id, {"reason": str(reliability_error)})
+            return self._error_result(request, CODE_RELIABILITY_UNAVAILABLE, f"reliability evaluation failed: {reliability_error}")
+        if not reliability_decision.allowed:
+            reason = reliability_decision.reason or "reliability budget exhausted"
             _append_event(store, CODE_RELIABILITY_BLOCKED, request.id, {"side_effect": side_effect, "reason": reason})
             _append_event(store, "InvocationBlocked", request.id, {"code": CODE_RELIABILITY_BLOCKED, "reason": reason})
             return self._error_result(request, CODE_RELIABILITY_BLOCKED, reason)
 
         # Provider health, circuit state, independence and hard constraints all
         # run before selection.  Any evaluator exception is RoutingUnavailable.
-        healthy: list[ProviderDescriptor] = []
-        for descriptor in descriptors:
-            try:
-                health = await registry.health(descriptor.id)
-                if not health.available:
-                    continue
-                if not _circuit_for(descriptor.id).allow():
-                    continue
-                healthy.append(descriptor)
-            except Exception as exc:
-                return self._error_result(request, CODE_ROUTING_UNAVAILABLE, f"provider eligibility evaluation failed: {exc}")
-        try:
-            selected = await routing.select(request, healthy) if healthy else None
-        except Exception as exc:
-            _append_event(store, CODE_ROUTING_UNAVAILABLE, request.id, {"reason": str(exc)})
-            return self._error_result(request, CODE_ROUTING_UNAVAILABLE, f"routing evaluation failed: {exc}")
+        selection = await select_provider_stage(registry, routing, request, descriptors, _circuit_for)
+        if selection.error is not None:
+            selection_error = selection.error
+            if selection.error_phase == "eligibility":
+                return self._error_result(request, CODE_ROUTING_UNAVAILABLE, f"provider eligibility evaluation failed: {selection_error}")
+            _append_event(store, CODE_ROUTING_UNAVAILABLE, request.id, {"reason": str(selection_error)})
+            return self._error_result(request, CODE_ROUTING_UNAVAILABLE, f"routing evaluation failed: {selection_error}")
+        healthy = list(selection.healthy)
+        selected = selection.selected
         if selected is None:
             if healthy and isinstance(request.constraints, dict):
                 if request.constraints.get("required_failure_domains") or request.constraints.get("independence_constraints"):
