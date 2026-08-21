@@ -1,6 +1,11 @@
 from __future__ import annotations
 
-from portable_runtime.core.reliability import ReliabilityControls
+from portable_runtime.core.reliability import (
+    DefaultLocalReliabilityPolicy,
+    ReliabilityControls,
+    ReliabilityDisposition,
+    ReliabilityRiskAssessment,
+)
 
 
 def test_reliability_blocks_parallel_side_effects_and_releases_capacity() -> None:
@@ -36,6 +41,18 @@ def test_reliability_enforces_blast_radius_and_exposure_budget() -> None:
     controls.complete_action(side_effect=True)
     assert not controls.can_execute(side_effect=True, action_blast_radius=1, exposure=2)
     assert controls.last_block_reason == "exposure_budget exhausted"
+
+
+def test_reliability_separates_policy_profile_risk_and_disposition() -> None:
+    policy = DefaultLocalReliabilityPolicy(profile_id="test-policy", version="9", blast_radius=2)
+    controls = ReliabilityControls(policy=policy)
+    assert controls.can_execute(side_effect=True, action_blast_radius=1, exposure=1)
+    controls.record_action(side_effect=True, action_blast_radius=1, exposure=1)
+    assert not controls.can_execute(side_effect=True, action_blast_radius=3)
+    assert isinstance(controls.last_risk_assessment, ReliabilityRiskAssessment)
+    assert isinstance(controls.last_disposition, ReliabilityDisposition)
+    assert controls.last_disposition.policy_ref == "test-policy@9"
+    assert "blast_radius_limit" in controls.last_risk_assessment.reason_refs
 
 
 def test_enhanced_profile_requires_fast_recovery_loop() -> None:
