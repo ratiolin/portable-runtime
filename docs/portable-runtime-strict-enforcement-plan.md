@@ -1,6 +1,11 @@
 # Portable Runtime 严格改进方案
 ## Semantic Enforcement Hardening Plan
 
+> **当前范围说明（2026-08-21）：** 聚焦的 RealityBoundary / SQLite Store P0 闭合范围已由
+> [最终闭合方案](portable-runtime-strict-enforcement-closure-plan.md)及主分支 CI/SonarCloud
+> 证据确认完成。本文件继续作为更宽的语义 hardening backlog；其中 P1/P2 条目只有在各自具备
+> 独立实现与 executable evidence 后才能标记完成，不能由 P0 闭合状态推导。
+
 > 目标：停止继续扩展核心语义表面，把当前已经存在的 responsibility-preserving architecture 收缩为**不可绕过的运行时协议**。
 >
 > 本文档不是新增功能路线，而是 enforcement hardening 方案。

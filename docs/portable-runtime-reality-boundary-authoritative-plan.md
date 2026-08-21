@@ -2,6 +2,8 @@
 
 ## Current status
 
+As of commit `bdec663509ab7d6ad4e5bf7740838f6f6f852179` on `main`, the focused P0 enforcement kernel is closed. The authoritative remote proof is the [green main CI run](https://github.com/ratiolin/portable-runtime/actions/runs/32432839060), including the strict-conformance and SonarCloud jobs; the [SonarCloud project](https://sonarcloud.io/project/overview?id=portable-runtime) reports quality gate `OK` for the same commit.
+
 The P0 enforcement kernel is implemented and has executable evidence in:
 
 - `tests/conformance/test_authoritative.py` — E001–E020 (21 cases)
@@ -17,13 +19,16 @@ The P0 enforcement kernel is implemented and has executable evidence in:
 
 The strict-conformance command and the repository-wide suite both pass. The
 latest local verification is `223 passed` with the two existing collection/
-deprecation warnings only. Legacy workflow fixtures now carry explicit typed
+deprecation warnings only. The fresh coverage run reports 76% overall coverage.
+Legacy workflow fixtures now carry explicit typed
 authorization, resource/version, and procedure evidence; the runtime boundary
 itself remains fail-closed when those proofs are absent.
 
-The fresh coverage run produced `coverage.xml` at 76% overall coverage. Sonar
-Cloud is configured as a hard CI gate (`sonar.qualitygate.wait=true`) and the
-workflow waits for both the full suite and strict-conformance before analysis.
+SonarCloud is configured as a hard CI gate (`sonar.qualitygate.wait=true`) and
+the workflow waits for both the full suite and strict-conformance before
+analysis. This status is limited to the P0 scope described here; broader P1/P2
+semantic hardening remains tracked in
+`docs/portable-runtime-strict-enforcement-plan.md`.
 
 The authoritative boundary remains the only runtime `provider.invoke` exit;
 recovery reconciliation and plugin probes route through the same boundary.
