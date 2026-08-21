@@ -42,3 +42,11 @@ Rules:
 - Workflows are restart-safe: they read `run.current_step` and are idempotent, or declare non-resumable.
 
 Built-ins: `incident-repair` (8 steps: observe/diagnose/edit/verify/approve/merge/outcome/knowledge), `generic-task`, `daily-scan`, `knowledge-consolidation`. Add a new workflow by dropping a file under `src/portable_runtime/workflows/` and exposing it in the trigger mapping; no Core modification.
+
+`generic-task` is deliberately fail-closed. Provider invocations with
+`status="succeeded"` prove execution only; durable output/evidence references
+prove delivery only. Without an explicitly injected objective verifier that
+returns the literal boolean `True`, the workflow returns `waiting` rather than
+terminal `succeeded`. Its `accepts()` predicate is restricted to
+`Work.kind == "generic-task"`, so it cannot capture specialized work through
+workflow registration order.
