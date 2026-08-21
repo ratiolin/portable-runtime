@@ -11,13 +11,15 @@ Portable runtime for durable **Work / Run** orchestration with pluggable **Provi
 The RealityBoundary, SQLite Store, semantic-plane P1 work and protocol P2 work are locally closed with executable evidence. The current pre-push proof is:
 
 - `uv run ruff check .` and `uv run mypy src` — both clean;
-- `uv run pytest -q` — `242 passed` (two existing collection/deprecation warnings only);
+- `uv run pytest -q` — `244 passed` (two existing collection/deprecation warnings only);
 - strict-conformance — `45 passed`: E001–E023, S001–S006, P1 semantic, P2 protocol, routing and reliability gates;
 - canonical `KnowledgeProjection` state is bundle-portable; legacy `KnowledgeItem` remains read-compatible but is not a new workflow write target;
 - HTTP mutating control routes are loopback-only and explicitly not an authenticated multi-user boundary;
-- the CI `strict-conformance` job runs the same focused suite and is a prerequisite for SonarCloud analysis.
+- the CI `strict-conformance` job runs the same focused suite and is a prerequisite for SonarCloud analysis;
+- [main CI run](https://github.com/ratiolin/portable-runtime/actions/runs/32438273097) for commit `2cb5b18cee5f517a43817a5d645312baea5e0f53` — lint/test, strict-conformance and SonarCloud all green;
+- [SonarCloud quality gate](https://sonarcloud.io/project/overview?id=portable-runtime) — `OK`, new-code coverage `80.17%`.
 
-Remote CI and SonarCloud are the final post-push checks for this change; their links and commit SHA are recorded here after the remote run completes.
+The remote evidence above is the final post-push proof for this change.
 
 The control-plane HTTP API is local-only and is not an authenticated multi-user boundary. Mutating governance routes (state import, provider enable/disable/reload, capability execution and reopen) reject non-loopback callers; remote deployments must place an authenticated, authorized deployment boundary in front of the process.
 
@@ -168,7 +170,7 @@ Reference profile: `examples/personal-platform-profile` is a minimal trigger/pro
 uv sync --extra dev
 uv run ruff check .
 uv run mypy src
-uv run pytest              # 242 tests; current local verification
+uv run pytest              # 244 tests; current local verification
 uv run pytest --cov=src --cov-report=xml  # for SonarCloud
 ```
 

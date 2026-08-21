@@ -2,7 +2,7 @@
 
 ## Current status
 
-The P0 RealityBoundary/SQLite kernel plus the P1 semantic and P2 protocol hardening are locally closed on 2026-08-21. Fresh evidence is `ruff` clean, `mypy src` clean, `uv run pytest -q` → `242 passed`, and the CI-equivalent strict-conformance selection → `45 passed`. Remote CI and SonarCloud evidence for the pending push will be recorded here with the resulting commit SHA and run URL.
+The P0 RealityBoundary/SQLite kernel plus the P1 semantic and P2 protocol hardening are closed on 2026-08-21. Fresh local evidence is `ruff` clean, `mypy src` clean, `uv run pytest -q` → `244 passed`, and the CI-equivalent strict-conformance selection → `45 passed`. The [main CI run](https://github.com/ratiolin/portable-runtime/actions/runs/32438273097) for commit `2cb5b18cee5f517a43817a5d645312baea5e0f53` is green, including SonarCloud; the [SonarCloud quality gate](https://sonarcloud.io/project/overview?id=portable-runtime) is `OK` with `80.17%` new-code coverage.
 
 The P0 enforcement kernel is implemented and has executable evidence in:
 
@@ -19,7 +19,7 @@ The P0 enforcement kernel is implemented and has executable evidence in:
 | SQLite CAS/Lease are atomic | `SQLiteStateStore` CAS/lease transactions | S001–S006 | n/a |
 
 The strict-conformance command and the repository-wide suite both pass. The
-latest local verification is `242 passed` with the two existing collection/
+latest local verification is `244 passed` with the two existing collection/
 deprecation warnings only. The fresh coverage run reports 76% overall coverage.
 Legacy workflow fixtures now carry explicit typed
 authorization, resource/version, and procedure evidence; the runtime boundary

@@ -13,7 +13,7 @@
 
 ## 2026-08-21 执行状态
 
-本轮已按本计划完成 P1/P2 的代码与负路径闭环（远端 CI/SonarCloud 结果在推送后补记）：
+本轮已按本计划完成 P1/P2 的代码与负路径闭环；提交 `2cb5b18cee5f517a43817a5d645312baea5e0f53` 已通过[主分支 CI](https://github.com/ratiolin/portable-runtime/actions/runs/32438273097)和 SonarCloud quality gate（`OK`，new-code coverage `80.17%`）：
 
 | 范围 | 已落地的强制路径 | 新鲜本地证据 |
 |---|---|---|
@@ -23,7 +23,7 @@
 | P1-4/P1-5/P1-6 semantic workflows | canonical reopen/projection/derivation、verification judgment 与 execution status 分离、incident repair 不再新写 legacy knowledge/evidence | `tests/conformance/test_p1_semantic.py`、全量回归 |
 | P2-1/P2-2/P2-3 protocol | transition journal、atomic graph validation/import、17-kind bundle、HTTP loopback governance | `tests/conformance/test_p2_protocol.py`、bundle round-trip、CI strict job |
 
-本状态不以提交信息代替执行证据；只有远端 CI 和 SonarCloud 对待推送提交均为绿，才完成发布闭合。
+本状态不以提交信息代替执行证据；远端 CI 和 SonarCloud 已对该提交完成绿灯闭合。
 
 > 核心原则：
 >
