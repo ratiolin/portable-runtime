@@ -84,6 +84,7 @@ Cross-cutting: `append-only history / provenance / versioning / authorization / 
 - **Workflow** – orchestrates `context.invoke(capability, ...)` and `context.require("purpose-identified")`; built-ins: `generic_task`, `incident_repair`, `daily_scan`, `knowledge_consolidation` + `ProcedureProfile` gates.
 
 See [docs/architecture.md](docs/architecture.md),
+[docs/portable-runtime-reality-boundary-authoritative-plan.md](docs/portable-runtime-reality-boundary-authoritative-plan.md),
 [docs/provider-api.md](docs/provider-api.md),
 [docs/provider-protocol.md](docs/provider-protocol.md),
 [docs/plugin-authoring.md](docs/plugin-authoring.md),

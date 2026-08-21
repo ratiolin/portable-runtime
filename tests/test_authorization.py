@@ -25,6 +25,7 @@ from portable_runtime.workflows.procedure import (
     ProcedureProfile,
     check_procedure,
 )
+from tests._strict_fixtures import seed_action_governance
 
 # ---------- AuthorizationGrant ----------
 
@@ -289,6 +290,7 @@ async def test_human_approve_generates_decision_and_grant():
     store.save_work(work)
     run = Run(id=new_id("run"), work_id=work.id, status="running")
     store.save_run(run)
+    seed_action_governance(work, run, store)
     registry = ProviderRegistry()
     for pid, caps in [("p_logs", ["observe.logs"]), ("p_cont", ["observe.container"]), ("p_reason", ["reason.generate"]), ("p_edit", ["code.edit"]), ("p_http", ["verify.http"]), ("p_git", ["verify.git_diff"]), ("p_human", ["human.approve"])]:
         registry.register(SucceedProvider(pid, caps))

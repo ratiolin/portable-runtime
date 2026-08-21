@@ -1,4 +1,5 @@
-from __future__ import annotations
+from __future__ import annotations  # noqa: I001
+# ruff: noqa: E501, SIM102, S110
 
 import hashlib
 import json
@@ -97,6 +98,22 @@ class InvocationFactory:
         metadata["effective_impact"] = effective
         metadata["effect_semantics"] = contract.effect_semantics if contract else "pure"
         metadata["procedure_profile"] = procedure_profile
+        # A pure/read capability may explicitly prove that the procedure
+        # profile is not applicable.  This is a typed applicability record,
+        # not a permissive default: callers that set a profile or
+        # ``procedure_required`` still go through the procedure checker.
+        if (
+            effective == "read"
+            and "procedure_applicability" not in metadata
+            and not metadata.get("procedure_required")
+            and contract is not None
+        ):
+            metadata["procedure_applicability"] = {
+                "status": "not-applicable",
+                "authority": "capability-effect-rule",
+                "capability": capability,
+                "impact_class": "read",
+            }
         if independence_context:
             metadata["independence_context"] = independence_context
             if "independence_constraints" not in metadata:

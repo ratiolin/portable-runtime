@@ -101,6 +101,11 @@ class WorkflowContext:
         except Exception:
             pass
         factory = InvocationFactory(store=self.store, registry=self.registry, contract_registry=contract_registry, runtime_id=getattr(self.capabilities, "runtime_id", "runtime"))
+        governance_metadata: dict[str, object] = {}
+        if isinstance(self.work.metadata, dict):
+            governance_metadata.update(self.work.metadata)
+        if isinstance(self.run.metadata, dict):
+            governance_metadata.update(self.run.metadata)
         req = factory.build(
             capability,
             work_id=self.work.id,
@@ -110,6 +115,10 @@ class WorkflowContext:
             idempotency_key=f"{self.run.id}:{key}",
             step_key=key,
             request_id=f"req_{self.run.id}_{capability}_{len(self._invocation_cache)}",
+            metadata=governance_metadata,
+            actor_ref=governance_metadata.get("actor_ref"),  # type: ignore[arg-type]
+            resource_ref=governance_metadata.get("resource_ref"),  # type: ignore[arg-type]
+            subject_version_refs=governance_metadata.get("subject_version_refs"),  # type: ignore[arg-type]
         )
         result = await self.capabilities.invoke(req)
         self._store_cache(key, result)

@@ -177,17 +177,12 @@ class Runtime:
         last = sorted(attempts, key=lambda a: a.attempt_no)[-1]
         if not last.request_ref or not last.provider_id:
             return None
-        try:
-            provider = self.registry.get(last.provider_id)
-            if hasattr(provider, "reconcile"):
-                result = await provider.reconcile(last.request_ref)  # type: ignore
-                if result:
-                    if result.status == "unknown":
-                        step.status = "unknown"
-                        self.store.save_step(step)  # type: ignore
-                    return result
-        except Exception:
-            pass
+        result = await self.capabilities.reconcile(last.request_ref, last.provider_id)
+        if result:
+            if result.status == "unknown":
+                step.status = "unknown"
+                self.store.save_step(step)  # type: ignore
+            return result
         if step.effect_semantics in ("irreversible-opaque", "reconcilable"):
             step.status = "unknown"
             self.store.save_step(step)  # type: ignore

@@ -33,6 +33,7 @@ from portable_runtime.workflows.context import (
 )
 from portable_runtime.workflows.daily_scan.workflow import DailyScanWorkflow, KnowledgeConsolidationWorkflow
 from portable_runtime.workflows.incident_repair.workflow import IncidentRepairWorkflow
+from tests._strict_fixtures import seed_action_governance
 
 
 class AnySucceedProvider:
@@ -100,6 +101,7 @@ class UnavailableProvider:
 
 
 def _make_context(work: Work, run: Run, store: StateStore, providers: list[AnySucceedProvider]) -> WorkflowContext:
+    seed_action_governance(work, run, store, include_grant=True)
     registry = ProviderRegistry()
     for p in providers:
         registry.register(p)

@@ -7,6 +7,7 @@ from .capabilities import (
     ProviderDescriptor,
     ProviderHealth,
 )
+from .capability_contract import CapabilityContractRegistry, CapabilityEffectRegistry, CapabilityEffectRule
 from .models import (
     Action,
     Artifact,
@@ -27,6 +28,9 @@ __all__ = [
     "Artifact",
     "CapabilityRequest",
     "CapabilityResult",
+    "CapabilityEffectRegistry",
+    "CapabilityEffectRule",
+    "CapabilityContractRegistry",
     "CapabilityService",
     "Decision",
     "DeterministicPriorityRouting",
