@@ -16,9 +16,9 @@ The RealityBoundary, SQLite Store, semantic-plane P1 work and protocol P2 work a
 - canonical `KnowledgeProjection` state is bundle-portable; legacy `KnowledgeItem` remains read-compatible but is not a new workflow write target;
 - HTTP mutating control routes are loopback-only and explicitly not an authenticated multi-user boundary;
 - the CI `strict-conformance` job runs the same focused suite and is a prerequisite for SonarCloud analysis;
-- the prior remote proof for the already-pushed baseline remains green in [main CI run 32442371727](https://github.com/ratiolin/portable-runtime/actions/runs/32442371727); the current cleanup sequence is locally verified and will be confirmed by its next main CI/SonarCloud run.
+- the prior remote proof for the already-pushed baseline remains green in [main CI run 32442371727](https://github.com/ratiolin/portable-runtime/actions/runs/32442371727); the current cleanup sequence is green in [main CI run 32447784428](https://github.com/ratiolin/portable-runtime/actions/runs/32447784428), including SonarCloud new-code coverage at `80.1%`.
 
-The baseline link above is historical evidence; the next main CI/SonarCloud run is the authoritative post-push proof for this cleanup sequence.
+The baseline link above is historical evidence; run `32447784428` is the authoritative post-push proof for this cleanup sequence.
 
 The control-plane HTTP API is local-only and is not an authenticated multi-user boundary. Mutating governance routes (state import, provider enable/disable/reload, capability execution and reopen) reject non-loopback callers; remote deployments must place an authenticated, authorized deployment boundary in front of the process.
 
@@ -186,7 +186,7 @@ uv run pytest              # 244 tests; current local verification
 uv run pytest --cov=src --cov-report=xml  # for SonarCloud
 ```
 
-The fresh local coverage run reports 76% overall coverage. The quality gate is enforced in CI: `sonar-project.properties` pins `sonar.python.version=3.12`, `sonar.qualitygate.wait=true`, `sonar.cpd.exclusions=tests/**,...`, and `sonar.issue.ignore.multicriteria` for the 2 intentional `tests/**` S5779 and the 2 retained `hashlib.sha1` compat branches.
+The fresh local coverage run reports 76% overall coverage; SonarCloud reports 80.1% new-code coverage for the cleanup sequence. The quality gate is enforced in CI: `sonar-project.properties` pins `sonar.python.version=3.12`, `sonar.qualitygate.wait=true`, `sonar.cpd.exclusions=tests/**,...`, and `sonar.issue.ignore.multicriteria` for the 2 intentional `tests/**` S5779 and the 2 retained `hashlib.sha1` compat branches.
 
 ---
 
