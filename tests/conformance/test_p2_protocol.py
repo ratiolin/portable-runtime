@@ -14,6 +14,7 @@ from portable_runtime.core.runtime import Runtime
 from portable_runtime.records.authorization import create_grant_for_approval
 from portable_runtime.records.models import Assertion
 from portable_runtime.records.relations import RecordRelation
+from portable_runtime.protocol.validation import validate_state_graph
 from portable_runtime.stores.memory import InMemoryStateStore
 from portable_runtime.stores.sqlite import SQLiteStateStore
 
@@ -76,6 +77,41 @@ def test_state_import_rejects_invalid_lineage_and_duplicate_active_superseder() 
     with pytest.raises(ValueError, match="version lineage|duplicate active superseder"):
         store.import_state(bad)
     assert store.get_record(old.id) is None
+
+
+def test_state_graph_validator_checks_core_edges_projection_refs_and_authorization_versions() -> None:
+    state = _valid_state()
+    state["work"][0].update({"parent_work_id": "missing_parent", "artifact_refs": ["missing_artifact"]})
+    state["run"][0]["current_step"] = "missing_step"
+    state["artifact"] = [{"id": "artifact_p2", "created_by_run_id": "missing_run"}]
+    state["evidence"] = [{"id": "evidence_p2", "subject_refs": ["work_p2"], "artifact_refs": ["missing_artifact"]}]
+    state["decision"] = [{"id": "decision_p2", "work_id": "work_p2", "rationale_artifact_refs": ["missing_artifact"]}]
+    state["action"] = [{"id": "action_p2", "work_id": "work_p2", "run_id": "run_p2"}]
+    state["outcome"] = [{"id": "outcome_p2", "action_id": "action_p2", "artifact_refs": ["missing_artifact"]}]
+    state["step"] = [{"id": "step_p2", "run_id": "run_p2"}]
+    state["attempt"] = [{"id": "attempt_p2", "step_id": "step_p2"}]
+    state["checkpoint"] = [{"id": "checkpoint_p2", "run_id": "run_p2", "step_id": "step_p2", "payload_ref": "missing_payload"}]
+    state["compensation"] = [{"id": "compensation_p2", "action_ref": "action_p2", "result_ref": "missing_result"}]
+    state["event"] = [{"id": "event_p2", "subject_ref": "request_external", "payload": {}}]
+    state["knowledge_projection"] = [{
+        "id": "projection_p2",
+        "source_work_refs": ["work_p2"],
+        "current_assertion_refs": ["external:assertion:v1"],
+        "evidence_summary_refs": ["missing_evidence"],
+    }]
+    state["authorization"].append({
+        "id": "authz_missing_subject_version",
+        "principal_ref": "human:owner",
+        "grantee_ref": "agent:p2",
+        "allowed_capabilities": ["text.echo"],
+        "subject_version_refs": [],
+    })
+
+    errors = validate_state_graph(state, strict=False)
+
+    assert any("missing_parent" in error for error in errors)
+    assert any("missing subject version" in error for error in errors)
+    assert any("missing_payload" in error for error in errors)
 
 
 def test_sqlite_import_is_atomic_on_graph_failure(tmp_path: Path) -> None:
