@@ -5,7 +5,7 @@ import sqlite3
 import threading
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from portable_runtime.core.models import (
     Action,
@@ -22,7 +22,8 @@ from portable_runtime.core.models import (
     StepAttempt,
     Work,
 )
-from portable_runtime.records.models import BaseRecord
+from portable_runtime.records.knowledge import KnowledgeProjection
+from portable_runtime.records.models import BaseRecord, EvidenceArtifact
 from portable_runtime.records.relations import RecordRelation
 
 
@@ -88,6 +89,7 @@ class SQLiteStateStore:
         "action": Action,
         "outcome": Outcome,
         "knowledge": KnowledgeItem,
+        "knowledge_projection": KnowledgeProjection,
         "event": Event,
         "step": Step,
         "attempt": StepAttempt,
@@ -202,19 +204,62 @@ class SQLiteStateStore:
     def save_evidence(self, value: Evidence) -> None: self._save("evidence", value)
     def get_evidence(self, evidence_id: str) -> Evidence | None: return self._get("evidence", Evidence, evidence_id)
     def list_evidence(self, subject_ref: str | None = None) -> list[Evidence]:
-        return [
+        values = [
             value
             for value in self._list("evidence", Evidence)
             if subject_ref is None or subject_ref in value.subject_refs
         ]
+        try:
+            from portable_runtime.compat.legacy_records import evidence_artifact_to_legacy
+
+            values.extend(
+                converted
+                for value in self.list_records("EvidenceArtifact")
+                if isinstance(value, EvidenceArtifact)
+                for converted in (evidence_artifact_to_legacy(value),)
+                if subject_ref is None or subject_ref in converted.subject_refs
+            )
+        except Exception:
+            pass
+        return values
     def save_decision(self, value: Decision) -> None: self._save("decision", value)
     def save_action(self, value: Action) -> None: self._save("action", value)
     def save_outcome(self, value: Outcome) -> None: self._save("outcome", value)
     def save_knowledge(self, value: KnowledgeItem) -> None: self._save("knowledge", value)
     def get_knowledge(self, knowledge_id: str) -> KnowledgeItem | None:
-        return self._get("knowledge", KnowledgeItem, knowledge_id)
+        legacy = self._get("knowledge", KnowledgeItem, knowledge_id)
+        for projection in self._list("knowledge_projection", KnowledgeProjection):
+            if projection.id == knowledge_id or projection.metadata.get("legacy_id") == knowledge_id:
+                from portable_runtime.compat.legacy_records import knowledge_projection_to_legacy
+
+                return knowledge_projection_to_legacy(projection)
+        return legacy
     def list_knowledge(self, status: str | None = None) -> list[KnowledgeItem]:
-        return [value for value in self._list("knowledge", KnowledgeItem) if status is None or value.status == status]
+        values = [value for value in self._list("knowledge", KnowledgeItem) if status is None or value.status == status]
+        try:
+            from portable_runtime.compat.legacy_records import knowledge_projection_to_legacy
+
+            values.extend(
+                knowledge_projection_to_legacy(value)
+                for value in self._list("knowledge_projection", KnowledgeProjection)
+                if status is None or value.lifecycle_status == status
+            )
+        except Exception:
+            pass
+        return values
+
+    def save_knowledge_projection(self, value: KnowledgeProjection) -> None:
+        self._save("knowledge_projection", value)
+
+    def get_knowledge_projection(self, projection_id: str) -> KnowledgeProjection | None:
+        return self._get("knowledge_projection", KnowledgeProjection, projection_id)
+
+    def list_knowledge_projections(self, status: str | None = None) -> list[KnowledgeProjection]:
+        return [
+            value
+            for value in self._list("knowledge_projection", KnowledgeProjection)
+            if status is None or value.lifecycle_status == status
+        ]
     def append_event(self, value: Event) -> None:
         existing = self._get("event", Event, value.id)
         if existing is not None:
@@ -602,33 +647,44 @@ class SQLiteStateStore:
                 self._types["authorization"] = _AG
             except Exception:
                 pass
+        # Validate every incoming object and the merged graph before opening a
+        # write transaction.  This prevents a malformed state import from
+        # partially landing when the caller imports one bucket at a time.
+        prepared: dict[str, list[BaseRecord]] = {}
+        for kind, values in state.items():
+            value_type = self._types.get(kind)
+            if value_type is None and kind == "authorization":
+                try:
+                    from portable_runtime.records.authorization import AuthorizationGrant
+                    value_type = AuthorizationGrant
+                except Exception:
+                    value_type = None
+            if value_type is None:
+                continue
+            prepared[kind] = [cast(BaseRecord, value_type.model_validate(raw)) for raw in values]
+        candidate = self.export_state()
+        for kind, prepared_values in prepared.items():
+            incoming_ids = {value.id for value in prepared_values}  # type: ignore[attr-defined]
+            candidate[kind] = [
+                raw for raw in candidate.get(kind, [])
+                if isinstance(raw, dict) and raw.get("id") not in incoming_ids
+            ] + [value.model_dump(mode="json") for value in prepared_values]
+        from portable_runtime.protocol.validation import assert_valid_state_graph
+
+        assert_valid_state_graph(candidate)
         with self._lock:
             self._connection.execute("BEGIN")
             try:
-                for kind, values in state.items():
-                    value_type = self._types.get(kind)
-                    if value_type is None:
-                        # try dynamic for authorization
-                        if kind == "authorization":
-                            try:
-                                from portable_runtime.records.authorization import (
-                                    AuthorizationGrant as _AG2,  # noqa: N814
-                                )
-                                value_type = _AG2
-                            except Exception:  # noqa: S112
-                                continue
-                        else:
-                            continue
-                    for raw in values:
-                        value = value_type.model_validate(raw)
+                for kind, prepared_values in prepared.items():
+                    for value in prepared_values:
                         self._connection.execute(
                             "INSERT INTO runtime_records(kind, id, data, created_at) VALUES (?, ?, ?, ?) "
                             "ON CONFLICT(kind, id) DO UPDATE SET data=excluded.data, created_at=excluded.created_at",
                             (
                                 kind,
-                                value.id,
+                                value.id,  # type: ignore[attr-defined]
                                 json.dumps(value.model_dump(mode="json"), ensure_ascii=False),
-                                value.created_at.isoformat(),
+                                value.created_at.isoformat(),  # type: ignore[attr-defined]
                             ),
                         )
                 self._connection.execute("COMMIT")

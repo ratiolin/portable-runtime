@@ -4,6 +4,8 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from portable_runtime.records.open_validation import ClosedVerificationResult
+
 
 class ProviderDescriptor(BaseModel):
     model_config = ConfigDict(extra="allow")
@@ -86,5 +88,10 @@ class CapabilityResult(BaseModel):
     message: str | None = None
     error: dict[str, Any] | None = None
     metadata: dict[str, Any] = Field(default_factory=dict)
+    # Verifier execution and the closed proposition it evaluated are separate
+    # dimensions.  ``status="succeeded"`` means the provider executed and
+    # returned a judgment; the judgment itself may still be ``fail``.
+    # ``None`` means this capability did not produce a closed verification.
+    verification_result: ClosedVerificationResult | None = None
     external_operation_ref: str | None = None
     reconciled: bool = False

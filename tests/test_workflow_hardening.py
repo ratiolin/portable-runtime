@@ -457,6 +457,15 @@ async def test_incident_repair_succeeded_path() -> None:
     store.save_work(work)
     run = Run(id=new_id("run"), work_id=work.id, status="running")
     store.save_run(run)
+    # The strict boundary requires typed action governance even when the
+    # workflow policy does not request an interactive approval step.
+    seed_action_governance(
+        work,
+        run,
+        store,
+        capability="code.edit",
+        include_grant=True,
+    )
     providers = [
         AnySucceedProvider("p_logs", ["observe.logs"]),
         AnySucceedProvider("p_cont", ["observe.container"]),

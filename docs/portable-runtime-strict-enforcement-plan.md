@@ -2,14 +2,29 @@
 ## Semantic Enforcement Hardening Plan
 
 > **当前范围说明（2026-08-21）：** 聚焦的 RealityBoundary / SQLite Store P0 闭合范围已由
-> [最终闭合方案](portable-runtime-strict-enforcement-closure-plan.md)及主分支 CI/SonarCloud
-> 证据确认完成。本文件继续作为更宽的语义 hardening backlog；其中 P1/P2 条目只有在各自具备
-> 独立实现与 executable evidence 后才能标记完成，不能由 P0 闭合状态推导。
+> [最终闭合方案](portable-runtime-strict-enforcement-closure-plan.md)及历史主分支 CI/SonarCloud
+> 证据确认完成；本轮 P1/P2 条目也已具备独立实现和 executable evidence。待推送提交的远端
+> CI/SonarCloud 结果仍需作为发布闭合的最后证据，不能由本地测试单独推导。
 
 > 目标：停止继续扩展核心语义表面，把当前已经存在的 responsibility-preserving architecture 收缩为**不可绕过的运行时协议**。
 >
 > 本文档不是新增功能路线，而是 enforcement hardening 方案。
 >
+
+## 2026-08-21 执行状态
+
+本轮已按本计划完成 P1/P2 的代码与负路径闭环（远端 CI/SonarCloud 结果在推送后补记）：
+
+| 范围 | 已落地的强制路径 | 新鲜本地证据 |
+|---|---|---|
+| P1-1 qualification/procedure | typed qualification refs → AssessmentContext snapshot → InvocationPermit → pre-provider digest recheck；inline proof facts fail closed | E021–E023、全量 242 tests |
+| P1-2 routing | failure-domain/independence hard filtering、circuit breaker actual path、caller reference descriptor 不再作为 proof | `tests/test_p1_routing.py` |
+| P1-3 reliability | rate、parallel、blast radius、cooldown、exposure、side-effect budget、enhanced timing gate | `tests/test_reliability_controls_p2.py` |
+| P1-4/P1-5/P1-6 semantic workflows | canonical reopen/projection/derivation、verification judgment 与 execution status 分离、incident repair 不再新写 legacy knowledge/evidence | `tests/conformance/test_p1_semantic.py`、全量回归 |
+| P2-1/P2-2/P2-3 protocol | transition journal、atomic graph validation/import、17-kind bundle、HTTP loopback governance | `tests/conformance/test_p2_protocol.py`、bundle round-trip、CI strict job |
+
+本状态不以提交信息代替执行证据；只有远端 CI 和 SonarCloud 对待推送提交均为绿，才完成发布闭合。
+
 > 核心原则：
 >
 > \[

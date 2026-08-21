@@ -45,6 +45,12 @@ class CapabilityEffectRule(BaseModel):
     authorization_required: bool = False
     resource_required: bool = False
     version_required: bool = False
+    # Reliability declaration used by the RealityBoundary before provider
+    # invocation.  ``None`` means a high-impact capability has not declared a
+    # bounded exposure and must fail closed.
+    blast_radius: int | None = None
+    exposure: int | None = None
+    recovery_timing: dict[str, float] | None = None
 
     @property
     def subject_version_required(self) -> bool:
@@ -114,6 +120,9 @@ class CapabilityContract(BaseModel):
     resource_required: bool = False
     subject_version_required: bool = False
     default_independence_requirements: list[str] = Field(default_factory=list)
+    blast_radius: int | None = None
+    exposure: int | None = None
+    recovery_timing: dict[str, float] | None = None
     def effective_impact(self, requested: str | None = None, provider_minimum: str | None = None) -> ImpactClass:
         levels = [_IMPACT_ORDER.get(self.minimum_impact_class, 0)]
         if requested and requested in _IMPACT_ORDER:
@@ -167,6 +176,9 @@ class CapabilityContractRegistry:
                     authorization_required=c.authorization_requirement == "required",
                     resource_required=c.resource_required,
                     version_required=c.subject_version_required,
+                    blast_radius=c.blast_radius,
+                    exposure=c.exposure,
+                    recovery_timing=c.recovery_timing,
                 )
             )
         if contracts:
@@ -201,6 +213,9 @@ class CapabilityContractRegistry:
             minimum_procedure_profile="standard" if value.authorization_required else "minimal",
             resource_required=value.resource_required,
             subject_version_required=value.version_required,
+            blast_radius=value.blast_radius,
+            exposure=value.exposure,
+            recovery_timing=value.recovery_timing,
         )
         return value
 
@@ -228,4 +243,20 @@ class CapabilityContractRegistry:
     def list(self):
         return list(self._contracts.values())
 def _builtin_contracts():
-    return [CapabilityContract(capability="deploy.prod", minimum_impact_class="deploy", effect_semantics="reconcilable", reversibility="compensatable", authorization_requirement="required", minimum_procedure_profile="standard", resource_required=True, subject_version_required=True, default_independence_requirements=["credential_domain", "provider_family"]), CapabilityContract(capability="deploy.*", minimum_impact_class="deploy", effect_semantics="reconcilable", reversibility="compensatable", authorization_requirement="required", minimum_procedure_profile="standard", resource_required=True, subject_version_required=True, default_independence_requirements=["credential_domain", "provider_family"]), CapabilityContract(capability="code.edit", minimum_impact_class="write-local", effect_semantics="idempotent", reversibility="reversible", authorization_requirement="required", minimum_procedure_profile="standard", resource_required=True, subject_version_required=True, default_independence_requirements=[]), CapabilityContract(capability="test.side_effect", minimum_impact_class="write-remote", effect_semantics="reconcilable", reversibility="compensatable", authorization_requirement="required", minimum_procedure_profile="standard", resource_required=False, subject_version_required=False, default_independence_requirements=[]), CapabilityContract(capability="test.deploy", minimum_impact_class="deploy", effect_semantics="reconcilable", reversibility="compensatable", authorization_requirement="required", minimum_procedure_profile="standard", resource_required=True, subject_version_required=True, default_independence_requirements=["credential_domain", "provider_family"]), CapabilityContract(capability="test.read", minimum_impact_class="read", effect_semantics="pure", reversibility="unknown", authorization_requirement="none", minimum_procedure_profile="minimal", resource_required=False, subject_version_required=False, default_independence_requirements=[]), CapabilityContract(capability="test.write_local", minimum_impact_class="write-local", effect_semantics="idempotent", reversibility="reversible", authorization_requirement="optional", minimum_procedure_profile="minimal", resource_required=False, subject_version_required=False, default_independence_requirements=[]), CapabilityContract(capability="test.write_remote", minimum_impact_class="write-remote", effect_semantics="reconcilable", reversibility="compensatable", authorization_requirement="required", minimum_procedure_profile="standard", resource_required=False, subject_version_required=False, default_independence_requirements=[]), CapabilityContract(capability="test.admin", minimum_impact_class="admin", effect_semantics="irreversible-opaque", reversibility="irreversible", authorization_requirement="required", minimum_procedure_profile="enhanced", resource_required=True, subject_version_required=False, default_independence_requirements=["credential_domain", "provider_family"]), CapabilityContract(capability="test.irreversible", minimum_impact_class="irreversible", effect_semantics="irreversible-opaque", reversibility="irreversible", authorization_requirement="required", minimum_procedure_profile="enhanced", resource_required=True, subject_version_required=True, default_independence_requirements=["credential_domain", "provider_family"]), CapabilityContract(capability="reason.generate", minimum_impact_class="read", effect_semantics="pure", reversibility="unknown", authorization_requirement="none", minimum_procedure_profile="minimal", resource_required=False, subject_version_required=False, default_independence_requirements=[]), CapabilityContract(capability="observe.*", minimum_impact_class="read", effect_semantics="pure", reversibility="unknown", authorization_requirement="none", minimum_procedure_profile="minimal", resource_required=False, subject_version_required=False, default_independence_requirements=[]), CapabilityContract(capability="verify.*", minimum_impact_class="read", effect_semantics="pure", reversibility="unknown", authorization_requirement="none", minimum_procedure_profile="minimal", resource_required=False, subject_version_required=False, default_independence_requirements=[]), CapabilityContract(capability="human.*", minimum_impact_class="read", effect_semantics="pure", reversibility="unknown", authorization_requirement="none", minimum_procedure_profile="minimal", resource_required=False, subject_version_required=False, default_independence_requirements=[]), CapabilityContract(capability="reason.*", minimum_impact_class="read", effect_semantics="pure", reversibility="unknown", authorization_requirement="none", minimum_procedure_profile="minimal", resource_required=False, subject_version_required=False, default_independence_requirements=[])]
+    return [
+        CapabilityContract(capability="deploy.prod", minimum_impact_class="deploy", effect_semantics="reconcilable", reversibility="compensatable", authorization_requirement="required", minimum_procedure_profile="standard", resource_required=True, subject_version_required=True, default_independence_requirements=["credential_domain", "provider_family"], blast_radius=5, exposure=5),
+        CapabilityContract(capability="deploy.*", minimum_impact_class="deploy", effect_semantics="reconcilable", reversibility="compensatable", authorization_requirement="required", minimum_procedure_profile="standard", resource_required=True, subject_version_required=True, default_independence_requirements=["credential_domain", "provider_family"], blast_radius=5, exposure=5),
+        CapabilityContract(capability="code.edit", minimum_impact_class="write-local", effect_semantics="idempotent", reversibility="reversible", authorization_requirement="required", minimum_procedure_profile="standard", resource_required=True, subject_version_required=True, default_independence_requirements=[], blast_radius=1, exposure=1),
+        CapabilityContract(capability="test.side_effect", minimum_impact_class="write-remote", effect_semantics="reconcilable", reversibility="compensatable", authorization_requirement="required", minimum_procedure_profile="standard", resource_required=False, subject_version_required=False, default_independence_requirements=[], blast_radius=1, exposure=1),
+        CapabilityContract(capability="test.deploy", minimum_impact_class="deploy", effect_semantics="reconcilable", reversibility="compensatable", authorization_requirement="required", minimum_procedure_profile="standard", resource_required=True, subject_version_required=True, default_independence_requirements=["credential_domain", "provider_family"], blast_radius=5, exposure=5),
+        CapabilityContract(capability="test.read", minimum_impact_class="read", effect_semantics="pure", reversibility="unknown", authorization_requirement="none", minimum_procedure_profile="minimal", resource_required=False, subject_version_required=False, default_independence_requirements=[]),
+        CapabilityContract(capability="test.write_local", minimum_impact_class="write-local", effect_semantics="idempotent", reversibility="reversible", authorization_requirement="optional", minimum_procedure_profile="minimal", resource_required=False, subject_version_required=False, default_independence_requirements=[], blast_radius=1, exposure=1),
+        CapabilityContract(capability="test.write_remote", minimum_impact_class="write-remote", effect_semantics="reconcilable", reversibility="compensatable", authorization_requirement="required", minimum_procedure_profile="standard", resource_required=False, subject_version_required=False, default_independence_requirements=[], blast_radius=1, exposure=1),
+        CapabilityContract(capability="test.admin", minimum_impact_class="admin", effect_semantics="irreversible-opaque", reversibility="irreversible", authorization_requirement="required", minimum_procedure_profile="enhanced", resource_required=True, subject_version_required=False, default_independence_requirements=["credential_domain", "provider_family"], blast_radius=10, exposure=10),
+        CapabilityContract(capability="test.irreversible", minimum_impact_class="irreversible", effect_semantics="irreversible-opaque", reversibility="irreversible", authorization_requirement="required", minimum_procedure_profile="enhanced", resource_required=True, subject_version_required=True, default_independence_requirements=["credential_domain", "provider_family"], blast_radius=10, exposure=10),
+        CapabilityContract(capability="reason.generate", minimum_impact_class="read", effect_semantics="pure", reversibility="unknown", authorization_requirement="none", minimum_procedure_profile="minimal", resource_required=False, subject_version_required=False, default_independence_requirements=[]),
+        CapabilityContract(capability="observe.*", minimum_impact_class="read", effect_semantics="pure", reversibility="unknown", authorization_requirement="none", minimum_procedure_profile="minimal", resource_required=False, subject_version_required=False, default_independence_requirements=[]),
+        CapabilityContract(capability="verify.*", minimum_impact_class="read", effect_semantics="pure", reversibility="unknown", authorization_requirement="none", minimum_procedure_profile="minimal", resource_required=False, subject_version_required=False, default_independence_requirements=[]),
+        CapabilityContract(capability="human.*", minimum_impact_class="read", effect_semantics="pure", reversibility="unknown", authorization_requirement="none", minimum_procedure_profile="minimal", resource_required=False, subject_version_required=False, default_independence_requirements=[]),
+        CapabilityContract(capability="reason.*", minimum_impact_class="read", effect_semantics="pure", reversibility="unknown", authorization_requirement="none", minimum_procedure_profile="minimal", resource_required=False, subject_version_required=False, default_independence_requirements=[]),
+    ]

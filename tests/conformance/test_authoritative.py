@@ -28,11 +28,12 @@ from portable_runtime.core.capabilities import (
     ProviderHealth,
 )
 from portable_runtime.core.knowledge import classify
-from portable_runtime.core.models import Evidence, KnowledgeItem, Run, Work, new_id
+from portable_runtime.core.models import Checkpoint, KnowledgeItem, Run, Work, new_id
 from portable_runtime.core.policies import PolicyDecision, approval_obligation
 from portable_runtime.core.registry import ProviderRegistry
 from portable_runtime.core.router import CapabilityService, ConstraintRouter
-from portable_runtime.records.authorization import create_grant_for_approval
+from portable_runtime.records.authorization import AuthorizationGrant, create_grant_for_approval
+from portable_runtime.records.models import BaseRecord
 from portable_runtime.records.open_validation import ClosedVerificationResult
 from portable_runtime.records.relations import RecordRelation
 from portable_runtime.stores.memory import InMemoryStateStore
@@ -189,20 +190,6 @@ def _request(capability: str = "test.side_effect", **kwargs: Any) -> CapabilityR
 
 
 def _seed_work_run(store: InMemoryStateStore) -> tuple[Work, Run]:
-    # Side-effect E012/E019/E020 must reach precommit/provider so their
-    # failure assertions exercise those stages rather than an earlier open
-    # procedure gate.  These are explicit typed proofs, not boolean bypasses.
-    procedure_proofs: dict[str, Any] = {
-        "failure_stop_proofs": [{"condition": "provider failure"}],
-        "evidence_artifacts": [Evidence(kind="observation", source="conformance")],
-        "relations": [
-            RecordRelation(relation_type="records", subject_ref="work", object_ref="observation"),
-            RecordRelation(relation_type="validated-under", subject_ref="work", object_ref="verification"),
-        ],
-        "verification_results": [ClosedVerificationResult(result="pass", message="conformance")],
-        "checkpoints": [{"id": "checkpoint:conformance"}],
-        "decisions": [{"id": "decision:conformance"}],
-    }
     work = Work(
         id=new_id("work"),
         title="authoritative conformance",
@@ -213,12 +200,58 @@ def _seed_work_run(store: InMemoryStateStore) -> tuple[Work, Run]:
             "result_confirmed": True,
             "candidate": ["counter"],
             "reviewed": True,
-            "procedure_proofs": procedure_proofs,
+            # Qualification facts are stored below and carried only by refs.
+            "procedure_proof_refs": [],
         },
     )
     run = Run(id=new_id("run"), work_id=work.id, status="running")
     store.save_work(work)
     store.save_run(run)
+
+    failure_stop = BaseRecord(
+        record_type="Policy",
+        lifecycle_status="candidate",
+        metadata={"qualification_kind": "failure-stop", "condition": "provider failure"},
+    )
+    evidence = BaseRecord(
+        record_type="EvidenceArtifact",
+        lifecycle_status="current",
+        metadata={"qualification_kind": "evidence", "uri": "evidence:conformance"},
+    )
+    verification = BaseRecord(
+        record_type="Assertion",
+        lifecycle_status="current",
+        epistemic_status="supported",
+        metadata={
+            "qualification_kind": "verification",
+            "result": "pass",
+            "target_refs": [work.id],
+        },
+    )
+    decision = BaseRecord(
+        record_type="Decision",
+        lifecycle_status="current",
+        metadata={"qualification_kind": "decision"},
+    )
+    relation = RecordRelation(relation_type="records", subject_ref=work.id, object_ref=evidence.id)
+    verification_relation = RecordRelation(
+        relation_type="validated-under", subject_ref=work.id, object_ref=verification.id
+    )
+    for record in (failure_stop, evidence, verification, decision):
+        store.save_record(record)
+    store.save_relation(relation)
+    store.save_relation(verification_relation)
+    checkpoint = Checkpoint(run_id=run.id, step_id=None)
+    store.save_checkpoint(checkpoint)
+    work.metadata["procedure_proof_refs"] = [
+        {"id": failure_stop.id, "kind": "failure-stop"},
+        {"id": evidence.id, "kind": "evidence"},
+        {"id": verification.id, "kind": "verification"},
+        {"id": decision.id, "kind": "decision"},
+    ]
+    work.metadata["relation_refs"] = [relation.id, verification_relation.id]
+    work.metadata["checkpoint_refs"] = [checkpoint.id]
+    store.save_work(work)
     return work, run
 
 
@@ -588,3 +621,102 @@ async def test_e020_result_commit_failure_never_projects_success() -> None:
     assert result.status in {"unknown", "unavailable", "failed"}
     assert result.status != "succeeded"
     assert not getattr(store, "_records", {}).get("outcome", {})
+
+
+@pytest.mark.asyncio
+async def test_e021_inline_qualification_facts_are_not_authoritative() -> None:
+    store = InMemoryStateStore()
+    provider = CountingProvider()
+    registry = ProviderRegistry()
+    registry.register(provider)
+    boundary = RealityBoundary(store=store, registry=registry, routing=ConstraintRouter(registry=registry))
+    service = CapabilityService(registry=registry, boundary=boundary, store=store)
+    work = Work(
+        id=new_id("work"),
+        title="fake proof",
+        kind="generic-task",
+        metadata={
+            "purpose": "fake proof",
+            "execution_boundary": "provider",
+            "procedure_proofs": {
+                "failure_stop_proofs": [{"condition": "caller claims stop"}],
+                "verification_results": [ClosedVerificationResult(result="pass")],
+            },
+        },
+    )
+    run = Run(id=new_id("run"), work_id=work.id, status="running")
+    store.save_work(work)
+    store.save_run(run)
+    _grant(store, capability="test.side_effect", actor="agent:runner")
+
+    result = await service.invoke(
+        _request(
+            "test.side_effect",
+            work_id=work.id,
+            run_id=run.id,
+            actor_ref="agent:runner",
+        )
+    )
+
+    assert _error_code(result) == "QualificationUnavailable"
+    assert provider.invoke_count == 0
+
+
+@pytest.mark.asyncio
+async def test_e022_expired_authorization_reference_fails_closed() -> None:
+    store = InMemoryStateStore()
+    provider = CountingProvider()
+    registry = ProviderRegistry()
+    registry.register(provider)
+    boundary = RealityBoundary(store=store, registry=registry, routing=ConstraintRouter(registry=registry))
+    service = CapabilityService(registry=registry, boundary=boundary, store=store)
+    grant = AuthorizationGrant(
+        principal_ref="human:owner",
+        grantee_ref="agent:runner",
+        allowed_capabilities=["test.side_effect"],
+        valid_from=datetime.now(UTC) - timedelta(seconds=30),
+        expires_at=datetime.now(UTC) - timedelta(seconds=1),
+    )
+    store.save_authorization(grant)
+
+    result = await service.invoke(
+        _request(
+            "test.side_effect",
+            actor_ref="agent:runner",
+            metadata={"authorization_refs": [grant.id]},
+        )
+    )
+
+    assert _error_code(result) == "QualificationUnavailable"
+    assert provider.invoke_count == 0
+
+
+@pytest.mark.asyncio
+async def test_e023_version_mismatched_qualification_reference_fails_closed() -> None:
+    store = InMemoryStateStore()
+    provider = CountingProvider()
+    registry = ProviderRegistry()
+    registry.register(provider)
+    boundary = RealityBoundary(store=store, registry=registry, routing=ConstraintRouter(registry=registry))
+    service = CapabilityService(registry=registry, boundary=boundary, store=store)
+    evidence = BaseRecord(
+        record_type="EvidenceArtifact",
+        lifecycle_status="current",
+        version=2,
+        metadata={"qualification_kind": "evidence"},
+    )
+    store.save_record(evidence)
+
+    result = await service.invoke(
+        _request(
+            "test.read",
+            metadata={
+                "evidence_refs": [
+                    {"id": evidence.id, "kind": "EvidenceArtifact", "version": 1}
+                ]
+            },
+        )
+    )
+
+    assert _error_code(result) == "QualificationUnavailable"
+    assert provider.invoke_count == 0

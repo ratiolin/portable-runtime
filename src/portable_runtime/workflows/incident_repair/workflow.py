@@ -4,17 +4,97 @@ from __future__ import annotations
 
 import contextlib
 import logging
+from collections.abc import Sequence
 
-from portable_runtime.core.models import Run, Work
+from portable_runtime.core.models import Artifact, Run, Work, new_id
 from portable_runtime.core.policies import (
     PolicyEngine,
     WorkflowPolicyConfig,
     build_incident_policy_context,
     create_default_incident_policy_engine,
 )
+from portable_runtime.records.knowledge import KnowledgeProjection
 from portable_runtime.workflows.context import WorkflowContext
 
 logger = logging.getLogger(__name__)
+
+
+def _closed_verification_pass(result: object) -> bool:
+    """Return the closed judgment, never an epistemic inference.
+
+    New verifier providers expose ``verification_result`` independently from
+    ``CapabilityResult.status``.  The status-only fallback is retained for
+    old third-party verifier providers that predate this field; it is only an
+    execution compatibility path and never creates ``supports``/``official``
+    semantic state.
+    """
+    judgment = getattr(result, "verification_result", None)
+    if judgment is not None:
+        return getattr(judgment, "result", None) == "pass"
+    return getattr(result, "status", None) == "succeeded"
+
+
+def _verification_policy_passes(results: Sequence[object], policy: object) -> bool:
+    checks = [_closed_verification_pass(result) for result in results]
+    if not checks:
+        return False
+    if isinstance(policy, dict):
+        mode = str(policy.get("mode", "all-required"))
+        threshold = int(policy.get("threshold", len(checks)))
+    else:
+        mode = str(policy or "all-required")
+        threshold = len(checks)
+    if mode == "any-of":
+        return any(checks)
+    if mode == "threshold":
+        return sum(checks) >= threshold
+    # all-required is the conservative default; callers must opt into a
+    # weaker policy explicitly in Work metadata.
+    return all(checks)
+
+
+def _save_knowledge_projection(
+    context: WorkflowContext,
+    projection: KnowledgeProjection,
+    run: Run,
+) -> None:
+    """Persist canonical knowledge, with an artifact fallback for old stores."""
+    if hasattr(context.store, "save_knowledge_projection"):
+        context.store.save_knowledge_projection(projection)  # type: ignore[attr-defined]
+        _append_projection_event(context, projection)
+        return
+    artifact = Artifact(
+        id=new_id("artifact"),
+        kind="knowledge-projection",
+        media_type="application/json",
+        inline_data=projection.model_dump(mode="json"),  # type: ignore[attr-defined]
+        created_by_run_id=run.id,
+    )
+    context.store.save_artifact(artifact)
+
+
+def _append_projection_event(context: WorkflowContext, projection: KnowledgeProjection) -> None:
+    store = context.store
+    if not hasattr(store, "append_event") and not hasattr(store, "save_event"):
+        return
+    from portable_runtime.core.models import Event, new_id
+
+    event = Event(
+        id=new_id("event"),
+        type="KnowledgeProjected",
+        subject_ref=projection.id,
+        payload={
+            "lifecycle_status": projection.lifecycle_status,
+            "source_work_refs": list(projection.source_work_refs),
+        },
+    )
+    try:
+        if hasattr(store, "append_event"):
+            store.append_event(event)
+        else:
+            store.save_event(event)  # type: ignore[attr-defined]
+    except Exception:
+        logger.debug("knowledge projection journal append failed", exc_info=True)
 
 
 class IncidentRepairWorkflow:
@@ -150,8 +230,16 @@ class IncidentRepairWorkflow:
         )
         verify_git = await context.invoke("verify.git_diff", diff=edit.message or "")
 
-        # 6. apply / merge (verify must have passed or at least one verifier succeeded)
-        verify_ok = verify_http.status == "succeeded" or verify_git.status == "succeeded"
+        # 6. apply / merge.  A verifier's execution status is not its
+        # proposition judgment: an executed verifier may return
+        # ``status=succeeded`` with ``verification_result.result=fail``.
+        # Default to all-required; an explicit work obligation may choose
+        # ``any-of`` or ``threshold``.
+        verification_results = [verify_http, verify_git]
+        verify_ok = _verification_policy_passes(
+            verification_results,
+            work.metadata.get("verification_policy", "all-required"),
+        )
         # Use StrictVerificationPolicy via same engine
         verification_ctx = build_incident_policy_context(
             work_id=work.id,
@@ -169,20 +257,91 @@ class IncidentRepairWorkflow:
         # 7. persist outcome
         with contextlib.suppress(Exception):
             context.set_step("persist")
-        # 8. create knowledge candidate
+        # 8. create canonical knowledge candidate.  The runtime no longer
+        # creates legacy KnowledgeItem/Evidence objects.  Existing legacy
+        # records remain readable through store/compat adapters.
         try:
-            from portable_runtime.core.models import KnowledgeItem
+            from portable_runtime.records.knowledge import KnowledgeProjection
+            from portable_runtime.records.models import Assertion, Derivation, EvidenceArtifact
 
-            item = KnowledgeItem(
-                id=f"knowledge_{run.id}",
+            verification_refs: list[str] = []
+            for capability, result in (("verify.http", verify_http), ("verify.git_diff", verify_git)):
+                closed = getattr(result, "verification_result", None)
+                evidence = EvidenceArtifact(
+                    id=new_id("record"),
+                    kind="closed-verification",
+                    lifecycle_status="current",
+                    source_refs=list(getattr(result, "output_artifact_refs", []) or []),
+                    metadata={
+                        "work_id": work.id,
+                        "run_id": run.id,
+                        "capability": capability,
+                        "provider_id": getattr(result, "provider_id", ""),
+                        "execution_status": getattr(result, "status", None),
+                        "verification_result": closed.model_dump(mode="json") if closed is not None else None,
+                        "message": getattr(result, "message", None),
+                    },
+                )
+                context.store.save_record(evidence)
+                verification_refs.append(evidence.id)
+
+            assertion = Assertion(
+                id=new_id("record"),
+                statement=f"Repair candidate for {work.title}",
+                lifecycle_status="draft",
+                epistemic_status="unverified",
+                source_refs=verification_refs,
+                metadata={
+                    "work_id": work.id,
+                    "run_id": run.id,
+                    "verification_execution_statuses": {
+                        "verify.http": verify_http.status,
+                        "verify.git_diff": verify_git.status,
+                    },
+                    "closed_verification_refs": verification_refs,
+                },
+            )
+            context.store.save_record(assertion)
+
+            derivation = Derivation(
+                id=new_id("record"),
+                premise_refs=[work.id],
+                evidence_refs=verification_refs,
+                rule_or_method_refs=["incident-repair.closed-verification"],
+                conclusion_ref=assertion.id,
+                provider_id="portable-runtime:incident-repair",
+                domain="incident-repair",
+                evaluator_version=self.version,
+                lifecycle_status="current",
+                metadata={
+                    "run_id": run.id,
+                    "verification_policy": work.metadata.get("verification_policy", "all-required"),
+                },
+            )
+            context.store.save_record(derivation)
+
+            projection = KnowledgeProjection(
+                id=f"knowledge_projection_{run.id}",
                 kind="failure-pattern",
                 title=f"Repair {work.title}",
-                content_ref=edit.output_artifact_refs[0] if edit.output_artifact_refs else work.id,
-                status="candidate",
                 source_work_refs=[work.id],
-                evidence_refs=verify_http.evidence_refs + verify_git.evidence_refs,
+                current_assertion_refs=[assertion.id],
+                evidence_summary_refs=verification_refs,
+                validity_scope=dict(work.metadata.get("valid_scope") or {"work_id": work.id}),
+                environment_bindings=dict(work.metadata.get("environment_versions") or {"runtime": "portable-runtime"}),
+                reopen_conditions=list(work.metadata.get("reopen_conditions") or []),
+                history_refs=[work.id, run.id],
+                metadata={
+                    "run_id": run.id,
+                    "verification_policy": work.metadata.get("verification_policy", "all-required"),
+                    "verification_execution_statuses": {
+                        "verify.http": verify_http.status,
+                        "verify.git_diff": verify_git.status,
+                    },
+                    "derivation_ref": derivation.id,
+                },
             )
-            context.store.save_knowledge(item)
+            _save_knowledge_projection(context, projection, run)
         except Exception:
             logger.debug("knowledge candidate creation failed", exc_info=True)
 

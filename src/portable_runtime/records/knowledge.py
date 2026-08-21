@@ -23,6 +23,7 @@ class KnowledgeProjection(BaseModel):
     id: str = Field(default_factory=lambda: new_id("knowledge_proj"))
     kind: str = "projection"
     title: str = ""
+    source_work_refs: list[str] = Field(default_factory=list)
     current_assertion_refs: list[str] = Field(default_factory=list)
     evidence_summary_refs: list[str] = Field(default_factory=list)
     validity_scope: dict[str, Any] = Field(default_factory=dict)
@@ -40,6 +41,12 @@ class KnowledgeProjection(BaseModel):
     created_at: datetime = Field(default_factory=utcnow)
     updated_at: datetime = Field(default_factory=utcnow)
     maturity: dict[Maturity, str] = Field(default_factory=dict)
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+    @property
+    def status(self) -> str:
+        """Read-only legacy spelling; canonical state is lifecycle_status."""
+        return self.lifecycle_status
 
 def is_negative_knowledge(proj: KnowledgeProjection) -> bool:
     return bool(proj.counterexample_refs or proj.negative_knowledge_refs)

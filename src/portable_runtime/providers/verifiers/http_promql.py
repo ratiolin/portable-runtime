@@ -19,6 +19,7 @@ from portable_runtime.core.capabilities import (
     ProviderDescriptor,
     ProviderHealth,
 )
+from portable_runtime.records.open_validation import ClosedVerificationResult
 
 logger = logging.getLogger(__name__)
 
@@ -61,9 +62,10 @@ class HttpVerifierProvider:
                 return CapabilityResult(
                     request_id=request.id,
                     provider_id=self.descriptor.id,
-                    status="succeeded" if ok else "failed",
+                    status="succeeded",
                     message=message,
                     metadata={"evidence_ref": _ref} if _ref else {},
+                    verification_result=ClosedVerificationResult(result="pass" if ok else "fail", message=message),
                 )
             except Exception as exc:  # noqa: BLE001
                 return CapabilityResult(request_id=request.id, provider_id=self.descriptor.id, status="failed", error={"type": type(exc).__name__, "message": str(exc)[:2000]})  # noqa: E501
@@ -77,10 +79,17 @@ class HttpVerifierProvider:
                 return CapabilityResult(
                     request_id=request.id,
                     provider_id=self.descriptor.id,
-                    status="succeeded" if ok else "failed",
+                    status="succeeded",
                     message=f"GET {url} -> {response.status_code} PASS" if ok else f"GET {url} -> {response.status_code} FAIL",  # noqa: E501
                     metadata={"status_code": response.status_code, "evidence_status": evidence_status, "body_snippet": response.text[:2000]},  # noqa: E501
                     evidence_refs=[],
+                    verification_result=ClosedVerificationResult(
+                        result="pass" if ok else "fail",
+                        message=(
+                            f"status {response.status_code} "
+                            f"{'matched' if ok else 'did not match'} expected {sorted(expected)}"
+                        ),
+                    ),
                 )
             except Exception as exc:  # noqa: BLE001
                 return CapabilityResult(request_id=request.id, provider_id=self.descriptor.id, status="failed", error={"type": type(exc).__name__, "message": str(exc)[:2000]})  # noqa: E501
@@ -94,10 +103,17 @@ class HttpVerifierProvider:
                 return CapabilityResult(
                     request_id=request.id,
                     provider_id=self.descriptor.id,
-                    status="succeeded" if ok else "failed",
+                    status="succeeded",
                     message=f"GET {url} -> {resp.status_code} PASS" if ok else f"GET {url} -> {resp.status_code} FAIL",
                     metadata={"status_code": resp.status_code, "evidence_status": evidence_status, "body_snippet": resp.text[:2000]},  # noqa: E501
                     evidence_refs=[],
+                    verification_result=ClosedVerificationResult(
+                        result="pass" if ok else "fail",
+                        message=(
+                            f"status {resp.status_code} "
+                            f"{'matched' if ok else 'did not match'} expected {sorted(expected)}"
+                        ),
+                    ),
                 )
         except Exception as exc:  # noqa: BLE001
             return CapabilityResult(request_id=request.id, provider_id=self.descriptor.id, status="failed", error={"type": type(exc).__name__, "message": str(exc)[:2000]})  # noqa: E501
@@ -150,9 +166,10 @@ class PromqlVerifierProvider:
                 return CapabilityResult(
                     request_id=request.id,
                     provider_id=self.descriptor.id,
-                    status="succeeded" if ok else "failed",
+                    status="succeeded",
                     message=message,
                     metadata={"evidence_ref": ref} if ref else {},
+                    verification_result=ClosedVerificationResult(result="pass" if ok else "fail", message=message),
                 )
             except Exception as exc:  # noqa: BLE001
                 return CapabilityResult(request_id=request.id, provider_id=self.descriptor.id, status="failed", error={"type": type(exc).__name__, "message": str(exc)[:2000]})  # noqa: E501
@@ -162,22 +179,30 @@ class PromqlVerifierProvider:
                 data = resp.json() if resp.headers.get("content-type", "").startswith("application/json") else {}
                 results = data.get("data", {}).get("result", []) if isinstance(data, dict) else []
                 if not results:
-                    return CapabilityResult(request_id=request.id, provider_id=self.descriptor.id, status="failed", message=f"no result for query: {query}")  # noqa: E501
+                    message = f"no result for query: {query}"
+                    return CapabilityResult(request_id=request.id, provider_id=self.descriptor.id, status="succeeded", message=message, verification_result=ClosedVerificationResult(result="fail", message=message))  # noqa: E501
                 if expected is not None:
                     for result in results:
                         try:
                             value = float(result["value"][1])
                         except (KeyError, IndexError, TypeError, ValueError):
-                            return CapabilityResult(request_id=request.id, provider_id=self.descriptor.id, status="failed", message=f"invalid sample for query: {query}")  # noqa: E501
+                            message = f"invalid sample for query: {query}"
+                            return CapabilityResult(request_id=request.id, provider_id=self.descriptor.id, status="succeeded", message=message, verification_result=ClosedVerificationResult(result="fail", message=message))  # noqa: E501
                         if abs(value - float(expected)) > 1e-9:
-                            return CapabilityResult(request_id=request.id, provider_id=self.descriptor.id, status="failed", message=f"value {value} != expected {expected} ({query})")  # noqa: E501
-                    return CapabilityResult(request_id=request.id, provider_id=self.descriptor.id, status="succeeded", message="query returned results")  # noqa: E501
+                            message = f"value {value} != expected {expected} ({query})"
+                            return CapabilityResult(request_id=request.id, provider_id=self.descriptor.id, status="succeeded", message=message, verification_result=ClosedVerificationResult(result="fail", message=message))  # noqa: E501
+                    message = "query returned results"
+                    return CapabilityResult(request_id=request.id, provider_id=self.descriptor.id, status="succeeded", message=message, verification_result=ClosedVerificationResult(result="pass", message=message))  # noqa: E501
                 return CapabilityResult(
                     request_id=request.id,
                     provider_id=self.descriptor.id,
                     status="succeeded",
                     message=f"promql {query[:200]} -> {resp.status_code} PASS",
                     metadata={"prometheus_url": self._prometheus_url, "response": str(data)[:2000]},
+                    verification_result=ClosedVerificationResult(
+                        result="pass",
+                        message=f"promql {query[:200]} -> {resp.status_code} PASS",
+                    ),
                 )
             except Exception as exc:  # noqa: BLE001
                 return CapabilityResult(request_id=request.id, provider_id=self.descriptor.id, status="failed", error={"type": type(exc).__name__, "message": str(exc)[:2000]})  # noqa: E501
@@ -191,9 +216,13 @@ class PromqlVerifierProvider:
                 return CapabilityResult(
                     request_id=request.id,
                     provider_id=self.descriptor.id,
-                    status="succeeded" if ok else "failed",
+                    status="succeeded",
                     message=f"promql {query[:200]} -> {resp.status_code} PASS" if ok else f"promql {query[:200]} -> {resp.status_code} FAIL",  # noqa: E501
                     metadata={"prometheus_url": self._prometheus_url, "response": str(data)[:2000]},
+                    verification_result=ClosedVerificationResult(
+                        result="pass" if ok else "fail",
+                        message=f"promql {query[:200]} -> {resp.status_code} {'PASS' if ok else 'FAIL'}",
+                    ),
                 )
         except Exception as exc:  # noqa: BLE001
             return CapabilityResult(request_id=request.id, provider_id=self.descriptor.id, status="failed", error={"type": type(exc).__name__, "message": str(exc)[:2000]})  # noqa: E501
@@ -230,14 +259,14 @@ class ContainerVerifierProvider:
         if self._check_fn is not None:
             try:
                 ok, message, ref = await self._check_fn(targets)
-                return CapabilityResult(request_id=request.id, provider_id=self.descriptor.id, status="succeeded" if ok else "failed", message=message, metadata={"evidence_ref": ref})  # noqa: E501
+                return CapabilityResult(request_id=request.id, provider_id=self.descriptor.id, status="succeeded", message=message, metadata={"evidence_ref": ref}, verification_result=ClosedVerificationResult(result="pass" if ok else "fail", message=message))  # noqa: E501
             except Exception as exc:  # noqa: BLE001
                 return CapabilityResult(request_id=request.id, provider_id=self.descriptor.id, status="failed", error={"type": type(exc).__name__, "message": str(exc)[:2000]})  # noqa: E501
         try:
             from control_plane.tools import check_container_status
 
             ok, message, ref = await check_container_status(targets)
-            return CapabilityResult(request_id=request.id, provider_id=self.descriptor.id, status="succeeded" if ok else "failed", message=message, metadata={"evidence_ref": ref})  # noqa: E501
+            return CapabilityResult(request_id=request.id, provider_id=self.descriptor.id, status="succeeded", message=message, metadata={"evidence_ref": ref}, verification_result=ClosedVerificationResult(result="pass" if ok else "fail", message=message))  # noqa: E501
         except Exception:
             try:
                 proc = await asyncio.create_subprocess_exec("docker", "ps", "--format", "{{.Names}}\t{{.Status}}", stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)  # noqa: E501
@@ -245,7 +274,8 @@ class ContainerVerifierProvider:
                 text = stdout.decode(errors="replace")
                 missing = [t for t in targets if t not in text]
                 ok = not missing
-                return CapabilityResult(request_id=request.id, provider_id=self.descriptor.id, status="succeeded" if ok else "failed", message=f"containers {targets} missing={missing}" if missing else "all containers running")  # noqa: E501
+                message = f"containers {targets} missing={missing}" if missing else "all containers running"
+                return CapabilityResult(request_id=request.id, provider_id=self.descriptor.id, status="succeeded", message=message, verification_result=ClosedVerificationResult(result="pass" if ok else "fail", message=message))  # noqa: E501
             except Exception as exc:  # noqa: BLE001
                 return CapabilityResult(request_id=request.id, provider_id=self.descriptor.id, status="failed", error={"type": type(exc).__name__, "message": str(exc)[:2000]})  # noqa: E501
 
@@ -280,7 +310,7 @@ class GitVerifierProvider:
         if self._check_fn is not None:
             try:
                 ok, message, ref = await self._check_fn(repo, branch)
-                return CapabilityResult(request_id=request.id, provider_id=self.descriptor.id, status="succeeded" if ok else "failed", message=message, metadata={"evidence_ref": ref})  # noqa: E501
+                return CapabilityResult(request_id=request.id, provider_id=self.descriptor.id, status="succeeded", message=message, metadata={"evidence_ref": ref}, verification_result=ClosedVerificationResult(result="pass" if ok else "fail", message=message))  # noqa: E501
             except Exception as exc:  # noqa: BLE001
                 return CapabilityResult(request_id=request.id, provider_id=self.descriptor.id, status="failed", error={"type": type(exc).__name__, "message": str(exc)[:2000]})  # noqa: E501
         try:
@@ -288,9 +318,11 @@ class GitVerifierProvider:
             stdout0, _ = await asyncio.wait_for(proc0.communicate(), timeout=10)
             is_git = stdout0.decode(errors="replace").strip().lower() == "true"
             if not is_git or proc0.returncode != 0:
-                return CapabilityResult(request_id=request.id, provider_id=self.descriptor.id, status="succeeded", message="not a git repository; skipping git diff")  # noqa: E501
+                message = "not a git repository; skipping git diff"
+                return CapabilityResult(request_id=request.id, provider_id=self.descriptor.id, status="succeeded", message=message, verification_result=ClosedVerificationResult(result="pass", message=message))  # noqa: E501
         except Exception:
-            return CapabilityResult(request_id=request.id, provider_id=self.descriptor.id, status="succeeded", message="not a git repository; skipping git diff")  # noqa: E501
+            message = "not a git repository; skipping git diff"
+            return CapabilityResult(request_id=request.id, provider_id=self.descriptor.id, status="succeeded", message=message, verification_result=ClosedVerificationResult(result="pass", message=message))  # noqa: E501
         try:
             if branch:
                 proc = await asyncio.create_subprocess_exec("git", "-C", repo, "diff", f"main...{branch}", "--stat", stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)  # noqa: E501
@@ -300,7 +332,8 @@ class GitVerifierProvider:
                     proc2 = await asyncio.create_subprocess_exec(*cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)  # noqa: E501
                     stdout2, stderr2 = await asyncio.wait_for(proc2.communicate(), timeout=30)
                     ok2 = proc2.returncode == 0
-                    return CapabilityResult(request_id=request.id, provider_id=self.descriptor.id, status="succeeded" if ok2 else "failed", message=stdout2.decode(errors="replace")[:2000] or stderr2.decode(errors="replace")[:2000], metadata={"exit_code": proc2.returncode})  # noqa: E501
+                    message = stdout2.decode(errors="replace")[:2000] or stderr2.decode(errors="replace")[:2000]
+                    return CapabilityResult(request_id=request.id, provider_id=self.descriptor.id, status="succeeded", message=message, metadata={"exit_code": proc2.returncode}, verification_result=ClosedVerificationResult(result="pass" if ok2 else "fail", message=message))  # noqa: E501
                 proc_dirty = await asyncio.create_subprocess_exec("git", "-C", repo, "status", "--porcelain", stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)  # noqa: E501
                 stdout_dirty, _ = await asyncio.wait_for(proc_dirty.communicate(), timeout=10)
                 dirty = stdout_dirty.decode(errors="replace").strip()
@@ -309,10 +342,12 @@ class GitVerifierProvider:
                 try:
                     from control_plane.verifier import Verifier
                     allowed, msg = Verifier.diff_allowed(repo, stdout.decode(errors="replace"))
-                    return CapabilityResult(request_id=request.id, provider_id=self.descriptor.id, status="succeeded" if allowed else "failed", message=msg)  # noqa: E501
+                    return CapabilityResult(request_id=request.id, provider_id=self.descriptor.id, status="succeeded", message=msg, verification_result=ClosedVerificationResult(result="pass" if allowed else "fail", message=msg))  # noqa: E501
                 except Exception:
-                    return CapabilityResult(request_id=request.id, provider_id=self.descriptor.id, status="succeeded", message=stdout.decode(errors="replace")[:2000])  # noqa: E501
-            return CapabilityResult(request_id=request.id, provider_id=self.descriptor.id, status="succeeded", message="git repository verified")  # noqa: E501
+                    message = stdout.decode(errors="replace")[:2000]
+                    return CapabilityResult(request_id=request.id, provider_id=self.descriptor.id, status="succeeded", message=message, verification_result=ClosedVerificationResult(result="pass", message=message))  # noqa: E501
+            message = "git repository verified"
+            return CapabilityResult(request_id=request.id, provider_id=self.descriptor.id, status="succeeded", message=message, verification_result=ClosedVerificationResult(result="pass", message=message))  # noqa: E501
         except Exception as exc:  # noqa: BLE001
             return CapabilityResult(request_id=request.id, provider_id=self.descriptor.id, status="failed", error={"type": type(exc).__name__, "message": str(exc)[:2000]})  # noqa: E501
 
