@@ -11,14 +11,14 @@ Portable runtime for durable **Work / Run** orchestration with pluggable **Provi
 The RealityBoundary, SQLite Store, semantic-plane P1 work and protocol P2 work are locally closed with executable evidence. The current four-commit protocol-convergence sequence has this pre-push proof:
 
 - `uv run ruff check .` and `uv run mypy src` — both clean;
-- `uv run pytest -q` — `261 passed` (two existing collection/deprecation warnings only);
-- strict-conformance — `63 passed`: E001–E023, S001–S006, semantic-contract, authorization-contract, P1 semantic, P2 protocol, routing and reliability gates;
+- `uv run pytest -q` — `264 passed` (two existing collection/deprecation warnings only);
+- strict-conformance — `59 passed`: E001–E023, S001–S006, semantic-contract, authorization-contract, P1 semantic, P2 protocol, routing and reliability gates;
 - canonical `KnowledgeProjection` state is bundle-portable; legacy `KnowledgeItem` remains read-compatible but is not a new workflow write target;
 - HTTP mutating control routes are loopback-only and explicitly not an authenticated multi-user boundary;
 - the CI `strict-conformance` job runs the same focused suite and is a prerequisite for SonarCloud analysis;
-- the prior remote proof for the already-pushed baseline remains green in [main CI run 32442371727](https://github.com/ratiolin/portable-runtime/actions/runs/32442371727); local proof for this convergence sequence is closed, and its remote CI/SonarCloud proof is tracked by the current run.
+- the prior remote proof for the already-pushed baseline remains green in [main CI run 32442371727](https://github.com/ratiolin/portable-runtime/actions/runs/32442371727); the current sequence is green in [main CI run 32446261971](https://github.com/ratiolin/portable-runtime/actions/runs/32446261971), including SonarCloud new-code coverage at `80.3%`.
 
-The baseline link above is historical evidence; the current run is the authoritative post-push proof for this sequence.
+The baseline link above is historical evidence; run `32446261971` is the authoritative post-push proof for this sequence.
 
 The control-plane HTTP API is local-only and is not an authenticated multi-user boundary. Mutating governance routes (state import, provider enable/disable/reload, capability execution and reopen) reject non-loopback callers; remote deployments must place an authenticated, authorized deployment boundary in front of the process.
 
@@ -182,11 +182,11 @@ Reference profile: `examples/personal-platform-profile` is a minimal trigger/pro
 uv sync --extra dev
 uv run ruff check .
 uv run mypy src
-uv run pytest              # 261 tests; current local verification
+uv run pytest              # 264 tests; current local verification
 uv run pytest --cov=src --cov-report=xml  # for SonarCloud
 ```
 
-The fresh local coverage run reports 76% overall coverage. The quality gate is enforced in CI: `sonar-project.properties` pins `sonar.python.version=3.12`, `sonar.qualitygate.wait=true`, `sonar.cpd.exclusions=tests/**,...`, and `sonar.issue.ignore.multicriteria` for the 2 intentional `tests/**` S5779 and the 2 retained `hashlib.sha1` compat branches.
+The fresh local coverage run reports 77% overall coverage; SonarCloud reports 80.3% new-code coverage for the current sequence. The quality gate is enforced in CI: `sonar-project.properties` pins `sonar.python.version=3.12`, `sonar.qualitygate.wait=true`, `sonar.cpd.exclusions=tests/**,...`, and `sonar.issue.ignore.multicriteria` for the 2 intentional `tests/**` S5779 and the 2 retained `hashlib.sha1` compat branches.
 
 ---
 

@@ -2,7 +2,7 @@
 
 ## Current status
 
-The P0 RealityBoundary/SQLite kernel plus the P1 semantic and P2 protocol hardening are closed on 2026-08-21. The semantic freeze-candidate blocker set is closed; the four-commit protocol-convergence sequence now tightens semantic contracts, Boundary internal stages, reliability profiles and authorization compatibility. Fresh local evidence is `ruff` clean, `mypy src` clean, `uv run pytest -q` → `261 passed`, and the CI-equivalent strict-conformance selection → `63 passed`; the previous baseline remains green in [main CI run 32442371727](https://github.com/ratiolin/portable-runtime/actions/runs/32442371727), while this new sequence will receive its own CI/SonarCloud result after push.
+The P0 RealityBoundary/SQLite kernel plus the P1 semantic and P2 protocol hardening are closed on 2026-08-21. The semantic freeze-candidate blocker set is closed; the protocol-convergence sequence tightens semantic contracts, Boundary internal stages, reliability profiles and authorization compatibility. Fresh local evidence is `ruff` clean, `mypy src` clean, `uv run pytest -q` → `264 passed`, and the CI-equivalent strict-conformance selection → `59 passed`; the sequence is green in [main CI run 32446261971](https://github.com/ratiolin/portable-runtime/actions/runs/32446261971), with SonarCloud new-code coverage at `80.3%`.
 
 The P0 enforcement kernel is implemented and has executable evidence in:
 
@@ -19,8 +19,9 @@ The P0 enforcement kernel is implemented and has executable evidence in:
 | SQLite CAS/Lease are atomic | `SQLiteStateStore` CAS/lease transactions | S001–S006 | n/a |
 
 The strict-conformance command and the repository-wide suite both pass. The
-latest local verification is `261 passed` with the two existing collection/
-deprecation warnings only. The fresh coverage run reports 76% overall coverage.
+latest local verification is `264 passed` with the two existing collection/
+deprecation warnings only. The fresh coverage run reports 77% overall coverage; the
+remote SonarCloud quality gate reports 80.3% new-code coverage.
 Legacy workflow fixtures now carry explicit typed
 authorization, resource/version, and procedure evidence; the runtime boundary
 itself remains fail-closed when those proofs are absent.
