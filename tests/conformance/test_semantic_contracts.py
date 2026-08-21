@@ -5,6 +5,7 @@ from __future__ import annotations
 from portable_runtime.records.authorization import AuthorizationGrant
 from portable_runtime.records.models import Assertion, EvidenceArtifact, PolicyRecord, RevisionRecord
 from portable_runtime.records.relations import RecordRelation
+from portable_runtime.records.validation import validate_record_graph
 from portable_runtime.protocol.validation import validate_state_graph
 
 
@@ -101,3 +102,15 @@ def test_official_policy_accepts_typed_closed_verification_and_version_bound_gra
     )
     assert not any("ClosedVerificationResult" in error for error in errors)
     assert not any("AuthorizationGrant" in error for error in errors)
+
+
+def test_legacy_record_graph_entrypoint_delegates_to_strict_protocol_owner() -> None:
+    record = Assertion(id="assert_graph", statement="graph", lifecycle_status="draft")
+    relation = RecordRelation(
+        id="dangling_graph_relation",
+        relation_type="supports",
+        subject_ref=record.id,
+        object_ref="missing_graph_target",
+    )
+    errors = validate_record_graph([record], [relation])
+    assert any("missing_graph_target" in error for error in errors)

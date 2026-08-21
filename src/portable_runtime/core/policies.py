@@ -1,5 +1,6 @@
 """Policy, knowledge and store conformance for B1-C — extended for workflow hardening.
-V1.4: Obligation algebra + disposition, waivable hard boundary, backward compat.
+R1.4 implementation milestone: obligation algebra, disposition, waivable hard
+boundaries and explicit backward compatibility.
 """
 
 from __future__ import annotations
@@ -83,7 +84,9 @@ def revalidation_before_execution_obligation(waivable: bool = False) -> Obligati
 
 
 class PolicyDecision(BaseModel):
-    """V1.4 policy decision with disposition + obligations. Backward compat with status/reason.
+    """R1.4 policy decision with disposition + obligations.
+
+    Backward compatibility with status/reason remains explicit.
 
     New code should use disposition/obligations/reason_refs/policy_refs.
     Old code constructing PolicyDecision(status=...) continues to work via validator.
@@ -91,7 +94,7 @@ class PolicyDecision(BaseModel):
 
     model_config = ConfigDict(extra="allow")
 
-    # New V1.4 fields
+    # New R1.4 fields
     disposition: Disposition | None = None
     obligations: list[Obligation] = Field(default_factory=list)
     reason_refs: list[str] = Field(default_factory=list)
@@ -377,7 +380,7 @@ class PolicyEngine:
     policies: list[Any] = field(default_factory=list)
 
     async def evaluate(self, context: PolicyContext) -> PolicyDecision:
-        """V1.4 algebra: deny > defer > requirements-union > allow. Conflict -> deny with policy-conflict."""
+        """R1.4 algebra: deny > defer > requirements-union > allow."""
         decisions: list[PolicyDecision] = []
         for policy in self.policies:
             dec = await policy.evaluate(context)  # type: ignore

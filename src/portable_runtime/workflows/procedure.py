@@ -1,4 +1,4 @@
-"""Procedure profiles — V1.8 strict typed-record backed (P1-1).
+"""Procedure profiles — R1.8 implementation milestone, typed-record backed.
 
 Graph is implementation, responsibility completeness is invariant.
 ProcedureProfile levels: minimal / standard / enhanced.
@@ -44,7 +44,7 @@ class ProcedureProfile(str, Enum):  # noqa: UP042
     enhanced = "enhanced"
 
 
-# Gates per profile (V1.4 §11.1)
+# Gates per profile (R1.8 implementation contract)
 _MINIMAL_GATES: list[str] = [
     "purpose-identified",
     "execution-boundary",

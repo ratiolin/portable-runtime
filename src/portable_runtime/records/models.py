@@ -1,4 +1,6 @@
-"""Semantic Plane records — Control Plane record layer V1.2.
+"""Runtime semantic records — R1.2 implementation milestone.
+
+Implements Framework V1 / Control Plane schema official-1.0.0.
 
 Implements 3 orthogonal dimensions:
   record_type ⊥ epistemic_status ⊥ lifecycle_status
@@ -51,7 +53,7 @@ LifecycleStatus = Literal[
     "confirmed",
 ]
 
-# Allowed lifecycles per record_type (simplified V1.2)
+# Allowed lifecycles per record_type (simplified R1.2 implementation contract)
 _ALLOWED_LIFECYCLE: dict[str, set[str]] = {
     "EvidenceArtifact": {"draft", "current", "superseded", "archived"},
     "Observation": {"draft", "current", "superseded", "archived"},

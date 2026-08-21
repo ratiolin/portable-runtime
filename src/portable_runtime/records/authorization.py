@@ -1,4 +1,7 @@
-"""AuthorizationGrant — V1.4 Authorization isolated from Decision.
+"""Runtime authorization — R1.4 implementation milestone.
+
+Implements Framework V1 / Control Plane schema official-1.0.0; authorization
+is isolated from Decision.
 
 Invariant: patch v1 approved MUST NOT be reused for patch v2. Checked via subject_version_refs.
 
@@ -53,7 +56,7 @@ class CanonicalAuthorizationRequest(BaseModel):
 class AuthorizationGrant(BaseModel):
     """Authorization that allows a grantee to make a decision effective.
 
-    Separated from Decision (who chose what) per V1.4 §9.1.
+    Separated from Decision (who chose what) per the R1.4 implementation contract.
     """
 
     model_config = ConfigDict(extra="allow")

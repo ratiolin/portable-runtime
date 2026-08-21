@@ -1,4 +1,6 @@
-"""Revalidation engine V1.3 — typed dependency + AffectedAssessment.
+"""Revalidation engine — R1.3 implementation milestone.
+
+Implements typed dependency impacts and AffectedAssessment compatibility views.
 
 Implements direct matching per typed edges, no recursive full-graph invalidation.
 Supports change_type in {evaluator, model, code, dataset, permission, classification, state_space, environment}

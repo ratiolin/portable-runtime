@@ -1,4 +1,6 @@
-"""Circuit breaker & fault containment — V1.6 + V1.8.
+"""Circuit breaker and fault containment — R1.6/R1.8 implementation milestones.
+
+Implements Framework V1 / Control Plane schema official-1.0.0.
 
 ``ReliabilityControls`` is deliberately a small, deterministic gate.  It
 tracks both the durable budget (how much side effect has already been spent)
@@ -115,14 +117,14 @@ class ReliabilityLimits:
 class ReliabilityRiskEvaluator:
     """Interpret an observation into structural risk reasons.
 
-    This component owns the mechanical threshold checks.  It does not choose
-    whether execution is allowed; that decision belongs to a policy profile.
+    This component is policy-neutral: it reports structurally invalid timing
+    and request facts, while local rate/budget/limit thresholds belong to the
+    policy profile that consumes the assessment.
     """
 
     def evaluate(
         self,
         observation: ReliabilityObservation,
-        limits: ReliabilityLimits,
         *,
         side_effect: bool,
         irreversible: bool,
@@ -130,22 +132,10 @@ class ReliabilityRiskEvaluator:
         timing: dict[str, Any] | None,
     ) -> ReliabilityRiskAssessment:
         reasons: list[str] = []
-        if observation.action_rate >= limits.max_action_rate:
-            reasons.append("max_action_rate")
-        elif side_effect and observation.requested_blast_radius < 1:
+        if side_effect and observation.requested_blast_radius < 1:
             reasons.append("blast_radius_positive")
-        elif side_effect and observation.requested_blast_radius > limits.blast_radius:
-            reasons.append("blast_radius_limit")
         elif side_effect and observation.requested_exposure < 1:
             reasons.append("exposure_positive")
-        elif side_effect and observation.active_side_effects >= limits.max_parallel_side_effects:
-            reasons.append("parallel_side_effect_limit")
-        elif side_effect and observation.side_effect_count >= limits.side_effect_budget:
-            reasons.append("side_effect_budget")
-        elif side_effect and observation.exposure_used + observation.requested_exposure > limits.exposure_budget:
-            reasons.append("exposure_budget")
-        elif side_effect and observation.cooldown_remaining > 0:
-            reasons.append("cooldown")
 
         enhanced = procedure_profile == "enhanced" or irreversible
         if not reasons and enhanced:
@@ -239,9 +229,24 @@ class DefaultLocalReliabilityPolicy:
         self,
         observation: ReliabilityObservation,
         risk: ReliabilityRiskAssessment,
+        limits: ReliabilityLimits | None = None,
     ) -> ReliabilityDisposition:
+        limits = limits or self.limits
         reason_text = "allowed"
         reason = risk.reason_refs[0] if risk.reason_refs else None
+        if reason is None:
+            if observation.action_rate >= limits.max_action_rate:
+                reason = "max_action_rate"
+            elif observation.requested_blast_radius > limits.blast_radius:
+                reason = "blast_radius_limit"
+            elif observation.active_side_effects >= limits.max_parallel_side_effects:
+                reason = "parallel_side_effect_limit"
+            elif observation.side_effect_count >= limits.side_effect_budget:
+                reason = "side_effect_budget"
+            elif observation.exposure_used + observation.requested_exposure > limits.exposure_budget:
+                reason = "exposure_budget"
+            elif observation.cooldown_remaining > 0:
+                reason = "cooldown"
         if reason == "max_action_rate":
             reason_text = "max_action_rate exceeded"
         elif reason == "blast_radius_positive":
@@ -267,7 +272,7 @@ class DefaultLocalReliabilityPolicy:
         elif reason == "recovery_window":
             reason_text = "recovery loop exceeds irreversible window"
         return ReliabilityDisposition(
-            action="allow" if risk.severity == "none" else "deny",
+            action="allow" if reason is None else "deny",
             policy_ref=self.policy_ref,
             reason=reason_text,
         )
@@ -284,18 +289,17 @@ class DefaultLocalReliabilityPolicy:
         evaluator = ReliabilityRiskEvaluator()
         risk = evaluator.evaluate(
             observation,
-            self.limits,
             side_effect=side_effect,
             irreversible=irreversible,
             procedure_profile=procedure_profile,
             timing=timing,
         )
-        return risk, self.decide(observation, risk)
+        return risk, self.decide(observation, risk, self.limits)
 
 
 @dataclass(init=False)
 class ReliabilityControls:
-    """V1.8 reliability controls: rate, blast radius, budgets."""
+    """R1.8 reliability controls: rate, blast radius, budgets."""
 
     cooldown_seconds: float
     _action_timestamps: list[float] = field(default_factory=list)
@@ -408,13 +412,12 @@ class ReliabilityControls:
             raise RuntimeError("reliability risk evaluator is unavailable")
         risk = self.risk_evaluator.evaluate(
             observation,
-            self.policy.limits,
             side_effect=side_effect,
             irreversible=irreversible,
             procedure_profile=procedure_profile,
             timing=timing,
         )
-        disposition = self.policy.decide(observation, risk)
+        disposition = self.policy.decide(observation, risk, self.policy.limits)
         self._last_risk_assessment = risk
         self._last_disposition = disposition
         if disposition.action == "allow":

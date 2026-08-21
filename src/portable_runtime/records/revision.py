@@ -1,4 +1,6 @@
-"""Revision / Version Lineage V1.3 — preserves old object, no silent overwrite.
+"""Revision / Version Lineage — R1.3 implementation milestone.
+
+Preserves old objects and never silently overwrites an authoritative version.
 
 Implements:
   Revision(revises -> old, produces -> new)

@@ -3,9 +3,10 @@ from __future__ import annotations
 import hashlib
 import inspect
 import json
-from datetime import UTC, datetime
 from typing import Any, Literal, cast
 
+from portable_runtime.core.boundary_fencing import extract_lease_generation as _extract_lease_generation
+from portable_runtime.core.boundary_fencing import validate_fencing
 from portable_runtime.core.boundary_stages import (
     BoundaryStagePlan,
     InvocationStagePlan,
@@ -107,48 +108,6 @@ def _digest_request(request: CapabilityRequest) -> str:
     payload = request.model_dump(mode="json")
     serialized = json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str)
     return hashlib.sha256(serialized.encode()).hexdigest()
-
-def _extract_lease_generation(request: CapabilityRequest) -> int | None:
-    lg = getattr(request, "lease_generation", None)
-    if lg is not None:
-        return lg  # type: ignore[no-redef]
-    if isinstance(request.metadata, dict):
-        v = request.metadata.get("lease_generation")
-        if isinstance(v, int):
-            return v
-        if isinstance(v, str) and v.isdigit():
-            return int(v)
-    return None
-
-def _extract_lease_owner(request: CapabilityRequest) -> str | None:
-    lo = getattr(request, "lease_owner", None)
-    if lo is not None:
-        return lo  # type: ignore[no-redef]
-    if isinstance(request.metadata, dict):
-        v = request.metadata.get("lease_owner")
-        if isinstance(v, str):
-            return v
-    return None
-
-def validate_fencing(request: CapabilityRequest, run: Any | None, *, now: datetime | None = None) -> tuple[bool, str]:
-    if run is None or request.run_id is None:
-        return True, "no run fencing required"
-    now = now or datetime.now(UTC)
-    if not run.lease_owner and (run.lease_generation == 0 or run.lease_generation is None):
-        return True, "unleased run"
-    req_gen = _extract_lease_generation(request)
-    req_owner = _extract_lease_owner(request)
-    if req_gen is None:
-        return False, f"fencing: missing lease_generation, expected {run.lease_generation}"
-    if req_gen != run.lease_generation:
-        return False, f"fencing: generation mismatch request {req_gen} != current {run.lease_generation}"
-    if run.lease_owner and req_owner is not None and req_owner != run.lease_owner:
-        return False, f"fencing: owner mismatch {req_owner} != {run.lease_owner}"
-    if run.lease_owner and req_owner is None:
-        return False, f"fencing: missing lease_owner, expected {run.lease_owner}"
-    if run.lease_expires_at is not None and run.lease_expires_at <= now:
-        return False, f"fencing: lease expired at {run.lease_expires_at.isoformat()}"
-    return True, "fencing ok"
 
 def _append_event(store: Any, event_type: str, subject_ref: str, payload: dict[str, Any]) -> bool:
     """Append a durable transition event and report journal availability.

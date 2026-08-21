@@ -1,4 +1,4 @@
-"""Lifecycle state machines V1.2."""
+"""Lifecycle state machines — R1.2 implementation milestone."""
 
 from __future__ import annotations
 

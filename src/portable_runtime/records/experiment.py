@@ -1,4 +1,4 @@
-"""Experiment as first-class Work/Capability — V1.7."""
+"""Experiment as first-class Work/Capability — R1.7 implementation milestone."""
 
 from __future__ import annotations
 

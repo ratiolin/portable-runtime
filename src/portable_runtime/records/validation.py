@@ -1,9 +1,13 @@
-"""Validation V1.2 — semantic invariants."""
+"""Runtime semantic-record validation for Framework V1 / schema official-1.0.0.
+
+Single-record and canonical-write invariants live here.  Graph-level
+invariants are owned by :mod:`portable_runtime.protocol.validation`.
+"""
 
 from __future__ import annotations
 
 from .models import BaseRecord
-from .relations import RecordRelation, validate_relation
+from .relations import RecordRelation
 
 
 def _has_observation_provenance(record: BaseRecord) -> bool:
@@ -72,17 +76,19 @@ def validate_record(record: BaseRecord) -> list[str]:
 
 
 def validate_record_graph(records: list[BaseRecord], relations: list[RecordRelation]) -> list[str]:
-    errors: list[str] = []
-    ids = {r.id for r in records}
-    for rel in relations:
-        errors.extend(validate_relation(rel))
-        # produces != causes already checked
-        if rel.subject_ref not in ids and not rel.subject_ref.startswith(("work_", "run_", "step_")):
-            # allow refs to external Work/Run but flag missing record for strict graph
-            pass
-        if rel.object_ref not in ids and not rel.object_ref.startswith(("work_", "run_", "step_")):
-            pass
-    # Check for lifecycle ep incorrectly carrying
-    for r in records:
-        errors.extend(validate_record(r))
-    return errors
+    """Deprecated compatibility wrapper for the authoritative graph validator.
+
+    New callers must use ``protocol.validation.validate_state_graph`` directly.
+    Keeping this adapter prevents legacy imports from silently falling back to
+    the former weak graph checks while preserving the old return shape.
+    """
+
+    from portable_runtime.protocol.validation import validate_state_graph
+
+    return validate_state_graph(
+        {
+            "record": [record.model_dump(mode="json") for record in records],
+            "relation": [relation.model_dump(mode="json") for relation in relations],
+        },
+        strict=False,
+    )
