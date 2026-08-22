@@ -406,6 +406,9 @@ class InMemoryStateStore:
         if not isinstance(value, AuthorizationUse):
             raise ValueError("authorization use must be typed AuthorizationUse")
         with self._lock:
+            existing = self._records["authorization_use"].get(value.id)
+            if existing is not None and existing.model_dump(mode="json") != value.model_dump(mode="json"):
+                raise ValueError(f"authorization use {value.id!r} is immutable")
             grant = self.get_authorization(value.authorization_ref)
             if grant is None:
                 raise ValueError("authorization use references unknown grant")
@@ -484,10 +487,23 @@ class InMemoryStateStore:
                     raw for raw in candidate.get(kind, [])
                     if isinstance(raw, dict) and raw.get("id") not in incoming_ids
                 ] + [value.model_dump(mode="json") for value in prepared_values]
-            from portable_runtime.protocol.validation import assert_valid_state_graph
+            from portable_runtime.protocol.validation import (
+                assert_valid_state_graph,
+                assert_valid_state_transition,
+            )
 
+            current = {
+                kind: [value.model_dump(mode="json") for value in values.values()]
+                for kind, values in self._records.items()
+            }
+            assert_valid_state_transition(current, candidate, prepared)
             assert_valid_state_graph(candidate)
             for kind, prepared_values in prepared.items():
                 for value in prepared_values:
-                    self._records[kind][value.id] = value  # type: ignore[attr-defined]
+                    identifier = getattr(value, "id", None)
+                    if not isinstance(identifier, str):
+                        raise ValueError(f"imported {kind} record requires a string id")
+                    self._records[kind][identifier] = (
+                        self._snapshot(value) if kind in self._SEMANTIC_KINDS else value
+                    )
 

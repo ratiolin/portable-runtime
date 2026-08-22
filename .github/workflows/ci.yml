@@ -62,6 +62,8 @@ jobs:
           tests/conformance/test_authoritative.py
           tests/conformance/test_sqlite_atomicity.py
           tests/conformance/test_p1_semantic.py
+          tests/conformance/test_semantic_authority_closure.py
+          tests/conformance/test_revision_authority.py
           tests/conformance/test_p2_protocol.py
           tests/test_p1_routing.py
           tests/test_reliability_controls_p2.py

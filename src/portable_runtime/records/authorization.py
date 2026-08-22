@@ -145,6 +145,38 @@ def create_authorization_use(
     )
 
 
+def authorization_use_covers_request(
+    use: AuthorizationUse,
+    grant: AuthorizationGrant,
+    request: CanonicalAuthorizationRequest,
+) -> bool:
+    """Check whether a durable historical use covers one typed request.
+
+    ``AuthorizationUse`` is an at-time proof of one concrete action.  A
+    caller may use it to prove a later canonical mutation only when every
+    request dimension is identical and the request's subject versions are a
+    subset of the immutable proof.  Authorization is evaluated at the
+    historical ``authorized_at`` timestamp so later expiry/revocation does
+    not rewrite an action that was already authorized.
+    """
+
+    if not isinstance(use, AuthorizationUse) or not isinstance(grant, AuthorizationGrant):
+        return False
+    if use.authorization_ref != grant.id:
+        return False
+    if use.capability != request.capability:
+        return False
+    if use.actor_ref != request.actor_ref:
+        return False
+    if use.resource_ref != (request.resource_ref or ""):
+        return False
+    if use.effect_class != request.effect_class:
+        return False
+    if not set(request.subject_version_refs).issubset(set(use.subject_version_refs)):
+        return False
+    return is_authorized_for(request, grant, now=use.authorized_at)
+
+
 def _norm_cap(cap: str) -> str:
     return cap.strip().lower()
 
@@ -613,11 +645,16 @@ def record_human_approval(
     )
     try:
         if hasattr(store, "save_authorization"):
+            # The public store API owns the authoritative snapshot.  Do not
+            # put the caller-owned mutable grant back into an in-memory
+            # backend after save_authorization() has deep-copied it.
             store.save_authorization(grant)  # type: ignore
+        elif hasattr(store, "_records"):
+            # Compatibility fallback for the minimal legacy test double only.
+            stored_grant = grant.model_copy(deep=True)
+            store._records.setdefault("authorization", {})[grant.id] = stored_grant  # type: ignore
         elif hasattr(store, "save_record"):
-            pass
-        if hasattr(store, "_records"):
-            store._records.setdefault("authorization", {})[grant.id] = grant  # type: ignore
+            store.save_record(grant)  # type: ignore
     except Exception:
         pass
     try:
