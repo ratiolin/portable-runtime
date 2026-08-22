@@ -77,6 +77,13 @@ class InMemoryStateStore:
 
     def commit_terminal(self, work: Work, run: Run, verification_refs: list[str]) -> Run:
         """Validate and atomically commit a proven Work/Run terminal pair."""
+        if work.status != "completed" or run.status != "succeeded":
+            raise ValueError("terminal commit requires completed Work and succeeded Run")
+        refs = [str(ref) for ref in verification_refs if str(ref).strip()]
+        work_refs = work.metadata.get("_completion_proof_refs") if isinstance(work.metadata, dict) else None
+        run_refs = run.metadata.get("_completion_proof_refs") if isinstance(run.metadata, dict) else None
+        if work_refs != refs or run_refs != refs or work_refs != run_refs:
+            raise ValueError("terminal commit requires symmetric proof refs on Work and Run")
         with self.transaction():
             from portable_runtime.workflows.completion import CompletionAuthority
 

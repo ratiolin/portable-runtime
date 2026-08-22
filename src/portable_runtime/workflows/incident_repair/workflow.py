@@ -14,6 +14,7 @@ from portable_runtime.core.policies import (
     create_default_incident_policy_engine,
 )
 from portable_runtime.records.knowledge import KnowledgeProjection
+from portable_runtime.workflows.completion import CompletionAuthority
 from portable_runtime.workflows.context import WorkflowContext
 
 logger = logging.getLogger(__name__)
@@ -292,6 +293,7 @@ class IncidentRepairWorkflow:
                             or 1
                         ),
                         "acceptance_criteria": list(work.acceptance_criteria),
+                        "obligation_refs": CompletionAuthority.required_obligation_refs(work),
                         "capability": capability,
                         "provider_id": getattr(result, "provider_id", ""),
                         "execution_status": getattr(result, "status", None),

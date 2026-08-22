@@ -548,6 +548,25 @@ def create_app(runtime: Runtime | None = None) -> FastAPI:
         try:
             relations = runtime.store.list_relations()  # type: ignore
             affected = assess_revalidation(change_ref, change_type, relations)
+            # GET is a pure observation.  It must not materialize events or
+            # otherwise mutate the durable state graph as a read side effect.
+            return [a.model_dump(mode="json") for a in affected]
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.post("/v1/revalidation/affected-by/{change_ref}/materialize")
+    async def materialize_affected_by(
+        request: Request,
+        change_ref: str,
+        change_type: str = "evaluator",
+    ) -> list[dict[str, Any]]:
+        """Explicitly materialize revalidation observations as a control action."""
+        _require_local_control(request)
+        from portable_runtime.records.revalidation import assess_revalidation
+
+        try:
+            relations = runtime.store.list_relations()  # type: ignore
+            affected = assess_revalidation(change_ref, change_type, relations)
             for item in affected:
                 _append_control_event(
                     runtime,

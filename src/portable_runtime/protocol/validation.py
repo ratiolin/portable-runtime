@@ -764,6 +764,107 @@ def validate_state_graph(
                     except Exception:
                         errors.append(f"knowledge projection {identifier} authorization ref {ref!r} is invalid")
 
+        # An official projection is an epistemic claim, not merely a bundle
+        # of approval/evidence ids.  Bind every assertion to an explicit
+        # Assertion judgment, a Derivation that names the judgment and
+        # evidence, and a scoped relation.  Approval assertions cannot be
+        # silently reused as epistemic judgments: the role and target claim
+        # must be declared on the judgment itself.
+        def _string_refs(value: object) -> set[str]:
+            if isinstance(value, str) and value.strip():
+                return {value.strip()}
+            if isinstance(value, list):
+                return {item.strip() for item in value if isinstance(item, str) and item.strip()}
+            return set()
+
+        current_assertions = _string_refs(raw.get("current_assertion_refs")).intersection(local_ids)
+        judgment_refs = _string_refs(raw.get("epistemic_judgment_refs")).intersection(local_ids)
+        evidence_refs = _string_refs(raw.get("evidence_summary_refs")).intersection(local_ids)
+        scope_refs = _string_refs(raw.get("scope_version_refs")).intersection(local_ids)
+
+        valid_judgments: set[str] = set()
+        for judgment_ref in judgment_refs:
+            judgment = parsed_records.get(judgment_ref)
+            if judgment is None or judgment.record_type != "Assertion":
+                errors.append(
+                    f"knowledge projection {identifier} epistemic judgment {judgment_ref!r} must target Assertion"
+                )
+                continue
+            judgment_metadata = judgment.metadata if isinstance(judgment.metadata, dict) else {}
+            role = str(judgment_metadata.get("epistemic_role", judgment_metadata.get("role", ""))).lower()
+            if role in {"approval", "authorization", "governance", "decision"}:
+                errors.append(
+                    f"knowledge projection {identifier} epistemic judgment {judgment_ref!r} is an approval assertion"
+                )
+                continue
+            bound_claims = set()
+            for field in ("judgment_for_refs", "judgment_for", "conclusion_ref", "subject_refs"):
+                bound_claims.update(_string_refs(judgment_metadata.get(field)))
+            if not bound_claims.intersection(current_assertions):
+                errors.append(
+                    f"knowledge projection {identifier} epistemic judgment {judgment_ref!r} "
+                    "is not bound to a current assertion"
+                )
+                continue
+            if judgment.epistemic_status != "supported":
+                errors.append(
+                    f"knowledge projection {identifier} epistemic judgment {judgment_ref!r} "
+                    "must carry supported epistemic_status"
+                )
+                continue
+            valid_judgments.add(judgment_ref)
+
+        for assertion_ref in current_assertions:
+            derivations = [
+                record
+                for record in parsed_records.values()
+                if record.record_type == "Derivation"
+                and getattr(record, "conclusion_ref", None) == assertion_ref
+            ]
+            bound = False
+            for derivation in derivations:
+                premises = set(getattr(derivation, "premise_refs", []) or [])
+                derivation_evidence = set(getattr(derivation, "evidence_refs", []) or [])
+                if not premises.intersection(valid_judgments):
+                    continue
+                if evidence_refs and not derivation_evidence.intersection(evidence_refs):
+                    continue
+                derivation_metadata = derivation.metadata if isinstance(derivation.metadata, dict) else {}
+                derivation_scope = _string_refs(derivation_metadata.get("scope_version_refs"))
+                derivation_scope.update(_string_refs(derivation_metadata.get("scope_refs")))
+                scope_ok = not scope_refs or bool(derivation_scope.intersection(scope_refs))
+                if not scope_ok:
+                    scope_ok = any(
+                        relation.relation_type == "scoped-to"
+                        and relation.subject_ref in {assertion_ref, derivation.id}
+                        and relation.object_ref in scope_refs
+                        for relation in parsed_relations
+                    )
+                if not scope_ok:
+                    continue
+                relation_ok = any(
+                    relation.relation_type in {"derived-from", "supports", "validated-under"}
+                    and (
+                        (
+                            relation.subject_ref == assertion_ref
+                            and relation.object_ref in {derivation.id, *valid_judgments}
+                        )
+                        or (
+                            relation.object_ref == assertion_ref
+                            and relation.subject_ref in {derivation.id, *valid_judgments}
+                        )
+                    )
+                    for relation in parsed_relations
+                )
+                if relation_ok:
+                    bound = True
+                    break
+            if not bound:
+                errors.append(
+                    f"knowledge projection {identifier} assertion {assertion_ref!r} lacks "
+                    "judgment/derivation/evidence/scope binding"
+                )
+
     # Revision endpoints must exist locally and remain type-compatible.  The
     # single-object validator cannot prove this because it has no graph.
     for record in parsed_records.values():
@@ -982,6 +1083,26 @@ def validate_state_graph(
             paired = [run for run in runs_by_id.values() if run.work_id == work.id and run.status == "succeeded"]
             if not paired:
                 errors.append(f"work {work.id} completed without a succeeded Run")
+                continue
+            work_metadata = work.metadata if isinstance(work.metadata, dict) else {}
+            work_refs = work_metadata.get("_completion_proof_refs")
+            for paired_run in paired:
+                run_metadata = paired_run.metadata if isinstance(paired_run.metadata, dict) else {}
+                run_refs = run_metadata.get("_completion_proof_refs")
+                if not isinstance(work_refs, list) or work_refs != run_refs:
+                    errors.append(
+                        f"work {work.id} terminal proof refs do not match succeeded Run {paired_run.id}"
+                    )
+                for field in (
+                    "completion_verification_scope",
+                    "completion_work_version",
+                    "completion_acceptance_criteria",
+                ):
+                    if work_metadata.get(field) != run_metadata.get(field):
+                        errors.append(
+                            f"work {work.id} terminal completion metadata {field!r} "
+                            f"does not match succeeded Run {paired_run.id}"
+                        )
 
     # More than one active superseder for a predecessor is ambiguous lineage.
     superseders: dict[str, list[str]] = defaultdict(list)
