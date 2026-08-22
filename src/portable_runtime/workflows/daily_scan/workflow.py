@@ -13,7 +13,6 @@ from typing import Any
 
 from portable_runtime.core.models import Artifact, Run, Work, new_id
 from portable_runtime.records.knowledge import KnowledgeProjection, promote_to_official
-from portable_runtime.workflows.completion import CompletionAuthority
 from portable_runtime.workflows.context import WorkflowContext
 
 logger = logging.getLogger(__name__)
@@ -123,10 +122,25 @@ class DailyScanWorkflow:
                 # read-only legacy view for old callers.
                 try:
                     from portable_runtime.records.models import EvidenceArtifact
+                    from portable_runtime.records.open_validation import ClosedVerificationResult
+
+                    # A successful container observation proves delivery of
+                    # the observation artifact, not the truth of the scanned
+                    # world.  Record that narrow, typed delivery proof so the
+                    # scan's explicit two-obligation contract can detect a
+                    # missing observation artifact without treating provider
+                    # transport success as an objective judgment.
+                    verification_result = result.verification_result
+                    if kind == "container-observation" and verification_result is None and result.status == "succeeded":
+                        verification_result = ClosedVerificationResult(
+                            result="pass",
+                            message="container observation artifact delivered",
+                        )
+                    obligation_ref = "observe.container" if kind == "container-observation" else "verify.promql"
 
                     evidence = EvidenceArtifact(
                         id=new_id("record"),
-                        kind="closed-verification" if result.verification_result is not None else kind,
+                        kind="closed-verification" if verification_result is not None else kind,
                         source_refs=[artifact.id],
                         metadata={
                             "work_id": work.id,
@@ -143,16 +157,18 @@ class DailyScanWorkflow:
                                 or 1
                             ),
                             "acceptance_criteria": list(work.acceptance_criteria),
-                            "obligation_refs": CompletionAuthority.required_obligation_refs(work),
+                            # One artifact covers one obligation; never stamp
+                            # the entire required set on every proof.
+                            "obligation_refs": [obligation_ref],
                             "provider_id": result.provider_id,
                             "execution_status": result.status,
-                            "verification_result": result.verification_result.model_dump(mode="json") if result.verification_result else None,
+                            "verification_result": verification_result.model_dump(mode="json") if verification_result else None,
                         },
                         lifecycle_status="current",
                     )
                     if hasattr(context.store, "save_record"):
                         context.store.save_record(evidence)  # type: ignore[attr-defined]
-                        if result.verification_result is not None:
+                        if verification_result is not None:
                             verification_refs.append(evidence.id)
                 except Exception:
                     pass

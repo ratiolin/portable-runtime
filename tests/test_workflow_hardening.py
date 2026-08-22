@@ -504,6 +504,47 @@ async def test_incident_repair_succeeded_path() -> None:
     assert know[0].status == "candidate"
 
 
+@pytest.mark.asyncio
+async def test_incident_repair_partial_verification_persist_stays_blocked() -> None:
+    """A lost sibling proof must not be promoted to terminal success."""
+
+    class FailingSecondVerificationStore(InMemoryStateStore):
+        def __init__(self) -> None:
+            super().__init__()
+            self._verification_records = 0
+            self._armed = False
+
+        def save_record(self, value) -> None:  # type: ignore[no-untyped-def]
+            if self._armed and getattr(value, "record_type", None) == "EvidenceArtifact":
+                self._verification_records += 1
+                if self._verification_records == 2:
+                    raise RuntimeError("simulated second verification proof persistence failure")
+            super().save_record(value)
+
+    store = FailingSecondVerificationStore()
+    work = Work(id=new_id("work"), title="partial proof", kind="incident", metadata={})
+    store.save_work(work)
+    run = Run(id=new_id("run"), work_id=work.id, status="running")
+    store.save_run(run)
+    seed_action_governance(work, run, store, capability="code.edit", include_grant=True)
+    providers = [
+        AnySucceedProvider("p_logs", ["observe.logs"]),
+        AnySucceedProvider("p_cont", ["observe.container"]),
+        AnySucceedProvider("p_reason", ["reason.generate"]),
+        AnySucceedProvider("p_edit", ["code.edit"]),
+        AnySucceedProvider("p_http", ["verify.http"]),
+        AnySucceedProvider("p_git", ["verify.git_diff"]),
+    ]
+    ctx = _make_context(work, run, store, providers)
+    store._armed = True
+
+    result = await IncidentRepairWorkflow().run(ctx, work, run)
+
+    assert result == "blocked"
+    assert store.get_run(run.id).status == "blocked"
+    assert store.get_work(work.id).status != "completed"
+
+
 # --- Core workflows registry ---
 
 
