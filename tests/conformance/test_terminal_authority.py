@@ -79,6 +79,126 @@ def test_terminal_proof_must_cover_declared_obligations(backend: str, tmp_path) 
             store.close()
 
 
+def test_required_obligation_refs_reads_work_policy_and_constraint_declarations() -> None:
+    work = Work(
+        id="work_obligation_declarations",
+        title="declarations",
+        acceptance_criteria=["tests pass", "  "],
+        metadata={
+            "verification_obligations": "delivery-proof",
+            "required_obligations": ["independent-review", {"id": "scope-bound"}],
+            "policy_obligations": [{"ref": "policy-proof"}],
+            "obligations": [{"key": "audit-trail"}],
+            "verification_policy": {
+                "verification_obligations": [{"name": "objective-proof"}],
+                "required_obligations": ["criteria-proof"],
+                "obligations": [{"description": "evidence-proof"}],
+            },
+        },
+        constraints={
+            "verification_obligations": ["constraint-proof"],
+            "verification_policy": {"obligations": ["constraint-policy-proof"]},
+        },
+    )
+    assert CompletionAuthority.required_obligation_refs(work) == [
+        "tests pass",
+        "delivery-proof",
+        "independent-review",
+        "scope-bound",
+        "policy-proof",
+        "audit-trail",
+        "objective-proof",
+        "criteria-proof",
+        "evidence-proof",
+        "constraint-proof",
+        "constraint-policy-proof",
+    ]
+
+
+@pytest.mark.parametrize("backend", ["memory", "sqlite"])
+def test_store_terminal_primitive_requires_symmetric_pair_metadata(backend: str, tmp_path) -> None:
+    store = InMemoryStateStore() if backend == "memory" else SQLiteStateStore(tmp_path / "terminal-primitive.db")
+    try:
+        work = Work(id="work_terminal_primitive", title="primitive")
+        run = Run(id="run_terminal_primitive", work_id=work.id, status="running")
+        store.save_work(work)
+        store.save_run(run)
+        proof = _proof(work, run)
+        store.save_record(proof)
+        with pytest.raises(ValueError, match="completed Work and succeeded Run"):
+            store.commit_terminal(work, run, [proof.id])
+        terminal_work = work.model_copy(update={"status": "completed"})
+        terminal_run = run.model_copy(update={"status": "succeeded"})
+        with pytest.raises(ValueError, match="symmetric proof refs"):
+            store.commit_terminal(terminal_work, terminal_run, [proof.id])
+
+        terminal_work = terminal_work.model_copy(update={"metadata": {"_completion_proof_refs": [proof.id]}})
+        terminal_run = terminal_run.model_copy(update={"metadata": {"_completion_proof_refs": [proof.id]}})
+        assert store.commit_terminal(terminal_work, terminal_run, [proof.id]).status == "succeeded"
+    finally:
+        if backend == "sqlite":
+            store.close()
+
+
+@pytest.mark.parametrize("backend", ["memory", "sqlite"])
+def test_import_state_rejects_completed_work_with_tampered_pair_metadata(backend: str, tmp_path) -> None:
+    store = InMemoryStateStore() if backend == "memory" else SQLiteStateStore(tmp_path / "terminal-pair-metadata.db")
+    try:
+        work = Work(id="work_terminal_pair_metadata", title="pair")
+        run = Run(id="run_terminal_pair_metadata", work_id=work.id, status="succeeded")
+        proof = _proof(work, run)
+        refs = [proof.id]
+        work = work.model_copy(
+            update={
+                "status": "completed",
+                "metadata": {
+                    "_completion_proof_refs": refs,
+                    "completion_verification_scope": {},
+                    "completion_work_version": 1,
+                    "completion_acceptance_criteria": [],
+                },
+            }
+        )
+        run = run.model_copy(
+            update={
+                "metadata": {
+                    "_completion_proof_refs": [],
+                    "completion_verification_scope": {"tampered": True},
+                    "completion_work_version": 1,
+                    "completion_acceptance_criteria": [],
+                }
+            }
+        )
+        with pytest.raises(ValueError, match="completion metadata|terminal proof"):
+            store.import_state(
+                {
+                    "work": [work.model_dump(mode="json")],
+                    "run": [run.model_dump(mode="json")],
+                    "record": [proof.model_dump(mode="json")],
+                }
+            )
+    finally:
+        if backend == "sqlite":
+            store.close()
+
+
+def test_terminal_proof_accepts_legacy_covered_obligations_string() -> None:
+    store = InMemoryStateStore()
+    work = Work(id="work_terminal_covered_string", title="covered", acceptance_criteria=["criterion"])
+    run = Run(id="run_terminal_covered_string", work_id=work.id, status="running")
+    store.save_work(work)
+    store.save_run(run)
+    proof_metadata = _proof(work, run).metadata.copy()
+    proof_metadata.pop("obligation_refs", None)
+    proof = _proof(work, run).model_copy(
+        update={
+            "metadata": {**proof_metadata, "covered_obligations": "criterion"}
+        }
+    )
+    store.save_record(proof)
+    assert CompletionAuthority(store).authorize(work=work, run=run, verification_refs=[proof.id]).status == "succeeded"
+
+
 @pytest.mark.parametrize("backend", ["memory", "sqlite"])
 def test_completion_pairs_work_and_run_and_retry_is_idempotent(backend: str, tmp_path) -> None:
     store = InMemoryStateStore() if backend == "memory" else SQLiteStateStore(tmp_path / "terminal-idempotent.db")

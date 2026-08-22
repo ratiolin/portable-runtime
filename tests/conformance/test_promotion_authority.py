@@ -208,3 +208,94 @@ def test_knowledge_projection_rejects_approval_assertion_as_epistemic_judgment()
         strict=False,
     )
     assert any("approval assertion" in error for error in errors)
+
+
+def test_knowledge_projection_epistemic_binding_accepts_complete_derivation() -> None:
+    claim = Assertion(id="projection_claim_complete", statement="claim", lifecycle_status="current")
+    judgment = Assertion(
+        id="projection_judgment_complete",
+        statement="judgment",
+        lifecycle_status="current",
+        epistemic_status="supported",
+        metadata={"epistemic_role": "epistemic-judgment", "judgment_for_refs": [claim.id]},
+    )
+    evidence = EvidenceArtifact(id="projection_evidence_complete", kind="check", lifecycle_status="current")
+    scope = ChangeObjectRecord(id="projection_scope_complete", lifecycle_status="draft")
+    derivation = Derivation(
+        id="projection_derivation_complete",
+        premise_refs=[judgment.id],
+        evidence_refs=[evidence.id],
+        conclusion_ref=claim.id,
+        metadata={"scope_version_refs": [scope.id]},
+        lifecycle_status="current",
+    )
+    projection = KnowledgeProjection(
+        id="projection_complete_binding",
+        lifecycle_status="official",
+        current_assertion_refs=[claim.id],
+        evidence_summary_refs=[evidence.id],
+        epistemic_judgment_refs=[judgment.id],
+        authorization_refs=[],
+        scope_version_refs=[scope.id],
+        validity_scope={"domain": "test"},
+        environment_bindings={"runtime": "v1"},
+    )
+    errors = validate_state_graph(
+        {
+            "record": [
+                claim.model_dump(mode="json"),
+                judgment.model_dump(mode="json"),
+                evidence.model_dump(mode="json"),
+                scope.model_dump(mode="json"),
+                derivation.model_dump(mode="json"),
+            ],
+            "relation": [
+                RecordRelation(
+                    relation_type="derived-from",
+                    subject_ref=claim.id,
+                    object_ref=judgment.id,
+                ).model_dump(mode="json"),
+                RecordRelation(
+                    relation_type="scoped-to",
+                    subject_ref=derivation.id,
+                    object_ref=scope.id,
+                ).model_dump(mode="json"),
+            ],
+            "knowledge_projection": [projection.model_dump(mode="json")],
+        },
+        strict=False,
+    )
+    assert not any("lacks judgment/derivation/evidence/scope binding" in error for error in errors)
+
+
+def test_knowledge_projection_epistemic_binding_rejects_unproven_judgment_shapes() -> None:
+    claim = Assertion(id="projection_claim_invalid", statement="claim", lifecycle_status="current")
+    wrong_type = ChangeObjectRecord(id="projection_judgment_wrong_type", lifecycle_status="draft")
+    unsupported = Assertion(
+        id="projection_judgment_unsupported",
+        statement="not supported",
+        lifecycle_status="current",
+        epistemic_status="unverified",
+        metadata={"epistemic_role": "epistemic-judgment", "judgment_for_refs": [claim.id]},
+    )
+    projection = KnowledgeProjection(
+        id="projection_invalid_binding",
+        lifecycle_status="official",
+        current_assertion_refs=[claim.id],
+        evidence_summary_refs=[],
+        epistemic_judgment_refs=[wrong_type.id, unsupported.id],
+        authorization_refs=[],
+        scope_version_refs=[],
+        validity_scope={"domain": "test"},
+        environment_bindings={"runtime": "v1"},
+    )
+    errors = validate_state_graph(
+        {
+            "record": [claim.model_dump(mode="json"), wrong_type.model_dump(mode="json"), unsupported.model_dump(mode="json")],
+            "knowledge_projection": [projection.model_dump(mode="json")],
+        },
+        strict=False,
+    )
+    assert any("must target Assertion" in error for error in errors)
+    assert any("must carry supported epistemic_status" in error for error in errors)
+    assert any("lacks judgment/derivation/evidence/scope binding" in error for error in errors)
