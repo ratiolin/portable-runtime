@@ -34,7 +34,9 @@ def test_cli_knowledge_negative_filter(tmp_path):
     # seed via store
     store = SQLiteStateStore(db)
     runtime = Runtime(store=store)
-    k_pos = KnowledgeItem(kind="doc", title="positive knowledge", content_ref="ref_pos", status="official", metadata={})
+    # Legacy KnowledgeItem official writes are rejected; list/filter behavior
+    # remains covered with a candidate compatibility record.
+    k_pos = KnowledgeItem(kind="doc", title="positive knowledge", content_ref="ref_pos", status="candidate", metadata={})
     k_neg = KnowledgeItem(kind="doc", title="negative knowledge", content_ref="ref_neg", status="candidate", metadata={"counterexample_refs": ["counter1"]})
     k_neg2 = KnowledgeItem(kind="doc", title="another negative", content_ref="ref_neg2", status="candidate", metadata={"counterexample_refs": ["c2", "c3"]})
     store.save_knowledge(k_pos)

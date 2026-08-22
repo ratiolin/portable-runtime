@@ -513,8 +513,17 @@ def validate_state_graph(
             # ``content_ref`` and evidence refs may intentionally point to
             # external objects that are not part of the portable snapshot;
             # canonical KnowledgeProjection/Record refs are validated through
-            # the typed record path above.
+            # the typed record path above.  A legacy ``official`` item is not
+            # safe to persist: the compatibility shape has no way to bind an
+            # Assertion judgment to its evidence, derivation, scope/version,
+            # and authorization relations.  Refuse that terminal-looking
+            # promotion instead of allowing an unverified official projection.
             if kind == "knowledge":
+                if str(raw.get("status", "")).lower() == "official":
+                    errors.append(
+                        f"legacy knowledge {raw.get('id', '<unknown>')} official promotion requires "
+                        "canonical KnowledgeProjection epistemic and authorization graph"
+                    )
                 continue
             identifier = raw.get("id", "<unknown>")
             for field, ref, event_subject in _iter_ref_edges(kind, raw):
