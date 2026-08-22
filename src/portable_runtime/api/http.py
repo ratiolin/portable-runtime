@@ -90,15 +90,17 @@ def _require_semantic_edge_authority(runtime: Runtime, rel: Any) -> None:
     Reopen edges carry their explicit assessment id and are committed by the
     atomic reopen action itself.
     """
+    metadata = rel.metadata if isinstance(getattr(rel, "metadata", None), dict) else {}
+    # A reopen assessment is created and committed only by POST /v1/reopen.
+    # A string-shaped id on the generic relation ingress is never authority,
+    # even when the relation is otherwise an observation edge or its endpoints
+    # are external references.
+    if isinstance(metadata.get("reopen_assessment_id"), str):
+        raise HTTPException(status_code=422, detail="reopen lineage requires the /v1/reopen control action")
     if getattr(rel, "relation_type", None) not in _AUTHORITY_EDGE_TYPES:
         return
     if not (_is_local_semantic_ref(runtime, rel.subject_ref) and _is_local_semantic_ref(runtime, rel.object_ref)):
         return
-    metadata = rel.metadata if isinstance(getattr(rel, "metadata", None), dict) else {}
-    # A reopen assessment is created and committed only by POST /v1/reopen.
-    # A string-shaped id on the generic relation ingress is not authority.
-    if isinstance(metadata.get("reopen_assessment_id"), str):
-        raise HTTPException(status_code=422, detail="reopen lineage requires the /v1/reopen control action")
 
     from portable_runtime.records.authorization import (
         AuthorizationUse,
