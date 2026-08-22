@@ -115,6 +115,56 @@ def test_required_obligation_refs_reads_work_policy_and_constraint_declarations(
     ]
 
 
+@pytest.mark.parametrize(
+    ("kind", "expected"),
+    [
+        ("incident", ["verify.http", "verify.git_diff"]),
+        ("maintenance-scan", ["observe.container", "verify.promql"]),
+    ],
+)
+def test_builtin_workflow_defaults_declare_all_required_proof_obligations(kind: str, expected: list[str]) -> None:
+    work = Work(id=f"work_{kind}", title="builtin obligations", kind=kind)
+    assert CompletionAuthority.required_obligation_refs(work) == expected
+
+
+def test_explicitly_weakened_builtin_policy_without_obligations_fails_closed() -> None:
+    work = Work(
+        id="work_weak_policy",
+        title="weak policy",
+        kind="incident",
+        metadata={"verification_policy": {"mode": "any-of"}},
+    )
+    refs = CompletionAuthority.required_obligation_refs(work)
+    assert refs == ["incident:explicit-verification-obligations-required"]
+
+
+@pytest.mark.parametrize("kind", ["incident", "maintenance-scan"])
+def test_builtin_workflow_missing_one_proof_cannot_reach_terminal(kind: str) -> None:
+    store = InMemoryStateStore()
+    work = Work(id=f"work_missing_{kind}", title="missing proof", kind=kind)
+    run = Run(id=f"run_missing_{kind}", work_id=work.id, status="running")
+    store.save_work(work)
+    store.save_run(run)
+    required = CompletionAuthority.required_obligation_refs(work)
+    first = EvidenceArtifact(
+        id=f"proof_missing_{kind}",
+        kind="closed-verification",
+        lifecycle_status="current",
+        metadata={
+            "verification_result": {"result": "pass"},
+            "work_id": work.id,
+            "run_id": run.id,
+            "verification_scope": {},
+            "work_version": 1,
+            "acceptance_criteria": [],
+            "obligation_refs": [required[0]],
+        },
+    )
+    store.save_record(first)
+    with pytest.raises(ValueError, match="required verification obligations"):
+        CompletionAuthority(store).authorize(work=work, run=run, verification_refs=[first.id])
+
+
 @pytest.mark.parametrize("backend", ["memory", "sqlite"])
 def test_store_terminal_primitive_requires_symmetric_pair_metadata(backend: str, tmp_path) -> None:
     store = InMemoryStateStore() if backend == "memory" else SQLiteStateStore(tmp_path / "terminal-primitive.db")

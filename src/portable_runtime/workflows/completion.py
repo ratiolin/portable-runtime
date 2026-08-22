@@ -19,6 +19,24 @@ from portable_runtime.workflows.context import validate_run_transition
 class CompletionAuthority:
     """Authorize a terminal ``succeeded`` transition from durable proof refs."""
 
+    _DEFAULT_WORKFLOW_OBLIGATIONS: dict[str, tuple[str, ...]] = {
+        # IncidentRepairWorkflow runs two independent closed verifiers under
+        # its conservative default policy.  Keep those obligations explicit
+        # at the shared authority boundary so a partial proof persist cannot
+        # be mistaken for a complete verification set.
+        "incident": ("verify.http", "verify.git_diff"),
+        "alert": ("verify.http", "verify.git_diff"),
+        "repair": ("verify.http", "verify.git_diff"),
+        "incident-repair": ("verify.http", "verify.git_diff"),
+        # DailyScan produces one container observation and one PromQL
+        # verification.  Both are required for the scan's terminal claim.
+        "maintenance-scan": ("observe.container", "verify.promql"),
+        "daily-scan": ("observe.container", "verify.promql"),
+        "schedule-scan": ("observe.container", "verify.promql"),
+        "scan": ("observe.container", "verify.promql"),
+        "daily_scan": ("observe.container", "verify.promql"),
+    }
+
     def __init__(self, store: StateStore) -> None:
         self.store = store
 
@@ -82,6 +100,23 @@ class CompletionAuthority:
             if isinstance(policy, dict):
                 for field in ("verification_obligations", "required_obligations", "obligations"):
                     add(policy.get(field))
+
+        # Workflow-owned defaults are only applied when the Work did not
+        # declare an explicit obligation set.  This preserves custom policy
+        # declarations while making built-in multi-proof workflows fail
+        # closed if one proof artifact is lost during persistence.
+        if not values:
+            policy = metadata.get("verification_policy")
+            mode = policy.get("mode", "all-required") if isinstance(policy, dict) else str(policy or "all-required")
+            mode = str(mode).strip().lower()
+            if mode in {"all-required", "all_required", "all"}:
+                values.extend(CompletionAuthority._DEFAULT_WORKFLOW_OBLIGATIONS.get(work.kind, ()))
+            elif work.kind in CompletionAuthority._DEFAULT_WORKFLOW_OBLIGATIONS:
+                # A weaker policy is a declaration of a different coverage
+                # contract.  Without explicit obligation refs, do not infer
+                # which proof subset is sufficient: leave an impossible
+                # sentinel that forces the workflow to remain non-terminal.
+                values.append(f"{work.kind}:explicit-verification-obligations-required")
 
         # Preserve declaration order while eliminating duplicate obligations.
         return list(dict.fromkeys(values))
