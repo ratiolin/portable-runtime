@@ -56,6 +56,7 @@ class InMemoryStateStore:
         # authority's paired commit.  This is an in-process capability, not a
         # user-controlled metadata flag.
         self._terminal_completion_depth = 0
+        self._terminal_completion_refs: tuple[str, ...] | None = None
 
     def _save(self, kind: str, value: BaseModel) -> None:
         identifier = getattr(value, "id", None)
@@ -76,15 +77,41 @@ class InMemoryStateStore:
         terminal = (kind == "run" and status == "succeeded") or (kind == "work" and status == "completed")
         if terminal and self._terminal_completion_depth <= 0:
             raise ValueError("terminal completion requires CompletionAuthority proof commit")
+        if not terminal:
+            return
+        metadata = getattr(value, "metadata", {})
+        refs = metadata.get("_completion_proof_refs") if isinstance(metadata, dict) else None
+        if self._terminal_completion_refs is None or not isinstance(refs, list) or tuple(str(ref) for ref in refs) != self._terminal_completion_refs:
+            raise ValueError("terminal completion requires bound verification proof refs")
+        for ref in self._terminal_completion_refs:
+            proof = self.get_record(ref)
+            proof_metadata = getattr(proof, "metadata", None) if proof is not None else None
+            proof_metadata_map: dict[str, Any] = proof_metadata if isinstance(proof_metadata, dict) else {}
+            result = proof_metadata_map.get("verification_result")
+            if (
+                getattr(proof, "record_type", None) != "EvidenceArtifact"
+                or getattr(proof, "kind", None) not in {"closed-verification", "verification-result", "task-objective-proof"}
+                or not isinstance(result, dict)
+                or str(result.get("result", "")).lower() != "pass"
+            ):
+                raise ValueError("terminal completion requires durable passing verification proofs")
+            expected_work_id = getattr(value, "id", None) if kind == "work" else getattr(value, "work_id", None)
+            if proof_metadata_map.get("work_id") != expected_work_id or (
+                kind == "run" and proof_metadata_map.get("run_id") != getattr(value, "id", None)
+            ):
+                raise ValueError("terminal completion proof is not bound to this Work/Run")
 
     @contextmanager
-    def terminal_completion(self):
+    def terminal_completion(self, verification_refs: list[str] | None = None):
         """Open the private capability used by CompletionAuthority only."""
         with self._lock:
             self._terminal_completion_depth += 1
+            previous_refs = self._terminal_completion_refs
+            self._terminal_completion_refs = tuple(verification_refs or ())
             try:
                 yield self
             finally:
+                self._terminal_completion_refs = previous_refs
                 self._terminal_completion_depth -= 1
 
     def _validate_candidate_write(self, kind: str, value: BaseModel) -> None:
