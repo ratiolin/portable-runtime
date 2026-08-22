@@ -14,7 +14,7 @@ from __future__ import annotations
 
 from contextlib import nullcontext as _nullcontext
 from datetime import UTC, datetime
-from typing import Any, cast
+from typing import Any, Literal, cast
 
 from portable_runtime.core.models import new_id
 from portable_runtime.records.authorization import (
@@ -78,6 +78,7 @@ def apply_revision(
     actor_ref: str | None = None,
     resource_ref: str | None = None,
     effect_class: str = "write-local",
+    legacy_profile: Literal["grant-grantee-compat"] | None = None,
 ) -> RevisionRecord:
     """Advance a revision toward ``applied`` with an explicit grant proof.
 
@@ -113,13 +114,16 @@ def apply_revision(
     grant_errors = validate_grant(grant)
     expected_versions = [revision.id, f"{revision.id}:v{revision.version}"]
     metadata = stored_revision.metadata if isinstance(stored_revision.metadata, dict) else {}
-    # New callers must provide the actor that actually performed the apply.
-    # A grant is evidence of authorization, never the source of actor
-    # identity.  The fallback is retained only for pre-actor metadata records
-    # and is marked as legacy so migrations can make the identity explicit.
+    # New/canonical callers must provide the actor that actually performed the
+    # apply.  A grant is evidence of authorization, never the source of actor
+    # identity.  A legacy migration may opt into the compatibility profile
+    # explicitly; that profile is never selected implicitly on the canonical
+    # path and is marked in persisted metadata.
     actual_actor = actor_ref or metadata.get("actor_ref")
     legacy_actor = False
     if not isinstance(actual_actor, str) or not actual_actor.strip():
+        if legacy_profile != "grant-grantee-compat":
+            raise ValueError("apply_revision requires explicit actual actor_ref")
         actual_actor = grant.grantee_ref
         legacy_actor = True
     actual_resource = resource_ref or metadata.get("resource_ref") or stored_revision.subject_ref
@@ -227,10 +231,7 @@ def supersede(
         revision_metadata = revision_record.metadata if isinstance(revision_record.metadata, dict) else {}
         actor_ref = revision_metadata.get("actor_ref")
         if not isinstance(actor_ref, str) or not actor_ref.strip():
-            # Legacy revisions are still readable, but their actor identity is
-            # explicitly treated as compatibility evidence rather than being
-            # silently re-derived for newly authored revisions.
-            actor_ref = grant.grantee_ref
+            raise ValueError("supersede revision is missing actual actor_ref")
         resource_ref = revision_metadata.get("resource_ref") or revision_record.subject_ref
         effect_class = revision_metadata.get("effect_class") or "write-local"
         request = CanonicalAuthorizationRequest(

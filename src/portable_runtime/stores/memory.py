@@ -57,6 +57,8 @@ class InMemoryStateStore:
         # user-controlled metadata flag.
         self._terminal_completion_depth = 0
         self._terminal_completion_refs: tuple[str, ...] | None = None
+        self._terminal_completion_work: Work | None = None
+        self._terminal_completion_run: Run | None = None
 
     def _save(self, kind: str, value: BaseModel) -> None:
         identifier = getattr(value, "id", None)
@@ -83,36 +85,60 @@ class InMemoryStateStore:
         refs = metadata.get("_completion_proof_refs") if isinstance(metadata, dict) else None
         if self._terminal_completion_refs is None or not isinstance(refs, list) or tuple(str(ref) for ref in refs) != self._terminal_completion_refs:
             raise ValueError("terminal completion requires bound verification proof refs")
-        for ref in self._terminal_completion_refs:
-            proof = self.get_record(ref)
-            proof_metadata = getattr(proof, "metadata", None) if proof is not None else None
-            proof_metadata_map: dict[str, Any] = proof_metadata if isinstance(proof_metadata, dict) else {}
-            result = proof_metadata_map.get("verification_result")
-            if (
-                getattr(proof, "record_type", None) != "EvidenceArtifact"
-                or getattr(proof, "kind", None) not in {"closed-verification", "verification-result", "task-objective-proof"}
-                or not isinstance(result, dict)
-                or str(result.get("result", "")).lower() != "pass"
-            ):
-                raise ValueError("terminal completion requires durable passing verification proofs")
-            expected_work_id = getattr(value, "id", None) if kind == "work" else getattr(value, "work_id", None)
-            if proof_metadata_map.get("work_id") != expected_work_id or (
-                kind == "run" and proof_metadata_map.get("run_id") != getattr(value, "id", None)
-            ):
-                raise ValueError("terminal completion proof is not bound to this Work/Run")
+        work = self._terminal_completion_work
+        run = self._terminal_completion_run
+        if work is None:
+            candidate_work = value if kind == "work" else self.get_work(getattr(value, "work_id", ""))
+            work = candidate_work if isinstance(candidate_work, Work) else None
+        if run is None:
+            candidate_run = value if kind == "run" else next(
+                (candidate for candidate in self.list_runs(getattr(value, "id", "")) if candidate.status != "succeeded"),
+                None,
+            )
+            run = candidate_run if isinstance(candidate_run, Run) else None
+        if work is None or run is None:
+            raise ValueError("terminal completion requires paired Work and Run")
+        from portable_runtime.workflows.completion import CompletionAuthority
+
+        CompletionAuthority.validate_proof_invariant(work, run, self._terminal_completion_refs, self.get_record)
 
     @contextmanager
-    def terminal_completion(self, verification_refs: list[str] | None = None):
+    def terminal_completion(
+        self,
+        verification_refs: list[str] | None = None,
+        *,
+        work: Work | None = None,
+        run: Run | None = None,
+    ):
         """Open the private capability used by CompletionAuthority only."""
         with self._lock:
+            if work is None or run is None:
+                raise ValueError("terminal completion requires paired Work and Run")
+            from portable_runtime.workflows.completion import CompletionAuthority
+
+            CompletionAuthority.validate_proof_invariant(work, run, verification_refs or (), self.get_record)
             self._terminal_completion_depth += 1
             previous_refs = self._terminal_completion_refs
+            previous_work = self._terminal_completion_work
+            previous_run = self._terminal_completion_run
             self._terminal_completion_refs = tuple(verification_refs or ())
+            self._terminal_completion_work = work
+            self._terminal_completion_run = run
             try:
                 yield self
             finally:
-                self._terminal_completion_refs = previous_refs
-                self._terminal_completion_depth -= 1
+                try:
+                    import sys
+
+                    if work is not None and run is not None and sys.exc_info()[0] is None:
+                        from portable_runtime.protocol.validation import assert_valid_state_graph
+
+                        assert_valid_state_graph(self.export_state())
+                finally:
+                    self._terminal_completion_refs = previous_refs
+                    self._terminal_completion_work = previous_work
+                    self._terminal_completion_run = previous_run
+                    self._terminal_completion_depth -= 1
 
     def _validate_candidate_write(self, kind: str, value: BaseModel) -> None:
         """Validate semantic writes against the full current graph."""
@@ -428,23 +454,26 @@ class InMemoryStateStore:
             types["authorization"] = _AuthGrant
         except Exception:
             pass
-        prepared: dict[str, list[BaseModel]] = {}
-        for kind, values in state.items():
-            model_type = types.get(kind)
-            if model_type is None:
-                continue
-            prepared[kind] = [cast(BaseModel, model_type.model_validate(raw)) for raw in values]
-        candidate = self.export_state()
-        for kind, prepared_values in prepared.items():
-            incoming_ids = {value.id for value in prepared_values}  # type: ignore[attr-defined]
-            candidate[kind] = [
-                raw for raw in candidate.get(kind, [])
-                if isinstance(raw, dict) and raw.get("id") not in incoming_ids
-            ] + [value.model_dump(mode="json") for value in prepared_values]
-        from portable_runtime.protocol.validation import assert_valid_state_graph
-
-        assert_valid_state_graph(candidate)
         with self._lock:
+            prepared: dict[str, list[BaseModel]] = {}
+            for kind, values in state.items():
+                model_type = types.get(kind)
+                if model_type is None:
+                    continue
+                prepared[kind] = [cast(BaseModel, model_type.model_validate(raw)) for raw in values]
+            candidate = {
+                kind: [value.model_dump(mode="json") for value in values.values()]
+                for kind, values in self._records.items()
+            }
+            for kind, prepared_values in prepared.items():
+                incoming_ids = {value.id for value in prepared_values}  # type: ignore[attr-defined]
+                candidate[kind] = [
+                    raw for raw in candidate.get(kind, [])
+                    if isinstance(raw, dict) and raw.get("id") not in incoming_ids
+                ] + [value.model_dump(mode="json") for value in prepared_values]
+            from portable_runtime.protocol.validation import assert_valid_state_graph
+
+            assert_valid_state_graph(candidate)
             for kind, prepared_values in prepared.items():
                 for value in prepared_values:
                     self._records[kind][value.id] = value  # type: ignore[attr-defined]
