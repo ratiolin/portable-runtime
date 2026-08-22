@@ -582,6 +582,15 @@ def create_app(runtime: Runtime | None = None) -> FastAPI:
         except Exception as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
+    @app.post("/v1/revalidation/affected-by/{change_ref}")
+    async def materialize_affected_by_compat(
+        request: Request,
+        change_ref: str,
+        change_type: str = "evaluator",
+    ) -> list[dict[str, Any]]:
+        """Compatibility spelling for the explicit revalidation control action."""
+        return await materialize_affected_by(request, change_ref, change_type)
+
     @app.post("/v1/reopen/{record_id}")
     async def reopen_record(request: Request, record_id: str, payload: dict[str, Any] | None = None) -> dict[str, Any]:
         _require_local_control(request)
