@@ -988,6 +988,17 @@ def validate_state_graph(
         metadata = relation.metadata if isinstance(relation.metadata, dict) else {}
         revision_ref = metadata.get("revision_ref")
         if not isinstance(revision_ref, str) or not revision_ref.strip():
+            # Reopen is an explicit control action with an atomic work/event
+            # transaction.  Its assessment id is the durable handoff proof;
+            # it is not a Revision because no semantic fact is superseded.
+            reopen_ref = metadata.get("reopen_assessment_id")
+            if (
+                isinstance(reopen_ref, str)
+                and reopen_ref.startswith("reopen_")
+                and relation.subject_ref.startswith("work_")
+                and relation.object_ref.startswith("work_")
+            ):
+                continue
             errors.append(f"supersedes relation {relation.id} requires revision_ref")
             continue
         revision = parsed_records.get(revision_ref)
@@ -1241,10 +1252,102 @@ def validate_record_write(record: BaseRecord, existing: BaseRecord | None = None
         # overwriting an authoritative semantic fact.
         old_dump = existing.model_dump(mode="json")
         new_dump = record.model_dump(mode="json")
-        old_dump.pop("created_at", None)
-        new_dump.pop("created_at", None)
+        for dump in (old_dump, new_dump):
+            dump.pop("created_at", None)
+            # Lifecycle transitions are checked by validate_lifecycle_transition
+            # and graph promotion rules.  Version lineage protects semantic
+            # fact content; legacy callers historically advance lifecycle in
+            # place without manufacturing a new fact version.
+            for key in ("lifecycle_status", "version"):
+                dump.pop(key, None)
         if old_dump != new_dump and record.version <= existing.version:
             errors.append(
                 f"record {record.id} version must advance beyond {existing.version} for a changed semantic write"
             )
     return errors
+
+
+def _semantic_payload_changed(record: BaseRecord, existing: BaseRecord) -> bool:
+    """Compare authoritative record content while ignoring creation timestamps."""
+    old_dump = existing.model_dump(mode="json")
+    new_dump = record.model_dump(mode="json")
+    old_dump.pop("created_at", None)
+    new_dump.pop("created_at", None)
+    return old_dump != new_dump
+
+
+def assert_semantic_mutation_authorized(
+    record: BaseRecord,
+    existing: BaseRecord | None,
+    state: dict[str, list[dict[str, object]]],
+) -> None:
+    """Require an existing canonical fact update to carry authority provenance.
+
+    Creation and idempotent replay remain ordinary writes.  A changed semantic
+    record must identify either an applied Revision or a durable
+    AuthorizationUse.  Lifecycle-only transitions remain governed by the
+    existing lifecycle/graph validators; the helper closes the dangerous
+    content-overwrite path without inventing a second authorization ontology.
+    """
+    if existing is None or not _semantic_payload_changed(record, existing):
+        return
+    # Revision records are the authority carrier themselves; apply_revision()
+    # performs the grant/use check before advancing them.
+    if record.record_type == "Revision":
+        return
+
+    old_dump = existing.model_dump(mode="json")
+    new_dump = record.model_dump(mode="json")
+    mutable_keys = {
+        key
+        for key in set(old_dump) | set(new_dump)
+        if key not in {"created_at", "lifecycle_status", "version"}
+        and old_dump.get(key) != new_dump.get(key)
+    }
+    if not mutable_keys:
+        return
+    metadata = record.metadata if isinstance(record.metadata, dict) else {}
+    revision_ref = metadata.get("revision_ref")
+    revisions = {
+        str(raw.get("id")): raw
+        for raw in state.get("record", [])
+        if isinstance(raw, dict) and isinstance(raw.get("id"), str)
+    }
+    revision = revisions.get(str(revision_ref)) if isinstance(revision_ref, str) else None
+    if (
+        isinstance(revision, dict)
+        and revision.get("record_type") == "Revision"
+        and revision.get("lifecycle_status") in {"applied", "verified", "accepted"}
+        and record.id in {revision.get("revises_ref"), revision.get("produces_ref"), revision.get("supersedes_ref")}
+    ):
+        return
+
+    use_ref = metadata.get("authorization_use_ref")
+    uses = {
+        str(raw.get("id")): raw
+        for raw in state.get("authorization_use", [])
+        if isinstance(raw, dict) and isinstance(raw.get("id"), str)
+    }
+    use_raw = uses.get(str(use_ref)) if isinstance(use_ref, str) else None
+    if isinstance(use_raw, dict):
+        grants = {
+            str(raw.get("id")): raw
+            for raw in state.get("authorization", [])
+            if isinstance(raw, dict) and isinstance(raw.get("id"), str)
+        }
+        grant_raw = grants.get(str(use_raw.get("authorization_ref")))
+        refs = {record.id, f"{record.id}:v{record.version}", f"{record.id}:v{existing.version}"}
+        raw_refs = use_raw.get("subject_version_refs")
+        use_refs = {str(ref) for ref in raw_refs} if isinstance(raw_refs, list) else set()
+        if isinstance(grant_raw, dict) and refs.intersection(use_refs):
+            try:
+                grant = AuthorizationGrant.model_validate(grant_raw)
+                use = AuthorizationUse.model_validate(use_raw)
+                if use.authorization_ref == grant.id and not validate_grant(grant, now=use.authorized_at):
+                    return
+            except ValueError:
+                pass
+    raise ValueError(
+        f"semantic record mutation for {record.id!r} requires an applied Revision "
+        "or durable AuthorizationUse authority proof"
+    )
