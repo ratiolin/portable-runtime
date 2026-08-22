@@ -146,7 +146,7 @@ class CompletionAuthority:
         # same store transaction so a crash/failure cannot leave a terminal
         # Run without its paired completed Work (or vice versa).
         terminal_capability = getattr(self.store, "terminal_completion", None)
-        capability_context = terminal_capability() if callable(terminal_capability) else nullcontext()
+        capability_context = terminal_capability(refs) if callable(terminal_capability) else nullcontext()
         with self.store.transaction(), capability_context:
             self.store.save_work(updated_work)
             self.store.save_run(updated)
