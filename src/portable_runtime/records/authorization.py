@@ -238,7 +238,7 @@ def validate_grant(grant: AuthorizationGrant, *, now: datetime | None = None) ->
     """Validate grant invariants, return list of error strings (empty = valid)."""
     errors: list[str] = []
     ts = now or datetime.now(UTC)
-    if grant.revoked_at is not None:
+    if grant.revoked_at is not None and grant.revoked_at <= ts:
         errors.append(f"grant {grant.id} has been revoked at {grant.revoked_at.isoformat()}")
     if grant.expires_at is not None and ts >= grant.expires_at:
         errors.append(f"grant {grant.id} expired at {grant.expires_at.isoformat()}")
@@ -463,7 +463,11 @@ def is_authorized_for(
     if not isinstance(action, CanonicalAuthorizationRequest):
         return False
     ts = now or datetime.now(UTC)
-    if grant.revoked_at is not None or (grant.expires_at is not None and ts >= grant.expires_at) or ts < grant.valid_from:
+    if (
+        (grant.revoked_at is not None and grant.revoked_at <= ts)
+        or (grant.expires_at is not None and ts >= grant.expires_at)
+        or ts < grant.valid_from
+    ):
         return False
     if not _conditions_satisfied(grant):
         return False

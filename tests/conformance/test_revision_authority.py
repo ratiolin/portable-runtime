@@ -129,7 +129,14 @@ def test_revision_authorization_use_preserves_historical_validity() -> None:
     )
     store.save_authorization(grant)
     applied = apply_revision(revision, store=store, authorization_ref=grant.id, actor_ref="agent:executor")
-    expired = grant.model_copy(update={"expires_at": grant.valid_from + timedelta(seconds=1)})
+    use = store.get_authorization_use(applied.metadata["authorization_use_ref"])
+    assert use is not None
+    expired = grant.model_copy(
+        update={
+            "expires_at": use.authorized_at + timedelta(seconds=1),
+            "revoked_at": use.authorized_at + timedelta(seconds=1),
+        }
+    )
     store.save_authorization(expired)
     errors = validate_state_graph(store.export_state())
     assert not any(f"revision {applied.id}" in error and "authorization" in error for error in errors)
