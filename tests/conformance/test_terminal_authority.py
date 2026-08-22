@@ -22,7 +22,8 @@ def _proof(work: Work, run: Run) -> EvidenceArtifact:
             "run_id": run.id,
             "verification_scope": {},
             "work_version": 1,
-            "acceptance_criteria": [],
+            "acceptance_criteria": list(work.acceptance_criteria),
+            "obligation_refs": CompletionAuthority.required_obligation_refs(work),
         },
     )
 
@@ -39,6 +40,40 @@ def test_terminal_status_cannot_be_written_without_completion_authority(backend:
             store.save_run(run.model_copy(update={"status": "succeeded"}))
         with pytest.raises(ValueError, match="CompletionAuthority"):
             store.save_work(work.model_copy(update={"status": "completed"}))
+    finally:
+        if backend == "sqlite":
+            store.close()
+
+
+@pytest.mark.parametrize("backend", ["memory", "sqlite"])
+def test_terminal_proof_must_cover_declared_obligations(backend: str, tmp_path) -> None:
+    store = InMemoryStateStore() if backend == "memory" else SQLiteStateStore(tmp_path / "terminal-obligations.db")
+    try:
+        work = Work(
+            id="work_terminal_obligations",
+            title="obligations",
+            acceptance_criteria=["tests pass"],
+            metadata={"verification_obligations": [{"id": "independent-tests"}]},
+        )
+        run = Run(id="run_terminal_obligations", work_id=work.id, status="running")
+        store.save_work(work)
+        store.save_run(run)
+        proof = _proof(work, run)
+        proof.metadata.pop("obligation_refs", None)
+        store.save_record(proof)
+        with pytest.raises(ValueError, match="obligations"):
+            CompletionAuthority(store).authorize(work=work, run=run, verification_refs=[proof.id])
+        covered = proof.model_copy(
+            update={
+                "id": "proof_terminal_obligations_covered",
+                "metadata": {
+                    **proof.metadata,
+                    "obligation_refs": CompletionAuthority.required_obligation_refs(work),
+                }
+            }
+        )
+        store.save_record(covered)
+        assert CompletionAuthority(store).authorize(work=work, run=run, verification_refs=[covered.id]).status == "succeeded"
     finally:
         if backend == "sqlite":
             store.close()

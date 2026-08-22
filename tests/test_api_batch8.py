@@ -143,6 +143,30 @@ def test_affected_by_endpoint():
     assert resp.status_code == 200  # unknown type falls back to generic
 
 
+def test_affected_by_get_is_pure_and_materialization_is_explicit_control_action():
+    client, _runtime, store = _client()
+    store.save_record(Assertion(id="assertion_read_only", statement="claim", lifecycle_status="draft"))
+    store.save_relation(
+        RecordRelation(
+            relation_type="validated-under",
+            subject_ref="assertion_read_only",
+            object_ref="evaluator:read-only",
+        )
+    )
+    before = len(store.list_events())
+    response = client.get("/v1/revalidation/affected-by/evaluator:read-only", params={"change_type": "evaluator"})
+    assert response.status_code == 200
+    assert len(store.list_events()) == before
+
+    materialized = client.post(
+        "/v1/revalidation/affected-by/evaluator:read-only/materialize",
+        params={"change_type": "evaluator"},
+    )
+    assert materialized.status_code == 200
+    assert len(store.list_events()) == before + 1
+    assert store.list_events()[-1].type == "RevalidationRequired"
+
+
 # /v1/reopen
 def test_reopen_work_flow():
     client, runtime, _store = _client()

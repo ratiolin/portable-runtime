@@ -35,6 +35,58 @@ class CompletionAuthority:
         return metadata.get("work_version", metadata.get("task_version", metadata.get("version", 1)))
 
     @staticmethod
+    def required_obligation_refs(work: Work) -> list[str]:
+        """Return the explicit verification obligations for ``work``.
+
+        Acceptance criteria and policy/verification obligations are separate
+        declarations, but they share one proof-coverage contract.  A proof
+        may only close a Work after its ``obligation_refs`` cover every
+        declared item.  We keep the representation deliberately portable:
+        string obligations are used as-is and mapping obligations use their
+        stable ``id``/``ref``/``key``/``name`` value.
+        """
+
+        values: list[str] = [
+            criterion.strip()
+            for criterion in work.acceptance_criteria
+            if isinstance(criterion, str) and criterion.strip()
+        ]
+
+        def add(raw: object) -> None:
+            if isinstance(raw, str) and raw.strip():
+                values.append(raw.strip())
+                return
+            if not isinstance(raw, list):
+                return
+            for item in raw:
+                if isinstance(item, str) and item.strip():
+                    values.append(item.strip())
+                elif isinstance(item, dict):
+                    for key in ("id", "ref", "key", "name", "description"):
+                        candidate = item.get(key)
+                        if isinstance(candidate, str) and candidate.strip():
+                            values.append(candidate.strip())
+                            break
+
+        metadata = work.metadata if isinstance(work.metadata, dict) else {}
+        constraints = work.constraints if isinstance(work.constraints, dict) else {}
+        for source in (metadata, constraints):
+            for field in (
+                "verification_obligations",
+                "required_obligations",
+                "policy_obligations",
+                "obligations",
+            ):
+                add(source.get(field))
+            policy = source.get("verification_policy")
+            if isinstance(policy, dict):
+                for field in ("verification_obligations", "required_obligations", "obligations"):
+                    add(policy.get(field))
+
+        # Preserve declaration order while eliminating duplicate obligations.
+        return list(dict.fromkeys(values))
+
+    @staticmethod
     def _proof_metadata(record: object) -> dict[str, Any] | None:
         metadata = getattr(record, "metadata", None)
         return metadata if isinstance(metadata, dict) else None
@@ -64,6 +116,8 @@ class CompletionAuthority:
         expected_scope = CompletionAuthority._expected_scope(work)
         expected_version = CompletionAuthority._expected_version(work)
         expected_criteria = list(work.acceptance_criteria)
+        required_obligations = set(CompletionAuthority.required_obligation_refs(work))
+        covered_obligations: set[str] = set()
         for ref in normalized:
             record = record_lookup(ref)
             metadata = CompletionAuthority._proof_metadata(record)
@@ -89,6 +143,22 @@ class CompletionAuthority:
             criteria = metadata.get("acceptance_criteria", metadata.get("criteria"))
             if not isinstance(criteria, list) or criteria != expected_criteria:
                 raise ValueError("terminal completion proof acceptance criteria do not match Work")
+            raw_coverage = metadata.get(
+                "obligation_refs",
+                metadata.get("covered_obligations", metadata.get("verification_obligations", [])),
+            )
+            if isinstance(raw_coverage, str):
+                covered_obligations.add(raw_coverage.strip())
+            elif isinstance(raw_coverage, list):
+                covered_obligations.update(
+                    item.strip() for item in raw_coverage if isinstance(item, str) and item.strip()
+                )
+        missing = sorted(required_obligations - covered_obligations)
+        if missing:
+            raise ValueError(
+                "terminal completion proofs do not cover required verification obligations: "
+                + ", ".join(missing)
+            )
 
     def _already_consumed(self, refs: set[str], run: Run) -> bool:
         metadata = run.metadata if isinstance(run.metadata, dict) else {}

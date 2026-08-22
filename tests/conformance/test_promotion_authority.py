@@ -6,6 +6,8 @@ from portable_runtime.protocol.validation import validate_state_graph
 from portable_runtime.records.authorization import create_grant_for_approval
 from portable_runtime.records.knowledge import KnowledgeProjection
 from portable_runtime.records.models import Assertion, ChangeObjectRecord, EvidenceArtifact, PolicyRecord
+from portable_runtime.records.models import Derivation
+from portable_runtime.records.relations import RecordRelation
 
 
 def test_policy_promotion_capability_cannot_be_selected_by_metadata() -> None:
@@ -148,3 +150,61 @@ def test_knowledge_projection_promotion_requires_canonical_request_binding() -> 
         strict=False,
     )
     assert any("authorization ref" in error and "invalid" in error for error in errors)
+
+
+def test_knowledge_projection_rejects_approval_assertion_as_epistemic_judgment() -> None:
+    claim = Assertion(id="projection_claim_binding", statement="claim", lifecycle_status="current")
+    approval = Assertion(
+        id="projection_approval_binding",
+        statement="approved",
+        lifecycle_status="current",
+        epistemic_status="supported",
+        metadata={"role": "approval", "judgment_for_refs": [claim.id]},
+    )
+    evidence = EvidenceArtifact(id="projection_evidence_binding", kind="check", lifecycle_status="current")
+    scope = ChangeObjectRecord(id="projection_scope_binding", lifecycle_status="draft")
+    derivation = Derivation(
+        id="projection_derivation_binding",
+        premise_refs=[approval.id],
+        evidence_refs=[evidence.id],
+        conclusion_ref=claim.id,
+        metadata={"scope_version_refs": [scope.id]},
+        lifecycle_status="current",
+    )
+    projection = KnowledgeProjection(
+        id="projection_epistemic_binding",
+        lifecycle_status="official",
+        current_assertion_refs=[claim.id],
+        evidence_summary_refs=[evidence.id],
+        epistemic_judgment_refs=[approval.id],
+        authorization_refs=[],
+        scope_version_refs=[scope.id],
+        validity_scope={"domain": "test"},
+        environment_bindings={"runtime": "v1"},
+    )
+    errors = validate_state_graph(
+        {
+            "record": [
+                claim.model_dump(mode="json"),
+                approval.model_dump(mode="json"),
+                evidence.model_dump(mode="json"),
+                scope.model_dump(mode="json"),
+                derivation.model_dump(mode="json"),
+            ],
+            "relation": [
+                RecordRelation(
+                    relation_type="derived-from",
+                    subject_ref=claim.id,
+                    object_ref=approval.id,
+                ).model_dump(mode="json"),
+                RecordRelation(
+                    relation_type="scoped-to",
+                    subject_ref=derivation.id,
+                    object_ref=scope.id,
+                ).model_dump(mode="json"),
+            ],
+            "knowledge_projection": [projection.model_dump(mode="json")],
+        },
+        strict=False,
+    )
+    assert any("approval assertion" in error for error in errors)

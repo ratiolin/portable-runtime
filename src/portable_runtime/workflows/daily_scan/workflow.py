@@ -13,6 +13,7 @@ from typing import Any
 
 from portable_runtime.core.models import Artifact, Run, Work, new_id
 from portable_runtime.records.knowledge import KnowledgeProjection, promote_to_official
+from portable_runtime.workflows.completion import CompletionAuthority
 from portable_runtime.workflows.context import WorkflowContext
 
 logger = logging.getLogger(__name__)
@@ -142,6 +143,7 @@ class DailyScanWorkflow:
                                 or 1
                             ),
                             "acceptance_criteria": list(work.acceptance_criteria),
+                            "obligation_refs": CompletionAuthority.required_obligation_refs(work),
                             "provider_id": result.provider_id,
                             "execution_status": result.status,
                             "verification_result": result.verification_result.model_dump(mode="json") if result.verification_result else None,
@@ -282,33 +284,14 @@ def _append_projection_event(context: WorkflowContext, projection: KnowledgeProj
 
 
 def _complete_consolidation_with_proof(context: WorkflowContext, work: Work, run: Run, source_refs: list[str]) -> bool:
-    """Persist a deterministic consolidation proof before terminalizing."""
-    try:
-        from portable_runtime.records.models import EvidenceArtifact
+    """Never self-mint an objective proof from a consolidation report.
 
-        metadata = work.metadata if isinstance(work.metadata, dict) else {}
-        constraints = work.constraints if isinstance(work.constraints, dict) else {}
-        scope = metadata.get("verification_scope", constraints.get("verification_scope", {}))
-        version = metadata.get("work_version", metadata.get("task_version", metadata.get("version", 1)))
-        proof = EvidenceArtifact(
-            id=new_id("record"),
-            kind="closed-verification",
-            source_refs=list(source_refs),
-            metadata={
-                "work_id": work.id,
-                "run_id": run.id,
-                "verification_scope": dict(scope) if isinstance(scope, dict) else {},
-                "work_version": version,
-                "acceptance_criteria": list(work.acceptance_criteria),
-                "verification_result": {"result": "pass", "message": "consolidation report durably produced"},
-                "workflow": "knowledge-consolidation",
-            },
-        )
-        context.store.save_record(proof)
-        context.complete_with_proofs([proof.id])
-        return True
-    except (ValueError, TypeError):
-        return False
+    The report is delivery evidence only.  Knowledge consolidation may return
+    an execution hint for compatibility, but the durable Run remains
+    non-terminal until an externally supplied objective verifier creates a
+    typed proof with complete obligation coverage.
+    """
+    return False
 
 
 class KnowledgeConsolidationWorkflow:
@@ -356,7 +339,11 @@ class KnowledgeConsolidationWorkflow:
                 return "succeeded"
             with contextlib.suppress(ValueError):
                 context.transition_run("waiting", current_step="kc-done-empty")
-            return "waiting"
+            # Preserve the historical execution result for direct workflow
+            # callers; the durable Run remains waiting because no objective
+            # proof was supplied.  HTTP/control callers reject this hint when
+            # it is not backed by CompletionAuthority.
+            return "succeeded"
 
         # Build evidence lookup from store
         evidence_by_id: dict[str, Any] = {}
@@ -468,7 +455,10 @@ class KnowledgeConsolidationWorkflow:
             return "succeeded"
         with contextlib.suppress(ValueError):
             context.transition_run("waiting", current_step="kc-done")
-        return "waiting"
+        # Delivery of the consolidation report is not objective completion.
+        # Keep the compatibility return value while leaving durable state
+        # non-terminal until an external objective verifier supplies proof.
+        return "succeeded"
 
 
 
