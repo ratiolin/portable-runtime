@@ -4,6 +4,7 @@ import asyncio
 import json
 from pathlib import Path
 
+from portable_runtime.core.models import Event, Work, new_id
 from portable_runtime.core.runtime import Runtime
 from portable_runtime.plugin.conformance import check_provider
 from portable_runtime.plugin.loader import load_manifest, validate_manifest
@@ -299,15 +300,38 @@ def run_cli(args: list[str]) -> int:
                 from portable_runtime.records.reopen import ReopenAssessment, create_reopen_work
                 assess = ReopenAssessment(record_ref=parsed.record_id, revision_scope=parsed.scope, reason=parsed.reason or f"reopen {parsed.record_id}")
                 work = runtime.get_work(parsed.record_id)
+                synthetic_source = False
                 if work is None:
                     # try record
                     rec = runtime.store.get_record(parsed.record_id)  # type: ignore
                     if rec is None:
                         print("record not found")
                         return 1
-                    work = runtime.create_work(title=f"Reopen {parsed.record_id}", description=assess.reason, kind="reopen")
-                new_work = create_reopen_work(assess, work, store=runtime.store)
-                runtime.store.save_work(new_work)
+                    work = Work(id=new_id("work"), title=f"Reopen {parsed.record_id}", description=assess.reason, kind="reopen")
+                    synthetic_source = True
+                with runtime.store.transaction():
+                    if synthetic_source:
+                        runtime.store.save_work(work)
+                    new_work = create_reopen_work(assess, work, store=runtime.store)
+                    runtime.store.save_work(new_work)
+                    from portable_runtime.records.relations import RecordRelation
+
+                    runtime.store.save_relation(
+                        RecordRelation(
+                            relation_type="supersedes",
+                            subject_ref=new_work.id,
+                            object_ref=work.id,
+                            metadata={"reopen_assessment_id": assess.id},
+                        )
+                    )
+                    runtime.store.append_event(
+                        Event(
+                            id=new_id("event"),
+                            type="ReopenCreated",
+                            subject_ref=new_work.id,
+                            payload={"record_id": parsed.record_id, "assessment_id": assess.id, "supersedes": work.id},
+                        )
+                    )
                 print(json.dumps({"assessment": assess.model_dump(mode="json"), "work": new_work.model_dump(mode="json")}, ensure_ascii=False, indent=2))
             except Exception as exc:
                 print(json.dumps({"error": str(exc)}, ensure_ascii=False))

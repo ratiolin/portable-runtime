@@ -729,7 +729,7 @@ class SQLiteStateStore:
                 return
         except Exception:
             pass
-        from portable_runtime.protocol.validation import validate_record_write
+        from portable_runtime.protocol.validation import assert_semantic_mutation_authorized, validate_record_write
         from portable_runtime.records.validation import validate_canonical_write
 
         def validate() -> None:
@@ -737,6 +737,7 @@ class SQLiteStateStore:
             errs = [*validate_record_write(value, existing), *validate_canonical_write(value)]
             if errs:
                 raise ValueError("; ".join(errs))
+            assert_semantic_mutation_authorized(value, existing, self.export_state())
 
         self._atomic_graph_save("record", value, validate)
 
@@ -753,6 +754,16 @@ class SQLiteStateStore:
             errs = validate_relation(value)
             if errs:
                 raise ValueError("; ".join(errs))
+            existing = self.get_relation(value.id)
+            if existing is not None:
+                old_dump = existing.model_dump(mode="json")
+                new_dump = value.model_dump(mode="json")
+                old_dump.pop("created_at", None)
+                new_dump.pop("created_at", None)
+                if old_dump != new_dump:
+                    raise ValueError(
+                        f"relation {value.id!r} is append-only; semantic edge changes require a Revision authority"
+                    )
 
         self._atomic_graph_save("relation", value, validate)
 

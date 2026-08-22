@@ -7,7 +7,7 @@ from typing import Any
 from fastapi import FastAPI, HTTPException, Request, Response
 from pydantic import BaseModel, Field
 
-from portable_runtime.core.models import Event, new_id, utcnow
+from portable_runtime.core.models import Event, Work, new_id, utcnow
 from portable_runtime.core.runtime import Runtime
 
 
@@ -53,6 +53,71 @@ def _require_local_control(request: Request) -> None:
     host = client.host if client is not None else None
     if host not in {None, "127.0.0.1", "::1", "localhost", "testclient", "testserver"}:
         raise HTTPException(status_code=403, detail="control-plane HTTP API is local-only")
+
+
+_AUTHORITY_EDGE_TYPES = frozenset(
+    {
+        "authorizes",
+        "supersedes",
+        "revises",
+        "requires-revalidation",
+        "validated-under",
+        "authorized-under",
+        "evaluated-by",
+    }
+)
+
+
+def _is_local_semantic_ref(runtime: Runtime, ref: str) -> bool:
+    """Return whether a relation endpoint names a canonical local object."""
+    for getter_name in ("get_record", "get_work", "get_run", "get_authorization"):
+        getter = getattr(runtime.store, getter_name, None)
+        if callable(getter):
+            try:
+                if getter(ref) is not None:
+                    return True
+            except Exception:  # noqa: BLE001,S112
+                continue
+    return False
+
+
+def _require_semantic_edge_authority(runtime: Runtime, rel: Any) -> None:
+    """Reject direct governance-edge creation without a durable authority ref.
+
+    External provenance edges (for example ``evaluator:v8``) remain ordinary
+    observations.  When both endpoints are local canonical state, governance
+    edges must identify the Revision/AuthorizationUse that authorized them.
+    Reopen edges carry their explicit assessment id and are committed by the
+    atomic reopen action itself.
+    """
+    if getattr(rel, "relation_type", None) not in _AUTHORITY_EDGE_TYPES:
+        return
+    if not (_is_local_semantic_ref(runtime, rel.subject_ref) and _is_local_semantic_ref(runtime, rel.object_ref)):
+        return
+    metadata = rel.metadata if isinstance(getattr(rel, "metadata", None), dict) else {}
+    revision_ref = metadata.get("revision_ref")
+    use_ref = metadata.get("authorization_use_ref")
+    has_revision = False
+    if isinstance(revision_ref, str) and revision_ref.strip():
+        revision = runtime.store.get_record(revision_ref)
+        has_revision = bool(
+            revision is not None
+            and getattr(revision, "record_type", None) == "Revision"
+            and getattr(revision, "lifecycle_status", None) in {"applied", "verified", "accepted"}
+        )
+    has_use = False
+    if isinstance(use_ref, str) and use_ref.strip():
+        has_use = runtime.store.get_authorization_use(use_ref) is not None
+    has_reopen = (
+        rel.relation_type == "supersedes"
+        and isinstance(metadata.get("reopen_assessment_id"), str)
+        and str(metadata.get("reopen_assessment_id")).startswith("reopen_")
+    )
+    if not (has_revision or has_use or has_reopen):
+        raise HTTPException(
+            status_code=422,
+            detail="local governance edge requires Revision, AuthorizationUse, or reopen assessment authority",
+        )
 
 
 def _append_control_event(runtime: Runtime, event_type: str, subject_ref: str, payload: dict[str, Any]) -> None:
@@ -528,8 +593,11 @@ def create_app(runtime: Runtime | None = None) -> FastAPI:
         from portable_runtime.records.relations import RecordRelation
         try:
             rel = RecordRelation.model_validate(payload)
+            _require_semantic_edge_authority(runtime, rel)
             runtime.store.save_relation(rel)  # type: ignore
             return rel.model_dump(mode="json")
+        except HTTPException:
+            raise
         except Exception as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -600,32 +668,52 @@ def create_app(runtime: Runtime | None = None) -> FastAPI:
         reason = payload.get("reason", f"reopen {record_id}")
         assess = ReopenAssessment(record_ref=record_id, revision_scope=scope, reason=reason)
         work = runtime.get_work(record_id)
+        synthetic_source = False
         if work is None:
             try:
                 rec = runtime.store.get_record(record_id)  # type: ignore[assignment]
                 if rec is None:
                     raise HTTPException(status_code=404, detail="record not found")
-                work = runtime.create_work(title=f"Reopen {record_id}", description=reason, kind="reopen")
+                # Do not persist the synthetic source before the transaction:
+                # a failed lineage/event write must leave no reopen prefix.
+                work = Work(id=new_id("work"), title=f"Reopen {record_id}", description=reason, kind="reopen")
+                synthetic_source = True
             except HTTPException:
                 raise
             except Exception as exc:
                 raise HTTPException(status_code=400, detail=str(exc)) from exc
-        new_work = create_reopen_work(assess, work, store=runtime.store)
-        runtime.store.save_work(new_work)
         try:
-            from portable_runtime.records.relations import RecordRelation
-            rel = RecordRelation(relation_type="supersedes", subject_ref=new_work.id, object_ref=work.id, metadata={"reopen_assessment_id": assess.id})
-            runtime.store.save_relation(rel)  # type: ignore
-        except Exception:
-            pass
-        _append_control_event(runtime, "ReopenCreated", new_work.id, {"record_id": record_id, "assessment_id": assess.id, "supersedes": work.id})
-        if bool(new_work.metadata.get("deep_reopen")):
-            _append_control_event(
-                runtime,
-                "ReopenRerouted",
-                new_work.id,
-                {"record_id": record_id, "kind": new_work.kind, "auto_rerun_original_work": False},
-            )
+            with runtime.store.transaction():
+                if synthetic_source:
+                    runtime.store.save_work(work)
+                new_work = create_reopen_work(assess, work, store=runtime.store)
+                runtime.store.save_work(new_work)
+                from portable_runtime.records.relations import RecordRelation
+
+                rel = RecordRelation(
+                    relation_type="supersedes",
+                    subject_ref=new_work.id,
+                    object_ref=work.id,
+                    metadata={"reopen_assessment_id": assess.id},
+                )
+                runtime.store.save_relation(rel)
+                _append_control_event(
+                    runtime,
+                    "ReopenCreated",
+                    new_work.id,
+                    {"record_id": record_id, "assessment_id": assess.id, "supersedes": work.id},
+                )
+                if bool(new_work.metadata.get("deep_reopen")):
+                    _append_control_event(
+                        runtime,
+                        "ReopenRerouted",
+                        new_work.id,
+                        {"record_id": record_id, "kind": new_work.kind, "auto_rerun_original_work": False},
+                    )
+        except HTTPException:
+            raise
+        except Exception as exc:
+            raise HTTPException(status_code=422, detail=f"reopen transaction rejected: {exc}") from exc
         return {"assessment": assess.model_dump(mode="json"), "work": new_work.model_dump(mode="json")}
 
     @app.get("/v1/authorizations")
@@ -660,8 +748,8 @@ def create_app(runtime: Runtime | None = None) -> FastAPI:
         run = runs[0] if runs else None  # noqa: F841
         try:
             prof = ProcedureProfile(profile)
-        except Exception:
-            prof = ProcedureProfile.standard
+        except (TypeError, ValueError) as exc:
+            raise HTTPException(status_code=422, detail=f"invalid procedure profile: {profile!r}") from exc
         statuses: Any = check_procedure(work, run, prof) if run else []  # type: ignore[assignment]
         return {"work_id": work_id, "profile": prof.value, "gates": [s.model_dump(mode="json") if hasattr(s, "model_dump") else s for s in statuses]}
 
