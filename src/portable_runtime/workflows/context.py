@@ -219,6 +219,10 @@ class WorkflowContext:
             run=self.run,
             verification_refs=verification_refs,
         )
+        # CompletionAuthority commits Work and Run together. Refresh the
+        # context's Work view so callers cannot accidentally persist a stale
+        # non-terminal Work after the authoritative commit.
+        self.work = self.store.get_work(self.work.id) or self.work
         return self.run
 
     def set_step(self, step: str) -> Run:

@@ -475,13 +475,24 @@ def create_app(runtime: Runtime | None = None) -> FastAPI:
             final_run = runtime.store.get_run(run.id) or ctx.run
         status = final_run.status
         if status == "succeeded":
-            work_status = "completed"
+            # CompletionAuthority is the sole owner of the paired terminal
+            # Work transition. HTTP observes it and never derives completed
+            # from a workflow return value.
+            persisted_work = runtime.store.get_work(work_id)
+            if persisted_work is None or persisted_work.status != "completed":
+                raise HTTPException(
+                    status_code=409,
+                    detail="run succeeded without authoritative completed work",
+                )
+            return {"work_id": work_id, "run_id": run.id, "workflow_id": workflow_id, "status": status}
         elif status in {"waiting", "blocked", "failed", "cancelled", "running"}:
             work_status = status
         else:
             work_status = "waiting"
-        updated_work = work.model_copy(update={"status": work_status, "updated_at": utcnow()})  # noqa: E501
-        runtime.store.save_work(updated_work)
+        persisted_work = runtime.store.get_work(work_id) or work
+        if persisted_work.status != "completed":
+            updated_work = persisted_work.model_copy(update={"status": work_status, "updated_at": utcnow()})  # noqa: E501
+            runtime.store.save_work(updated_work)
         return {"work_id": work_id, "run_id": run.id, "workflow_id": workflow_id, "status": status}
 
     # === Batch8 Semantic Plane ===

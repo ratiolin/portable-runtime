@@ -52,6 +52,10 @@ class InMemoryStateStore:
         }
         self._leases: dict[str, dict[str, Any]] = {}
         self._lock = threading.RLock()
+        # Terminal Work/Run writes are only legal inside the completion
+        # authority's paired commit.  This is an in-process capability, not a
+        # user-controlled metadata flag.
+        self._terminal_completion_depth = 0
 
     def _save(self, kind: str, value: BaseModel) -> None:
         identifier = getattr(value, "id", None)
@@ -62,8 +66,26 @@ class InMemoryStateStore:
 
     def _save_checked(self, kind: str, value: BaseModel) -> None:
         """Run every normal state mutation through the graph commit gate."""
-        self._validate_candidate_write(kind, value)
-        self._save(kind, value)
+        with self._lock:
+            self._reject_unproven_terminal_write(kind, value)
+            self._validate_candidate_write(kind, value)
+            self._save(kind, value)
+
+    def _reject_unproven_terminal_write(self, kind: str, value: BaseModel) -> None:
+        status = getattr(value, "status", None)
+        terminal = (kind == "run" and status == "succeeded") or (kind == "work" and status == "completed")
+        if terminal and self._terminal_completion_depth <= 0:
+            raise ValueError("terminal completion requires CompletionAuthority proof commit")
+
+    @contextmanager
+    def terminal_completion(self):
+        """Open the private capability used by CompletionAuthority only."""
+        with self._lock:
+            self._terminal_completion_depth += 1
+            try:
+                yield self
+            finally:
+                self._terminal_completion_depth -= 1
 
     def _validate_candidate_write(self, kind: str, value: BaseModel) -> None:
         """Validate semantic writes against the full current graph."""
@@ -152,8 +174,9 @@ class InMemoryStateStore:
         return [value for value in self._list("knowledge", KnowledgeItem) if status is None or value.status == status]
 
     def save_knowledge_projection(self, value: KnowledgeProjection) -> None:
-        self._validate_candidate_write("knowledge_projection", value)
-        self._save("knowledge_projection", value)
+        with self._lock:
+            self._validate_candidate_write("knowledge_projection", value)
+            self._save("knowledge_projection", value)
 
     def get_knowledge_projection(self, projection_id: str) -> KnowledgeProjection | None:
         return self._get("knowledge_projection", KnowledgeProjection, projection_id)
@@ -219,6 +242,7 @@ class InMemoryStateStore:
             # CAS is a state mutation, not a storage escape hatch.  Validate
             # the complete candidate graph while holding the same lock before
             # replacing the value, so an invalid semantic update cannot land.
+            self._reject_unproven_terminal_write(kind, new_value)
             self._validate_candidate_write(kind, new_value)
             self._records[kind][identifier] = new_value
             return True
@@ -302,11 +326,15 @@ class InMemoryStateStore:
         except Exception:
             pass
         from portable_runtime.records.validation import validate_canonical_write, validate_record
-        errs = [*validate_record(value), *validate_canonical_write(value)]
-        if errs:
-            raise ValueError("; ".join(errs))
-        self._validate_candidate_write("record", value)
-        self._save("record", value)
+        def validate() -> None:
+            errs = [*validate_record(value), *validate_canonical_write(value)]
+            if errs:
+                raise ValueError("; ".join(errs))
+
+        with self._lock:
+            validate()
+            self._validate_candidate_write("record", value)
+            self._save("record", value)
     def get_record(self, record_id: str) -> BaseRecord | None:
         return self._get("record", BaseRecord, record_id)
     def list_records(self, record_type: str | None = None) -> list[BaseRecord]:
@@ -314,22 +342,24 @@ class InMemoryStateStore:
         return [v for v in vals if record_type is None or v.record_type == record_type]
     def save_relation(self, value: RecordRelation) -> None:
         from portable_runtime.records.relations import validate_relation
-        errs = validate_relation(value)
-        if errs:
-            raise ValueError("; ".join(errs))
-        self._validate_candidate_write("relation", value)
-        self._save("relation", value)
+        with self._lock:
+            errs = validate_relation(value)
+            if errs:
+                raise ValueError("; ".join(errs))
+            self._validate_candidate_write("relation", value)
+            self._save("relation", value)
     def get_relation(self, relation_id: str) -> RecordRelation | None:
         return self._get("relation", RecordRelation, relation_id)
     def save_authorization(self, value: Any) -> None:
         from portable_runtime.records.authorization import AuthorizationGrant
-        if isinstance(value, AuthorizationGrant):
-            from portable_runtime.records.authorization import validate_grant
-            errs = validate_grant(value)
-            if any("principal_ref required" in e or "grantee_ref required" in e or "allowed_capabilities" in e for e in errs):
-                raise ValueError("; ".join(errs))
-        self._validate_candidate_write("authorization", value)
-        self._save("authorization", value)
+        with self._lock:
+            if isinstance(value, AuthorizationGrant):
+                from portable_runtime.records.authorization import validate_grant
+                errs = validate_grant(value)
+                if any("principal_ref required" in e or "grantee_ref required" in e or "allowed_capabilities" in e for e in errs):
+                    raise ValueError("; ".join(errs))
+            self._validate_candidate_write("authorization", value)
+            self._save("authorization", value)
     def get_authorization(self, auth_id: str) -> Any | None:
         from portable_runtime.records.authorization import AuthorizationGrant
         return self._get("authorization", AuthorizationGrant, auth_id)

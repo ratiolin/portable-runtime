@@ -42,10 +42,14 @@ def import_legacy_repair(row: Mapping[str, object], store: StateStore) -> tuple[
             }
         )
 
+    legacy_terminal = str(row.get("status", "")) in {"closed", "rolled_back"}
+    # A legacy closed flag is not a typed completion proof.  Preserve it as
+    # provenance and keep the canonical graph non-terminal until a verifier
+    # re-establishes the actual outcome.
+    if legacy_terminal:
+        metadata["legacy_terminal_status"] = str(row.get("status", ""))
     canonical_work_status: Literal["open", "waiting", "completed"] = (
-        "waiting"
-        if is_personal_task
-        else "completed" if str(row.get("status", "")) in {"closed", "rolled_back"} else "open"
+        "waiting" if (is_personal_task or legacy_terminal) else "open"
     )
     work = Work(
         id=f"work_legacy_{repair_id}",
@@ -58,7 +62,7 @@ def import_legacy_repair(row: Mapping[str, object], store: StateStore) -> tuple[
     run = Run(
         id=f"run_legacy_{repair_id}",
         work_id=work.id,
-        status=("waiting" if is_personal_task else "succeeded" if work.status == "completed" else "interrupted"),
+        status=("waiting" if (is_personal_task or legacy_terminal) else "interrupted"),
         workflow_id=workflow_id,
         metadata={"legacy_repair_id": repair_id, "canonical_workflow": workflow_id},
     )
