@@ -47,17 +47,29 @@ def _promotion_errors(item: KnowledgeItem) -> list[str]:
 
 
 def can_promote(item: KnowledgeItem) -> bool:
-    return not _promotion_errors(item)
+    # KnowledgeItem is a compatibility projection, not an authority-bearing
+    # knowledge record.  Its string-shaped refs cannot prove the canonical
+    # Assertion/Derivation/evidence/scope/version/authorization graph.  Keep
+    # candidates available for migration, but require promotion through the
+    # canonical KnowledgeProjection workflow.
+    return False
 
 
 def promote(item: KnowledgeItem) -> KnowledgeItem:
-    """Fail-closed promotion: evidence existence alone does NOT allow official."""
+    """Reject legacy promotion; use canonical KnowledgeProjection instead.
+
+    A ``KnowledgeItem`` has no typed graph edges for epistemic judgment,
+    derivation, evidence, scope/version, or authorization.  Returning an
+    ``official`` compatibility object would therefore mint an authority claim
+    from caller-supplied strings.  The canonical consolidation workflow owns
+    promotion after validating the complete graph.
+    """
     if item.status != "candidate":
         return item
-    errs = _promotion_errors(item)
-    if errs:
-        raise ValueError("cannot promote KnowledgeItem to official: " + "; ".join(errs))
-    return item.model_copy(update={"status": "official"})
+    raise ValueError(
+        "cannot promote legacy KnowledgeItem to official; "
+        "use canonical KnowledgeProjection promotion with bound epistemic and authorization graph"
+    )
 
 
 def is_explicitly_invalid(item: KnowledgeItem) -> bool:
