@@ -152,18 +152,13 @@ class CompletionAuthority:
         updated_work = work.model_copy(
             update={"status": "completed", "updated_at": utcnow(), "metadata": work_metadata}
         )
-        # The store's private terminal capability makes direct succeeded or
-        # completed writes impossible.  Both records are written under the
-        # same store transaction so a crash/failure cannot leave a terminal
-        # Run without its paired completed Work (or vice versa).
-        terminal_capability = getattr(self.store, "terminal_completion", None)
-        if not callable(terminal_capability):
-            raise ValueError("terminal completion requires the store terminal capability")
-        capability_context = terminal_capability(refs, work=updated_work, run=updated)
-        with self.store.transaction(), capability_context:
-            self.store.save_work(updated_work)
-            self.store.save_run(updated)
-        return updated
+        # The store is the authority boundary for the paired terminal write.
+        # It validates the proof invariant while holding its transaction lock
+        # and commits both objects as one indivisible operation.
+        commit_terminal = getattr(self.store, "commit_terminal", None)
+        if not callable(commit_terminal):
+            raise ValueError("terminal completion requires the store commit_terminal primitive")
+        return commit_terminal(updated_work, updated, refs)
 
 
 def complete_with_proofs(store: StateStore, work: Work, run: Run, refs: Iterable[str]) -> Run:

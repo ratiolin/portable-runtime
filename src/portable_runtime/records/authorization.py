@@ -91,6 +91,60 @@ class AuthorizationGrant(BaseModel):
         return self
 
 
+class AuthorizationUse(BaseModel):
+    """Durable at-time evidence that a grant authorized one concrete action.
+
+    A grant may expire or be revoked after an action has happened.  This
+    immutable event preserves the exact request and timestamp used for the
+    live authorization check so later graph validation never re-authorizes a
+    historical action against ``datetime.now()``.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    id: str = Field(default_factory=lambda: new_id("authuse"))
+    created_at: datetime = Field(default_factory=utcnow)
+    authorization_ref: str
+    capability: str
+    actor_ref: str
+    resource_ref: str
+    effect_class: EffectClass
+    subject_version_refs: list[str] = Field(default_factory=list)
+    authorized_at: datetime = Field(default_factory=utcnow)
+
+    @model_validator(mode="after")
+    def _validate_shape(self) -> AuthorizationUse:
+        if not self.authorization_ref.strip():
+            raise ValueError("authorization_ref required")
+        if not self.capability.strip() or not self.actor_ref.strip() or not self.resource_ref.strip():
+            raise ValueError("authorization use requires capability, actor_ref and resource_ref")
+        if not self.subject_version_refs:
+            raise ValueError("authorization use requires subject_version_refs")
+        return self
+
+
+def create_authorization_use(
+    grant: AuthorizationGrant,
+    request: CanonicalAuthorizationRequest,
+    *,
+    authorized_at: datetime | None = None,
+) -> AuthorizationUse:
+    """Perform the live check and materialize its typed historical proof."""
+
+    at = (authorized_at or utcnow()).astimezone(UTC)
+    if not is_authorized_for(request, grant, now=at):
+        raise ValueError("authorization use request is not authorized at action time")
+    return AuthorizationUse(
+        authorization_ref=grant.id,
+        capability=request.capability,
+        actor_ref=request.actor_ref,
+        resource_ref=request.resource_ref or "",
+        effect_class=request.effect_class,
+        subject_version_refs=list(request.subject_version_refs),
+        authorized_at=at,
+    )
+
+
 def _norm_cap(cap: str) -> str:
     return cap.strip().lower()
 

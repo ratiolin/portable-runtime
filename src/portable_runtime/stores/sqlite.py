@@ -23,6 +23,7 @@ from portable_runtime.core.models import (
     StepAttempt,
     Work,
 )
+from portable_runtime.records.authorization import AuthorizationUse
 from portable_runtime.records.knowledge import KnowledgeProjection
 from portable_runtime.records.models import (
     ActionRecord,
@@ -130,6 +131,7 @@ class SQLiteStateStore:
         "compensation": Compensation,
         "record": BaseRecord,
         "relation": RecordRelation,
+        "authorization_use": AuthorizationUse,
     }
     # Kept as an attribute so a conformance test can deliberately inject a
     # malformed statement and verify that it raises a typed DB error.
@@ -145,12 +147,7 @@ class SQLiteStateStore:
         path.parent.mkdir(parents=True, exist_ok=True)
         self.path = _safe_db_path(path)
         self._lock = threading.RLock()
-        # A private in-process capability opened only by CompletionAuthority.
-        # Direct terminal status writes must never be enough to close work.
-        self._terminal_completion_depth = 0
-        self._terminal_completion_refs: tuple[str, ...] | None = None
-        self._terminal_completion_work: Work | None = None
-        self._terminal_completion_run: Run | None = None
+        self._terminal_commit_depth = 0
         self._connection = sqlite3.connect(_safe_db_path(path), check_same_thread=False, isolation_level=None)  # NOSONAR  # noqa: E501
         self._connection.row_factory = sqlite3.Row
         with self._lock:
@@ -196,30 +193,8 @@ class SQLiteStateStore:
     def _reject_unproven_terminal_write(self, kind: str, value: Any) -> None:
         status = getattr(value, "status", None)
         terminal = (kind == "run" and status == "succeeded") or (kind == "work" and status == "completed")
-        if terminal and self._terminal_completion_depth <= 0:
+        if terminal and self._terminal_commit_depth <= 0:
             raise ValueError("terminal completion requires CompletionAuthority proof commit")
-        if not terminal:
-            return
-        metadata = getattr(value, "metadata", {})
-        refs = metadata.get("_completion_proof_refs") if isinstance(metadata, dict) else None
-        if self._terminal_completion_refs is None or not isinstance(refs, list) or tuple(str(ref) for ref in refs) != self._terminal_completion_refs:
-            raise ValueError("terminal completion requires bound verification proof refs")
-        work = self._terminal_completion_work
-        run = self._terminal_completion_run
-        if work is None:
-            candidate_work = value if kind == "work" else self.get_work(getattr(value, "work_id", ""))
-            work = candidate_work if isinstance(candidate_work, Work) else None
-        if run is None:
-            candidate_run = value if kind == "run" else next(
-                (candidate for candidate in self.list_runs(getattr(value, "id", "")) if candidate.status != "succeeded"),
-                None,
-            )
-            run = candidate_run if isinstance(candidate_run, Run) else None
-        if work is None or run is None:
-            raise ValueError("terminal completion requires paired Work and Run")
-        from portable_runtime.workflows.completion import CompletionAuthority
-
-        CompletionAuthority.validate_proof_invariant(work, run, self._terminal_completion_refs, self.get_record)
 
     def _atomic_graph_save(self, kind: str, value: Any, validator: Any | None = None) -> None:
         """Validate the current graph and persist its delta in one transaction."""
@@ -240,43 +215,29 @@ class SQLiteStateStore:
                     self._rollback(self._connection.cursor())
                 raise
 
-    @contextmanager
-    def terminal_completion(
-        self,
-        verification_refs: list[str] | None = None,
-        *,
-        work: Work | None = None,
-        run: Run | None = None,
-    ):
-        """Open the private capability used by CompletionAuthority only."""
+    def commit_terminal(self, work: Work, run: Run, verification_refs: list[str]) -> Run:
+        """Validate and atomically commit a proven Work/Run terminal pair."""
         with self._lock:
-            if work is None or run is None:
-                raise ValueError("terminal completion requires paired Work and Run")
             from portable_runtime.workflows.completion import CompletionAuthority
 
-            CompletionAuthority.validate_proof_invariant(work, run, verification_refs or (), self.get_record)
-            self._terminal_completion_depth += 1
-            previous_refs = self._terminal_completion_refs
-            previous_work = self._terminal_completion_work
-            previous_run = self._terminal_completion_run
-            self._terminal_completion_refs = tuple(verification_refs or ())
-            self._terminal_completion_work = work
-            self._terminal_completion_run = run
+            CompletionAuthority.validate_proof_invariant(work, run, verification_refs, self.get_record)
+            owns_transaction = not self._connection.in_transaction
+            if owns_transaction:
+                self._connection.execute("BEGIN IMMEDIATE")
             try:
-                yield self
-            finally:
+                self._terminal_commit_depth += 1
                 try:
-                    import sys
-
-                    if work is not None and run is not None and sys.exc_info()[0] is None:
-                        from portable_runtime.protocol.validation import assert_valid_state_graph
-
-                        assert_valid_state_graph(self.export_state())
+                    self.save_work(work)
+                    self.save_run(run)
                 finally:
-                    self._terminal_completion_refs = previous_refs
-                    self._terminal_completion_work = previous_work
-                    self._terminal_completion_run = previous_run
-                    self._terminal_completion_depth -= 1
+                    self._terminal_commit_depth -= 1
+                if owns_transaction:
+                    self._connection.execute("COMMIT")
+            except Exception:
+                if owns_transaction:
+                    self._rollback(self._connection.cursor())
+                raise
+        return run
 
     def _validate_candidate_write(self, kind: str, value: Any) -> None:
         """Validate semantic writes against the complete current graph."""
@@ -524,7 +485,6 @@ class SQLiteStateStore:
                     f"SQLite CAS execution failed for {kind!r}/{identifier!r}"
                 ) from exc
     def transaction(self):
-        from contextlib import contextmanager
         @contextmanager
         def _tx():
             with self._lock:
@@ -806,6 +766,37 @@ class SQLiteStateStore:
     def list_authorizations(self) -> list[Any]:
         from portable_runtime.records.authorization import AuthorizationGrant
         return self._list("authorization", AuthorizationGrant)
+
+    def save_authorization_use(self, value: Any) -> None:
+        from portable_runtime.records.authorization import (
+            AuthorizationGrant,
+            AuthorizationUse,
+            CanonicalAuthorizationRequest,
+            is_authorized_for,
+        )
+        if not isinstance(value, AuthorizationUse):
+            raise ValueError("authorization use must be typed AuthorizationUse")
+        grant = self.get_authorization(value.authorization_ref)
+        if not isinstance(grant, AuthorizationGrant):
+            raise ValueError("authorization use references unknown grant")
+        request = CanonicalAuthorizationRequest(
+            capability=value.capability,
+            actor_ref=value.actor_ref,
+            resource_ref=value.resource_ref,
+            subject_version_refs=list(value.subject_version_refs),
+            effect_class=value.effect_class,
+        )
+        if not is_authorized_for(request, grant, now=value.authorized_at):
+            raise ValueError("authorization use is not valid at authorized_at")
+        self._atomic_graph_save("authorization_use", value)
+
+    def get_authorization_use(self, use_id: str) -> Any | None:
+        from portable_runtime.records.authorization import AuthorizationUse
+        return self._get("authorization_use", AuthorizationUse, use_id)
+
+    def list_authorization_uses(self) -> list[Any]:
+        from portable_runtime.records.authorization import AuthorizationUse
+        return self._list("authorization_use", AuthorizationUse)
 
     def list_relations(self, relation_type: str | None = None) -> list[RecordRelation]:
         vals = self._list("relation", RecordRelation)
