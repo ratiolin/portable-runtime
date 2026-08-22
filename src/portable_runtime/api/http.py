@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import contextlib
 import json
 from typing import Any
 
@@ -458,11 +459,29 @@ def create_app(runtime: Runtime | None = None) -> FastAPI:
         run = runtime.start_run(work_id, workflow_id=workflow_id)
         from portable_runtime.workflows.context import WorkflowContext
         ctx = WorkflowContext(work=work, run=run, store=runtime.store, capabilities=runtime.capabilities, registry=runtime.registry)  # noqa: E501
-        status = await workflow.run(ctx, work, run)
-        updated_work = work.model_copy(update={"status": "completed" if status == "succeeded" else status, "updated_at": utcnow()})  # noqa: E501
+        returned_status = await workflow.run(ctx, work, run)
+        # The workflow return value is an execution hint, never terminal
+        # authority.  CompletionAuthority is the only path that may make the
+        # durable Run succeeded; do not derive Work.completed from a string.
+        final_run = runtime.store.get_run(run.id) or ctx.run
+        if returned_status == "succeeded" and final_run.status != "succeeded":
+            raise HTTPException(
+                status_code=409,
+                detail="workflow returned succeeded without durable completion proof",
+            )
+        if final_run.status == "running" and returned_status in {"waiting", "blocked", "failed", "cancelled"}:
+            with contextlib.suppress(ValueError):
+                ctx.transition_run(returned_status)
+            final_run = runtime.store.get_run(run.id) or ctx.run
+        status = final_run.status
+        if status == "succeeded":
+            work_status = "completed"
+        elif status in {"waiting", "blocked", "failed", "cancelled", "running"}:
+            work_status = status
+        else:
+            work_status = "waiting"
+        updated_work = work.model_copy(update={"status": work_status, "updated_at": utcnow()})  # noqa: E501
         runtime.store.save_work(updated_work)
-        updated_run = run.model_copy(update={"status": status})
-        runtime.store.save_run(updated_run)
         return {"work_id": work_id, "run_id": run.id, "workflow_id": workflow_id, "status": status}
 
     # === Batch8 Semantic Plane ===

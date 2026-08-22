@@ -182,6 +182,11 @@ class SQLiteStateStore:
                 (kind, value.id, json.dumps(data, ensure_ascii=False), data["created_at"]),
             )
 
+    def _save_checked(self, kind: str, value: Any) -> None:
+        """Run every normal state mutation through the graph commit gate."""
+        self._validate_candidate_write(kind, value)
+        self._save(kind, value)
+
     def _validate_candidate_write(self, kind: str, value: Any) -> None:
         """Validate semantic writes against the complete current graph."""
         from portable_runtime.protocol.validation import assert_valid_candidate_write
@@ -215,12 +220,12 @@ class SQLiteStateStore:
             return values
         return [value_type.model_validate_json(row["data"]) for row in rows]
 
-    def save_work(self, value: Work) -> None: self._save("work", value)
+    def save_work(self, value: Work) -> None: self._save_checked("work", value)
     def get_work(self, work_id: str) -> Work | None: return self._get("work", Work, work_id)
     def list_work(self, status: str | None = None) -> list[Work]:
         return [value for value in self._list("work", Work) if status is None or value.status == status]
 
-    def save_run(self, value: Run) -> None: self._save("run", value)
+    def save_run(self, value: Run) -> None: self._save_checked("run", value)
     def get_run(self, run_id: str) -> Run | None:
         # The lease table is authoritative.  Overlay its current state so a
         # stale run JSON mirror cannot make a caller believe an old owner is
@@ -250,9 +255,9 @@ class SQLiteStateStore:
     def list_runs(self, work_id: str | None = None) -> list[Run]:
         return [value for value in self._list("run", Run) if work_id is None or value.work_id == work_id]
 
-    def save_artifact(self, value: Artifact) -> None: self._save("artifact", value)
+    def save_artifact(self, value: Artifact) -> None: self._save_checked("artifact", value)
     def get_artifact(self, artifact_id: str) -> Artifact | None: return self._get("artifact", Artifact, artifact_id)
-    def save_evidence(self, value: Evidence) -> None: self._save("evidence", value)
+    def save_evidence(self, value: Evidence) -> None: self._save_checked("evidence", value)
     def get_evidence(self, evidence_id: str) -> Evidence | None: return self._get("evidence", Evidence, evidence_id)
     def list_evidence(self, subject_ref: str | None = None) -> list[Evidence]:
         values = self.list_raw_legacy_evidence(subject_ref)
@@ -276,11 +281,11 @@ class SQLiteStateStore:
             for value in self._list("evidence", Evidence)
             if subject_ref is None or subject_ref in value.subject_refs
         ]
-    def save_decision(self, value: Decision) -> None: self._save("decision", value)
+    def save_decision(self, value: Decision) -> None: self._save_checked("decision", value)
     def get_decision(self, decision_id: str) -> Decision | None: return self._get("decision", Decision, decision_id)
-    def save_action(self, value: Action) -> None: self._save("action", value)
-    def save_outcome(self, value: Outcome) -> None: self._save("outcome", value)
-    def save_knowledge(self, value: KnowledgeItem) -> None: self._save("knowledge", value)
+    def save_action(self, value: Action) -> None: self._save_checked("action", value)
+    def save_outcome(self, value: Outcome) -> None: self._save_checked("outcome", value)
+    def save_knowledge(self, value: KnowledgeItem) -> None: self._save_checked("knowledge", value)
     def get_knowledge(self, knowledge_id: str) -> KnowledgeItem | None:
         legacy = self._get("knowledge", KnowledgeItem, knowledge_id)
         for projection in self._list("knowledge_projection", KnowledgeProjection):
@@ -343,7 +348,7 @@ class SQLiteStateStore:
         ]
 
     # R1.1 Execution Integrity
-    def save_step(self, value: Step) -> None: self._save("step", value)
+    def save_step(self, value: Step) -> None: self._save_checked("step", value)
     def get_step(self, step_id: str) -> Step | None: return self._get("step", Step, step_id)
     def list_steps(self, run_id: str | None = None) -> list[Step]:
         return [v for v in self._list("step", Step) if run_id is None or v.run_id == run_id]
@@ -352,13 +357,13 @@ class SQLiteStateStore:
         now = datetime.datetime.now(datetime.UTC)
         cutoff = now - datetime.timedelta(seconds=before_seconds)
         return [v for v in self._list("step", Step) if v.status == "running" and v.updated_at < cutoff]
-    def save_attempt(self, value: StepAttempt) -> None: self._save("attempt", value)
+    def save_attempt(self, value: StepAttempt) -> None: self._save_checked("attempt", value)
     def get_attempt(self, attempt_id: str) -> StepAttempt | None: return self._get("attempt", StepAttempt, attempt_id)
     def list_attempts(self, step_id: str | None = None) -> list[StepAttempt]:
         return [v for v in self._list("attempt", StepAttempt) if step_id is None or v.step_id == step_id]
-    def save_checkpoint(self, value: Checkpoint) -> None: self._save("checkpoint", value)
+    def save_checkpoint(self, value: Checkpoint) -> None: self._save_checked("checkpoint", value)
     def get_checkpoint(self, checkpoint_id: str) -> Checkpoint | None: return self._get("checkpoint", Checkpoint, checkpoint_id)
-    def save_compensation(self, value: Compensation) -> None: self._save("compensation", value)
+    def save_compensation(self, value: Compensation) -> None: self._save_checked("compensation", value)
 
     @staticmethod
     def _rollback(cursor: sqlite3.Cursor) -> None:
@@ -387,6 +392,23 @@ class SQLiteStateStore:
             try:
                 cur.execute("BEGIN IMMEDIATE")
                 transaction_started = True
+                current_row = cur.execute(
+                    "SELECT data FROM runtime_records WHERE kind=? AND id=?",
+                    (kind, identifier),
+                ).fetchone()
+                if current_row is None:
+                    cur.execute("ROLLBACK")
+                    transaction_started = False
+                    return False
+                current_payload = json.loads(current_row["data"])
+                current_version = int(current_payload.get("version", 0)) if isinstance(current_payload, dict) else 0
+                if current_version != expected_version:
+                    cur.execute("ROLLBACK")
+                    transaction_started = False
+                    return False
+                # Validate against the same locked snapshot that the
+                # conditional update will mutate.
+                self._validate_candidate_write(kind, new_value)
                 cur.execute(
                     self._CAS_UPDATE_SQL,
                     (raw, created_at, kind, identifier, expected_version),
@@ -400,6 +422,10 @@ class SQLiteStateStore:
                 cur.execute("COMMIT")
                 transaction_started = False
                 return True
+            except ValueError:
+                if transaction_started:
+                    self._rollback(cur)
+                raise
             except Exception as exc:
                 if transaction_started:
                     self._rollback(cur)

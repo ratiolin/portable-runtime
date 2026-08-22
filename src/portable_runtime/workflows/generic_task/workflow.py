@@ -16,7 +16,7 @@ from portable_runtime.workflows.context import WorkflowContext
 
 ObjectiveVerifier = Callable[
     [WorkflowContext, Work, Run, Sequence[CapabilityResult]],
-    bool | Awaitable[bool],
+    str | Sequence[str] | None | Awaitable[str | Sequence[str] | None],
 ]
 
 
@@ -31,7 +31,9 @@ class GenericTaskWorkflow:
         whether a free-form prompt was fulfilled. Therefore the default is to
         leave the run waiting after execution/delivery evidence is produced.
         A verifier may be supplied by a deployment or a future task-specific
-        workflow; only the literal boolean ``True`` closes the objective.
+        workflow; it must return durable verification record references.  A
+        boolean is deliberately not accepted because it cannot be audited or
+        bound to the current Work/Run.
         """
         self._objective_verifier = objective_verifier
 
@@ -49,27 +51,36 @@ class GenericTaskWorkflow:
         """Return whether any successful invocation delivered durable refs."""
         return any(result.output_artifact_refs or result.evidence_refs for result in results)
 
-    async def _objective_passes(
+    async def _objective_proof_refs(
         self,
         context: WorkflowContext,
         work: Work,
         run: Run,
         results: Sequence[CapabilityResult],
-    ) -> bool:
+    ) -> list[str]:
         verifier = self._objective_verifier
         if verifier is None:
-            return False
+            return []
         try:
-            verdict = verifier(context, work, run, results)
-            if inspect.isawaitable(verdict):
-                verdict = await verdict
-            # Do not coerce arbitrary truthy values into a closed judgment.
-            return verdict is True
+            proof_refs = verifier(context, work, run, results)
+            if inspect.isawaitable(proof_refs):
+                proof_refs = await proof_refs
+            if isinstance(proof_refs, str):
+                refs = [proof_refs]
+            elif isinstance(proof_refs, Sequence) and not isinstance(proof_refs, (bytes, bytearray, str)):
+                refs = list(proof_refs)
+            else:
+                return []
+            if not refs or any(not isinstance(ref, str) or not ref.strip() for ref in refs):
+                return []
+            return [ref.strip() for ref in refs]
         except Exception:
             # An unavailable or broken verifier cannot prove the objective.
-            return False
+            return []
 
     async def run(self, context: WorkflowContext, work: Work, run: Run) -> str:
+        if context.run.status == "succeeded":
+            return "succeeded"
         caps = work.requested_capabilities or ["reason.generate"]
         results: list[CapabilityResult] = []
         for cap in caps:
@@ -93,4 +104,11 @@ class GenericTaskWorkflow:
         # the objective.
         if not self._has_delivery_evidence(results):
             return "waiting"
-        return "succeeded" if await self._objective_passes(context, work, run, results) else "waiting"
+        proof_refs = await self._objective_proof_refs(context, work, run, results)
+        if not proof_refs:
+            return "waiting"
+        try:
+            context.complete_with_proofs(proof_refs)
+        except (ValueError, TypeError):
+            return "waiting"
+        return "succeeded"

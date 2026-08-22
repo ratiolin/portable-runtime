@@ -190,6 +190,8 @@ class WorkflowContext:
         return is_valid_run_transition(self.run.status, to_status)
 
     def transition_run(self, to_status: str, *, current_step: str | None = None) -> Run:
+        if to_status == "succeeded":
+            raise ValueError("terminal succeeded transition requires complete_with_proofs()")
         validate_run_transition(self.run.status, to_status)
         update: dict[str, object] = {"status": to_status}
         if current_step is not None:

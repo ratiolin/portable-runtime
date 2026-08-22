@@ -274,6 +274,22 @@ class IncidentRepairWorkflow:
                     metadata={
                         "work_id": work.id,
                         "run_id": run.id,
+                        "verification_scope": dict(
+                            (work.metadata.get("verification_scope") if isinstance(work.metadata, dict) else {})
+                            or (
+                                work.constraints.get("verification_scope")
+                                if isinstance(work.constraints, dict)
+                                else {}
+                            )
+                            or {}
+                        ),
+                        "work_version": (
+                            (work.metadata.get("work_version") if isinstance(work.metadata, dict) else None)
+                            or (work.metadata.get("task_version") if isinstance(work.metadata, dict) else None)
+                            or (work.metadata.get("version") if isinstance(work.metadata, dict) else None)
+                            or 1
+                        ),
+                        "acceptance_criteria": list(work.acceptance_criteria),
                         "capability": capability,
                         "provider_id": getattr(result, "provider_id", ""),
                         "execution_status": getattr(result, "status", None),
