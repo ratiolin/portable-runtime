@@ -83,3 +83,38 @@ def test_completion_failure_rolls_back_paired_terminal_write() -> None:
         CompletionAuthority(store).authorize(work=work, run=run, verification_refs=[proof.id])
     assert store.get_work(work.id).status == "open"
     assert store.get_run(run.id).status == "running"
+
+
+@pytest.mark.parametrize("backend", ["memory", "sqlite"])
+def test_import_state_rejects_terminal_pair_without_scope_bound_proof(backend: str, tmp_path) -> None:
+    store = InMemoryStateStore() if backend == "memory" else SQLiteStateStore(tmp_path / "terminal-import.db")
+    try:
+        baseline = Work(id="work_import_baseline", title="baseline")
+        store.save_work(baseline)
+        work = Work(id="work_import_terminal", title="terminal", acceptance_criteria=["tests pass"])
+        run = Run(id="run_import_terminal", work_id=work.id, status="succeeded")
+        # The result is passing but intentionally lacks the exact scope,
+        # version and criteria bindings required for terminal completion.
+        proof = EvidenceArtifact(
+            id="proof_import_terminal",
+            kind="closed-verification",
+            metadata={
+                "verification_result": {"result": "pass"},
+                "work_id": work.id,
+                "run_id": run.id,
+            },
+        )
+        run = run.model_copy(update={"metadata": {"_completion_proof_refs": [proof.id]}})
+        with pytest.raises(ValueError, match="terminal proof|scope|criteria"):
+            store.import_state(
+                {
+                    "work": [work.model_dump(mode="json")],
+                    "run": [run.model_dump(mode="json")],
+                    "record": [proof.model_dump(mode="json")],
+                }
+            )
+        assert store.get_work(baseline.id) is not None
+        assert store.get_work(work.id) is None
+    finally:
+        if backend == "sqlite":
+            store.close()

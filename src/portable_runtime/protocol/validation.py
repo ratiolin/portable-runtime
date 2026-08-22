@@ -17,6 +17,7 @@ from collections import defaultdict
 from collections.abc import Iterable
 from typing import cast
 
+from portable_runtime.core.models import Run, Work
 from portable_runtime.records.authorization import (
     AuthorizationGrant,
     CanonicalAuthorizationRequest,
@@ -299,9 +300,14 @@ def _has_structural_authorization_proof(
                 "changeobject": "change.promote",
             }.get(record_type, f"{record_type}.promote")
             capability = str(metadata.get("promotion_capability") or default_capability)
-            actor_ref = metadata.get("actor_ref") or grant.grantee_ref
-            resource_ref = metadata.get("resource_ref") or target_id
-            effect_class = metadata.get("effect_class") or "write-local"
+            actor_ref = metadata.get("actor_ref")
+            resource_ref = metadata.get("resource_ref")
+            effect_class = metadata.get("effect_class")
+            if not all(isinstance(value, str) and value.strip() for value in (actor_ref, resource_ref, effect_class)):
+                # Authorization evidence must describe the actual action that
+                # happened.  Never infer actor/resource/effect from the grant
+                # recipient or the promoted record id.
+                continue
             request = CanonicalAuthorizationRequest(
                 capability=capability,
                 actor_ref=str(actor_ref),
@@ -350,7 +356,12 @@ def _has_effective_verification(
     return False
 
 
-def validate_state_graph(state: dict[str, list[dict[str, object]]], *, strict: bool = True) -> list[str]:
+def validate_state_graph(
+    state: dict[str, list[dict[str, object]]],
+    *,
+    strict: bool = True,
+    enforce_terminal: bool = True,
+) -> list[str]:
     """Return all cross-object invariant violations in a state snapshot.
 
     ``strict=False`` is useful for diagnostics.  Imports and canonical state
@@ -629,9 +640,18 @@ def validate_state_graph(state: dict[str, list[dict[str, object]]], *, strict: b
                         projection_metadata: dict[str, object] = (
                             projection_metadata_value if isinstance(projection_metadata_value, dict) else {}
                         )
-                        actor_ref = projection_metadata.get("actor_ref") or grant.grantee_ref
-                        resource_ref = projection_metadata.get("resource_ref") or identifier
-                        effect_class = projection_metadata.get("effect_class") or "write-local"
+                        actor_ref = projection_metadata.get("actor_ref")
+                        resource_ref = projection_metadata.get("resource_ref")
+                        effect_class = projection_metadata.get("effect_class")
+                        if not all(
+                            isinstance(value, str) and value.strip()
+                            for value in (actor_ref, resource_ref, effect_class)
+                        ):
+                            errors.append(
+                                f"knowledge projection {identifier} authorization ref {ref!r} "
+                                "is missing actual actor/resource/effect"
+                            )
+                            continue
                         capability = projection_metadata.get("promotion_capability") or "knowledge.promote"
                         request = CanonicalAuthorizationRequest(
                             capability=str(capability),
@@ -770,6 +790,56 @@ def validate_state_graph(state: dict[str, list[dict[str, object]]], *, strict: b
         except Exception as exc:
             errors.append(f"supersedes relation {relation.id} revision authorization proof is invalid: {exc}")
 
+    if enforce_terminal:
+        # Terminal Work/Run statuses are a paired semantic transition.  A
+        # provider result or copied metadata flag is never sufficient: each
+        # terminal pair must carry a typed passing proof bound to the exact
+        # Work/Run, scope, version, and acceptance criteria.
+        from portable_runtime.workflows.completion import CompletionAuthority
+
+        works_by_id: dict[str, Work] = {}
+        runs_by_id: dict[str, Run] = {}
+        for raw in normalized["work"]:
+            try:
+                work = Work.model_validate(raw)
+                works_by_id[work.id] = work
+            except Exception as exc:
+                identifier = raw.get("id", "<unknown>") if isinstance(raw, dict) else "<unknown>"
+                errors.append(f"work {identifier}: invalid: {exc}")
+        for raw in normalized["run"]:
+            try:
+                run = Run.model_validate(raw)
+                runs_by_id[run.id] = run
+            except Exception as exc:
+                identifier = raw.get("id", "<unknown>") if isinstance(raw, dict) else "<unknown>"
+                errors.append(f"run {identifier}: invalid: {exc}")
+        for run in runs_by_id.values():
+            if run.status != "succeeded":
+                continue
+            paired_work = works_by_id.get(run.work_id)
+            if paired_work is None:
+                errors.append(f"run {run.id} succeeded without local Work {run.work_id!r}")
+                continue
+            if paired_work.status != "completed":
+                errors.append(f"run {run.id} succeeded without completed Work {paired_work.id!r}")
+            metadata = run.metadata if isinstance(run.metadata, dict) else {}
+            refs = metadata.get("_completion_proof_refs")
+            try:
+                CompletionAuthority.validate_proof_invariant(
+                    paired_work,
+                    run,
+                    refs if isinstance(refs, list) else (),
+                    parsed_records.get,
+                )
+            except ValueError as exc:
+                errors.append(f"run {run.id} terminal proof invalid: {exc}")
+        for work in works_by_id.values():
+            if work.status != "completed":
+                continue
+            paired = [run for run in runs_by_id.values() if run.work_id == work.id and run.status == "succeeded"]
+            if not paired:
+                errors.append(f"work {work.id} completed without a succeeded Run")
+
     # More than one active superseder for a predecessor is ambiguous lineage.
     superseders: dict[str, list[str]] = defaultdict(list)
     lifecycle_by_id = {identifier: rec.lifecycle_status for identifier, rec in parsed_records.items()}
@@ -843,7 +913,13 @@ def assert_valid_candidate_write(
         if not isinstance(raw, dict) or raw.get("id") != value_id
     ]
     candidate[kind].append(value.model_dump(mode="json"))  # type: ignore[attr-defined]
-    assert_valid_state_graph(candidate)
+    # The private terminal capability validates the complete Work/Run pair at
+    # context exit.  Individual saves are allowed to pass through the
+    # transitional half of that paired commit, but ordinary terminal writes
+    # are rejected by the stores before reaching this function.
+    errors = validate_state_graph(candidate, enforce_terminal=False)
+    if errors:
+        raise ValueError("state graph validation failed: " + "; ".join(errors))
 
 
 def validate_record_write(record: BaseRecord, existing: BaseRecord | None = None) -> list[str]:

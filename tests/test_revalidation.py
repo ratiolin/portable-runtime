@@ -189,7 +189,7 @@ def test_revision_create_and_apply_and_supersede():
         subject_version_refs=[rev.id],
     )
     store.save_authorization(grant)
-    apply_revision(rev, store=store, authorization_ref=grant.id)
+    apply_revision(rev, store=store, authorization_ref=grant.id, actor_ref="agent:revision", resource_ref=old.id)
     assert rev.lifecycle_status == "applied"
     # persisted
     fetched = store.get_record(rev.id)
@@ -230,7 +230,7 @@ def test_revision_no_silent_overwrite():
         subject_version_refs=[rev.id],
     )
     store.save_authorization(grant)
-    apply_revision(rev, store=store, authorization_ref=grant.id)
+    apply_revision(rev, store=store, authorization_ref=grant.id, actor_ref="agent:revision", resource_ref=old.id)
     supersede(store, old.id, new.id, revision=rev)
     # both still present - old retained, not silently overwritten
     assert len(store.list_records()) >= 3

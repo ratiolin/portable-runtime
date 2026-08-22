@@ -8,8 +8,7 @@ whose closed verification result is explicitly ``pass``.
 
 from __future__ import annotations
 
-from collections.abc import Iterable
-from contextlib import nullcontext
+from collections.abc import Callable, Iterable
 from typing import Any
 
 from portable_runtime.core.models import Run, Work
@@ -40,42 +39,56 @@ class CompletionAuthority:
         metadata = getattr(record, "metadata", None)
         return metadata if isinstance(metadata, dict) else None
 
-    def _passing_proof(self, ref: str, *, work: Work, run: Run) -> bool:
-        record = self.store.get_record(ref)
-        if record is None:
-            return False
-        metadata = self._proof_metadata(record)
-        if metadata is None:
-            return False
-        closed = metadata.get("verification_result")
-        if not isinstance(closed, dict):
-            return False
-        if str(closed.get("result", "")).lower() != "pass":
-            return False
-        # A proof must be explicitly typed; arbitrary metadata flags are not
-        # accepted as terminal evidence.
-        if getattr(record, "record_type", None) != "EvidenceArtifact":
-            return False
-        if getattr(record, "kind", None) not in {
-            "closed-verification",
-            "verification-result",
-            "task-objective-proof",
-        }:
-            return False
-        # A terminal proof is a scoped semantic claim, not a free-standing
-        # provider result.  Every binding is required even when its expected
-        # value is empty/default so a proof cannot be copied between runs.
-        if metadata.get("work_id") != work.id or metadata.get("run_id") != run.id:
-            return False
-        proof_scope = metadata.get("verification_scope", metadata.get("scope"))
-        if not isinstance(proof_scope, dict) or proof_scope != self._expected_scope(work):
-            return False
-        proof_version = metadata.get("work_version", metadata.get("task_version", metadata.get("version")))
-        if proof_version != self._expected_version(work):
-            return False
-        criteria = metadata.get("acceptance_criteria", metadata.get("criteria"))
+    @staticmethod
+    def validate_proof_invariant(
+        work: Work,
+        run: Run,
+        refs: Iterable[str],
+        record_lookup: Callable[[str], object | None],
+    ) -> None:
+        """Validate the complete terminal-proof contract for a Work/Run pair.
+
+        This is deliberately usable by stores while they hold their commit
+        lock.  A terminal status is only valid when every proof is a typed,
+        passing EvidenceArtifact bound to the exact Work, Run, scope, version,
+        and acceptance criteria.  No provider status or metadata flag is
+        accepted as a substitute.
+        """
+        normalized = [str(ref) for ref in refs if str(ref).strip()]
+        if not normalized:
+            raise ValueError("terminal completion requires verification proof refs")
+        if len(set(normalized)) != len(normalized):
+            raise ValueError("terminal completion proof refs must be unique")
+        if work.id != run.work_id:
+            raise ValueError("terminal completion work/run binding mismatch")
+        expected_scope = CompletionAuthority._expected_scope(work)
+        expected_version = CompletionAuthority._expected_version(work)
         expected_criteria = list(work.acceptance_criteria)
-        return isinstance(criteria, list) and criteria == expected_criteria
+        for ref in normalized:
+            record = record_lookup(ref)
+            metadata = CompletionAuthority._proof_metadata(record)
+            if metadata is None:
+                raise ValueError("terminal completion requires explicit passing verification proofs")
+            closed = metadata.get("verification_result")
+            if not isinstance(closed, dict) or str(closed.get("result", "")).lower() != "pass":
+                raise ValueError("terminal completion requires explicit passing verification proofs")
+            if getattr(record, "record_type", None) != "EvidenceArtifact" or getattr(record, "kind", None) not in {
+                "closed-verification",
+                "verification-result",
+                "task-objective-proof",
+            }:
+                raise ValueError("terminal completion requires typed verification EvidenceArtifact proofs")
+            if metadata.get("work_id") != work.id or metadata.get("run_id") != run.id:
+                raise ValueError("terminal completion proof is not bound to this Work/Run")
+            proof_scope = metadata.get("verification_scope", metadata.get("scope"))
+            if not isinstance(proof_scope, dict) or proof_scope != expected_scope:
+                raise ValueError("terminal completion proof scope does not match Work scope")
+            proof_version = metadata.get("work_version", metadata.get("task_version", metadata.get("version")))
+            if proof_version != expected_version:
+                raise ValueError("terminal completion proof version does not match Work version")
+            criteria = metadata.get("acceptance_criteria", metadata.get("criteria"))
+            if not isinstance(criteria, list) or criteria != expected_criteria:
+                raise ValueError("terminal completion proof acceptance criteria do not match Work")
 
     def _already_consumed(self, refs: set[str], run: Run) -> bool:
         metadata = run.metadata if isinstance(run.metadata, dict) else {}
@@ -122,8 +135,6 @@ class CompletionAuthority:
         work = current_work
         if self._already_consumed(set(refs), run):
             raise ValueError("terminal completion proof refs have already been consumed")
-        if any(not self._passing_proof(ref, work=work, run=run) for ref in refs):
-            raise ValueError("terminal completion requires explicit passing verification proofs")
         validate_run_transition(run.status, "succeeded")
         metadata = dict(run.metadata) if isinstance(run.metadata, dict) else {}
         metadata["_completion_proof_refs"] = refs
@@ -146,7 +157,9 @@ class CompletionAuthority:
         # same store transaction so a crash/failure cannot leave a terminal
         # Run without its paired completed Work (or vice versa).
         terminal_capability = getattr(self.store, "terminal_completion", None)
-        capability_context = terminal_capability(refs) if callable(terminal_capability) else nullcontext()
+        if not callable(terminal_capability):
+            raise ValueError("terminal completion requires the store terminal capability")
+        capability_context = terminal_capability(refs, work=updated_work, run=updated)
         with self.store.transaction(), capability_context:
             self.store.save_work(updated_work)
             self.store.save_run(updated)

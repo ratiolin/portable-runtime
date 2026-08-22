@@ -79,7 +79,13 @@ def test_official_policy_accepts_typed_closed_verification_and_version_bound_gra
         id="policy_verified",
         lifecycle_status="official",
         version=1,
-        metadata={"previous_lifecycle_status": "candidate", "verification_refs": ["verification_closed"]},
+        metadata={
+            "previous_lifecycle_status": "candidate",
+            "verification_refs": ["verification_closed"],
+            "actor_ref": "runtime",
+            "resource_ref": "policy_verified",
+            "effect_class": "write-local",
+        },
     )
     verification = EvidenceArtifact(
         id="verification_closed",

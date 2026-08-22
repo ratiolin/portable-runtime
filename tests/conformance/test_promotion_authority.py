@@ -41,6 +41,36 @@ def test_policy_promotion_rejects_grant_for_unrelated_actor() -> None:
     assert any("structurally bound AuthorizationGrant" in error for error in errors)
 
 
+def test_policy_promotion_rejects_missing_actual_action_facts() -> None:
+    policy = PolicyRecord(
+        id="policy_missing_action_facts",
+        lifecycle_status="official",
+        metadata={
+            "previous_lifecycle_status": "candidate",
+            "verification_refs": ["verification_missing_action_facts"],
+        },
+    )
+    verification = EvidenceArtifact(
+        id="verification_missing_action_facts",
+        kind="closed-verification",
+        metadata={"verification_result": {"result": "pass"}},
+    )
+    grant = create_grant_for_approval(
+        principal_ref="human:owner",
+        grantee_ref="agent:promoter",
+        allowed_capabilities=["policy.promote"],
+        subject_version_refs=[f"{policy.id}:v{policy.version}"],
+    )
+    errors = validate_state_graph(
+        {
+            "record": [policy.model_dump(mode="json"), verification.model_dump(mode="json")],
+            "authorization": [grant.model_dump(mode="json")],
+        },
+        strict=False,
+    )
+    assert any("structurally bound AuthorizationGrant" in error for error in errors)
+
+
 def test_knowledge_projection_promotion_requires_canonical_request_binding() -> None:
     assertion = Assertion(id="assertion_projection_auth", statement="claim", lifecycle_status="current")
     judgment = Assertion(id="judgment_projection_auth", statement="judgment", lifecycle_status="current")

@@ -57,3 +57,22 @@ def test_revision_apply_rejects_mismatched_actual_actor() -> None:
     store.save_authorization(grant)
     with pytest.raises(ValueError, match="authorization rejected"):
         apply_revision(revision, store=store, authorization_ref=grant.id, actor_ref="agent:other")
+
+
+def test_revision_apply_rejects_missing_actual_actor() -> None:
+    store = InMemoryStateStore()
+    old = Assertion(id="assert_revision_missing_actor_old", statement="old", lifecycle_status="current", epistemic_status="supported")
+    new = Assertion(id="assert_revision_missing_actor_new", statement="new", lifecycle_status="draft")
+    store.save_record(old)
+    store.save_record(new)
+    revision = create_revision(old.id, new.id)
+    store.save_record(revision)
+    grant = create_grant_for_approval(
+        principal_ref="human:owner",
+        grantee_ref="agent:executor",
+        allowed_capabilities=["revision.apply"],
+        subject_version_refs=[revision.id],
+    )
+    store.save_authorization(grant)
+    with pytest.raises(ValueError, match="explicit actual actor_ref"):
+        apply_revision(revision, store=store, authorization_ref=grant.id, resource_ref=old.id)
