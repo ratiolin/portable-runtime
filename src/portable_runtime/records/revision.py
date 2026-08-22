@@ -108,6 +108,19 @@ def apply_revision(
         for field in ("version", "subject_ref", "revises_ref", "produces_ref", "supersedes_ref")
     ):
         raise ValueError("apply_revision revision endpoints/version do not match canonical state")
+
+    # Applying is a historical transition, not a read-time authorization
+    # request.  Once the canonical Revision is applied, retries must return
+    # the same durable fact without rechecking a grant that may have expired
+    # or been revoked and without minting another AuthorizationUse/version.
+    if stored_revision.lifecycle_status == "applied":
+        input_revision.lifecycle_status = stored_revision.lifecycle_status
+        input_revision.version = stored_revision.version
+        input_revision.metadata = dict(stored_revision.metadata)
+        return stored_revision
+    if stored_revision.lifecycle_status not in {"proposed", "authorized"}:
+        raise ValueError(f"cannot apply revision from status {stored_revision.lifecycle_status!r}")
+
     grant_ref = authorization_ref
     grant_id = grant_ref.id if isinstance(grant_ref, AuthorizationGrant) else grant_ref if isinstance(grant_ref, str) else None
     grant = store.get_authorization(grant_id) if isinstance(grant_id, str) and grant_id else None
@@ -174,8 +187,6 @@ def apply_revision(
         targets = ["authorized", "applied"]
     elif cur == "authorized":
         targets = ["applied"]
-    elif cur == "applied":
-        targets = []
     else:
         raise ValueError(f"cannot apply revision from status {cur!r}")
     for nxt in targets:
