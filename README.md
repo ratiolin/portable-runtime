@@ -8,17 +8,15 @@ Portable runtime for durable **Work / Run** orchestration with pluggable **Provi
 
 ## Strict enforcement status
 
-The RealityBoundary and protocol-convergence baseline have executable local evidence. Semantic-plane authority hardening remains an active workstream; the status below records only verified baseline checks and must not be read as closure of the remaining terminalization, graph-write, revision-authorization or HTTP-ingress review items.
+The RealityBoundary, protocol-convergence, semantic-authority, import-transition, and Revision-carrier hardening described by the current P0/P1 closure design have executable local evidence. The status below records only checks actually run against this tree.
 
 - `uv run ruff check .` and `uv run mypy src` — both clean;
-- `uv run pytest -q` — `274 passed` (two existing collection/deprecation warnings only);
-- strict-conformance — `61 passed`: E001–E023, S001–S006, semantic-contract, authorization-contract, P1 semantic, P2 protocol, routing and reliability gates;
+- `uv run pytest -q` — `337 passed` (two existing collection/deprecation warnings only);
+- strict-conformance — `77 passed`: E001–E023, S001–S006, semantic-contract, authorization-contract, semantic-authority closure, Revision authority, P1 semantic, P2 protocol, routing and reliability gates;
 - canonical `KnowledgeProjection` state is bundle-portable; legacy `KnowledgeItem` remains read-compatible but is not a new workflow write target;
 - HTTP mutating control routes are loopback-only and explicitly not an authenticated multi-user boundary;
 - the CI `strict-conformance` job runs the same focused suite and is a prerequisite for SonarCloud analysis;
-- the prior remote proof for the already-pushed baseline remains green in [main CI run 32442371727](https://github.com/ratiolin/portable-runtime/actions/runs/32442371727); the current cleanup sequence is green in [main CI run 32449728188](https://github.com/ratiolin/portable-runtime/actions/runs/32449728188), including SonarCloud new-code coverage at `80.4%`.
-
-The baseline link above is historical evidence; run `32449728188` is the authoritative post-push proof for this cleanup sequence.
+- exact-head CI and SonarCloud results are checked after each main push; the badge above is the current remote status surface.
 
 The control-plane HTTP API is local-only and is not an authenticated multi-user boundary. Mutating governance routes (state import, provider enable/disable/reload, capability execution and reopen) reject non-loopback callers; remote deployments must place an authenticated, authorized deployment boundary in front of the process.
 
