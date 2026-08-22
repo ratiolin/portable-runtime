@@ -15,8 +15,15 @@ from __future__ import annotations
 import re
 from collections import defaultdict
 from collections.abc import Iterable
+from typing import cast
 
-from portable_runtime.records.authorization import AuthorizationGrant, validate_grant
+from portable_runtime.records.authorization import (
+    AuthorizationGrant,
+    CanonicalAuthorizationRequest,
+    EffectClass,
+    is_authorized_for,
+    validate_grant,
+)
 from portable_runtime.records.lifecycle import validate_lifecycle_transition
 from portable_runtime.records.models import BaseRecord
 from portable_runtime.records.relations import RecordRelation, RelationType, validate_relation
@@ -537,10 +544,39 @@ def validate_state_graph(state: dict[str, list[dict[str, object]]], *, strict: b
     # scope-version and authorization ref must resolve to an authoritative
     # local object before an official projection can be committed.
     local_ids = set(ids)
+    projection_ref_types: dict[str, set[str]] = {
+        "current_assertion_refs": {"Assertion"},
+        "evidence_summary_refs": {"EvidenceArtifact", "Observation", "evidence"},
+        "epistemic_judgment_refs": {"Assertion"},
+        "scope_version_refs": {"Revision", "ChangeObject"},
+    }
     for raw in normalized["knowledge_projection"]:
-        if not isinstance(raw, dict) or raw.get("lifecycle_status") != "official":
+        if not isinstance(raw, dict):
             continue
         identifier = str(raw.get("id", "<unknown>"))
+        for field, allowed_types in projection_ref_types.items():
+            refs = raw.get(field)
+            if not isinstance(refs, list):
+                continue
+            for ref in refs:
+                if not isinstance(ref, str) or ref not in local_ids:
+                    continue
+                actual_kind = _kind_for_identifier(ref, state)
+                actual_type = _record_type_for(ref, state) if actual_kind == "record" else actual_kind
+                if actual_type not in allowed_types:
+                    errors.append(
+                        f"knowledge projection {identifier} {field} ref {ref!r} has type "
+                        f"{actual_type!r}, expected one of {sorted(allowed_types)}"
+                    )
+        auth_refs = raw.get("authorization_refs")
+        if isinstance(auth_refs, list):
+            for ref in auth_refs:
+                if isinstance(ref, str) and ref in local_ids and _kind_for_identifier(ref, state) != "authorization":
+                    errors.append(
+                        f"knowledge projection {identifier} authorization_refs ref {ref!r} must target authorization"
+                    )
+        if raw.get("lifecycle_status") != "official":
+            continue
         for field in (
             "current_assertion_refs",
             "evidence_summary_refs",
@@ -608,6 +644,32 @@ def validate_state_graph(state: dict[str, list[dict[str, object]]], *, strict: b
                     expected_versions = {record.id, f"{record.id}:v{record.version}"}
                     if not expected_versions.intersection(grant.subject_version_refs):
                         errors.append(f"revision {record.id} authorization does not bind this revision version")
+                    revision_metadata = record.metadata if isinstance(record.metadata, dict) else {}
+                    actor_ref = revision_metadata.get("actor_ref")
+                    resource_ref = revision_metadata.get("resource_ref") or getattr(record, "subject_ref", "")
+                    effect_class = revision_metadata.get("effect_class")
+                    if not isinstance(actor_ref, str) or not actor_ref.strip():
+                        errors.append(f"revision {record.id} authorization missing actual actor_ref")
+                    if not isinstance(resource_ref, str) or not resource_ref.strip():
+                        errors.append(f"revision {record.id} authorization missing resource_ref")
+                    if not isinstance(effect_class, str) or not effect_class.strip():
+                        errors.append(f"revision {record.id} authorization missing effect_class")
+                    if (
+                        isinstance(actor_ref, str)
+                        and isinstance(resource_ref, str)
+                        and isinstance(effect_class, str)
+                    ):
+                        request = CanonicalAuthorizationRequest(
+                            capability="revision.apply",
+                            actor_ref=actor_ref,
+                            resource_ref=resource_ref,
+                            subject_version_refs=sorted(expected_versions),
+                            effect_class=cast(EffectClass, effect_class),
+                        )
+                        if not is_authorized_for(request, grant):
+                            errors.append(
+                                f"revision {record.id} authorization does not authorize actor/resource/effect"
+                            )
                 except Exception as exc:
                     errors.append(f"revision {record.id} authorization is invalid: {exc}")
         old_ref = getattr(record, "revises_ref", None)
@@ -622,6 +684,55 @@ def validate_state_graph(state: dict[str, list[dict[str, object]]], *, strict: b
             errors.append(f"revision {record.id} produces_ref {new_ref!r} is not a local record")
         if old_record is not None and new_record is not None and old_record.record_type != new_record.record_type:
             errors.append(f"revision {record.id} old/new record types are incompatible")
+
+    # A supersedes edge is an effect of an applied, authorized Revision.  A
+    # bare relation is not sufficient provenance: without the typed revision
+    # proof, the graph cannot establish who authorized the replacement or
+    # which endpoints were actually changed.
+    for relation in parsed_relations:
+        if relation.relation_type != "supersedes":
+            continue
+        metadata = relation.metadata if isinstance(relation.metadata, dict) else {}
+        revision_ref = metadata.get("revision_ref")
+        if not isinstance(revision_ref, str) or not revision_ref.strip():
+            errors.append(f"supersedes relation {relation.id} requires revision_ref")
+            continue
+        revision = parsed_records.get(revision_ref)
+        if not isinstance(revision, BaseRecord) or revision.record_type != "Revision":
+            errors.append(f"supersedes relation {relation.id} revision_ref {revision_ref!r} must target Revision")
+            continue
+        if revision.lifecycle_status not in {"applied", "verified", "accepted"}:
+            errors.append(f"supersedes relation {relation.id} requires an applied authorized Revision")
+        if (
+            getattr(revision, "produces_ref", None) != relation.subject_ref
+            or getattr(revision, "revises_ref", None) != relation.object_ref
+        ):
+            errors.append(f"supersedes relation {relation.id} endpoints do not match revision {revision.id}")
+        revision_metadata = revision.metadata if isinstance(revision.metadata, dict) else {}
+        auth_ref = revision_metadata.get("authorization_ref")
+        actor_ref = revision_metadata.get("actor_ref")
+        resource_ref = revision_metadata.get("resource_ref") or getattr(revision, "subject_ref", "")
+        effect_class = revision_metadata.get("effect_class")
+        grant_raw = next(
+            (item for item in normalized["authorization"] if isinstance(item, dict) and item.get("id") == auth_ref),
+            None,
+        )
+        if not isinstance(grant_raw, dict):
+            errors.append(f"supersedes relation {relation.id} revision authorization proof not found")
+            continue
+        try:
+            grant = AuthorizationGrant.model_validate(grant_raw)
+            request = CanonicalAuthorizationRequest(
+                capability="revision.apply",
+                actor_ref=actor_ref if isinstance(actor_ref, str) else "",
+                resource_ref=resource_ref if isinstance(resource_ref, str) else "",
+                subject_version_refs=[revision.id, f"{revision.id}:v{revision.version}"],
+                effect_class=cast(EffectClass, effect_class if isinstance(effect_class, str) else ""),
+            )
+            if validate_grant(grant) or not is_authorized_for(request, grant):
+                errors.append(f"supersedes relation {relation.id} revision authorization proof is invalid")
+        except Exception as exc:
+            errors.append(f"supersedes relation {relation.id} revision authorization proof is invalid: {exc}")
 
     # More than one active superseder for a predecessor is ambiguous lineage.
     superseders: dict[str, list[str]] = defaultdict(list)

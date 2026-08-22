@@ -9,6 +9,7 @@ whose closed verification result is explicitly ``pass``.
 from __future__ import annotations
 
 from collections.abc import Iterable
+from contextlib import nullcontext
 from typing import Any
 
 from portable_runtime.core.models import Run, Work
@@ -105,8 +106,20 @@ class CompletionAuthority:
             raise ValueError("terminal completion proof refs must be unique")
         if work.id != run.work_id:
             raise ValueError("terminal completion work/run binding mismatch")
-        if run.status == "succeeded":
+        current_work = self.store.get_work(work.id) or work
+        current_run = self.store.get_run(run.id) or run
+        if current_work.id != work.id or current_run.work_id != work.id:
+            raise ValueError("terminal completion work/run binding mismatch")
+        if current_run.status == "succeeded":
+            existing = current_run.metadata if isinstance(current_run.metadata, dict) else {}
+            existing_refs = existing.get("_completion_proof_refs", [])
+            if current_work.status == "completed" and list(existing_refs) == refs:
+                return current_run
             raise ValueError("terminal completion cannot reuse a succeeded run")
+        if current_work.status == "completed":
+            raise ValueError("completed work has no reusable terminal run")
+        run = current_run
+        work = current_work
         if self._already_consumed(set(refs), run):
             raise ValueError("terminal completion proof refs have already been consumed")
         if any(not self._passing_proof(ref, work=work, run=run) for ref in refs):
@@ -120,7 +133,23 @@ class CompletionAuthority:
         from portable_runtime.core.models import utcnow
 
         updated = run.model_copy(update={"status": "succeeded", "ended_at": utcnow(), "metadata": metadata})
-        self.store.save_run(updated)
+        work_metadata = dict(work.metadata) if isinstance(work.metadata, dict) else {}
+        work_metadata["_completion_proof_refs"] = list(refs)
+        work_metadata["completion_verification_scope"] = self._expected_scope(work)
+        work_metadata["completion_work_version"] = self._expected_version(work)
+        work_metadata["completion_acceptance_criteria"] = list(work.acceptance_criteria)
+        updated_work = work.model_copy(
+            update={"status": "completed", "updated_at": utcnow(), "metadata": work_metadata}
+        )
+        # The store's private terminal capability makes direct succeeded or
+        # completed writes impossible.  Both records are written under the
+        # same store transaction so a crash/failure cannot leave a terminal
+        # Run without its paired completed Work (or vice versa).
+        terminal_capability = getattr(self.store, "terminal_completion", None)
+        capability_context = terminal_capability() if callable(terminal_capability) else nullcontext()
+        with self.store.transaction(), capability_context:
+            self.store.save_work(updated_work)
+            self.store.save_run(updated)
         return updated
 
 

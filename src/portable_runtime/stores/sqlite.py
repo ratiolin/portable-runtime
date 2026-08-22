@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import sqlite3
 import threading
+from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, cast
@@ -144,6 +145,9 @@ class SQLiteStateStore:
         path.parent.mkdir(parents=True, exist_ok=True)
         self.path = _safe_db_path(path)
         self._lock = threading.RLock()
+        # A private in-process capability opened only by CompletionAuthority.
+        # Direct terminal status writes must never be enough to close work.
+        self._terminal_completion_depth = 0
         self._connection = sqlite3.connect(_safe_db_path(path), check_same_thread=False, isolation_level=None)  # NOSONAR  # noqa: E501
         self._connection.row_factory = sqlite3.Row
         with self._lock:
@@ -184,8 +188,42 @@ class SQLiteStateStore:
 
     def _save_checked(self, kind: str, value: Any) -> None:
         """Run every normal state mutation through the graph commit gate."""
-        self._validate_candidate_write(kind, value)
-        self._save(kind, value)
+        self._atomic_graph_save(kind, value)
+
+    def _reject_unproven_terminal_write(self, kind: str, value: Any) -> None:
+        status = getattr(value, "status", None)
+        terminal = (kind == "run" and status == "succeeded") or (kind == "work" and status == "completed")
+        if terminal and self._terminal_completion_depth <= 0:
+            raise ValueError("terminal completion requires CompletionAuthority proof commit")
+
+    def _atomic_graph_save(self, kind: str, value: Any, validator: Any | None = None) -> None:
+        """Validate the current graph and persist its delta in one transaction."""
+        with self._lock:
+            owns_transaction = not self._connection.in_transaction
+            if owns_transaction:
+                self._connection.execute("BEGIN IMMEDIATE")
+            try:
+                if validator is not None:
+                    validator()
+                self._reject_unproven_terminal_write(kind, value)
+                self._validate_candidate_write(kind, value)
+                self._save(kind, value)
+                if owns_transaction:
+                    self._connection.execute("COMMIT")
+            except Exception:
+                if owns_transaction:
+                    self._rollback(self._connection.cursor())
+                raise
+
+    @contextmanager
+    def terminal_completion(self):
+        """Open the private capability used by CompletionAuthority only."""
+        with self._lock:
+            self._terminal_completion_depth += 1
+            try:
+                yield self
+            finally:
+                self._terminal_completion_depth -= 1
 
     def _validate_candidate_write(self, kind: str, value: Any) -> None:
         """Validate semantic writes against the complete current graph."""
@@ -312,8 +350,7 @@ class SQLiteStateStore:
         return [value for value in self._list("knowledge", KnowledgeItem) if status is None or value.status == status]
 
     def save_knowledge_projection(self, value: KnowledgeProjection) -> None:
-        self._validate_candidate_write("knowledge_projection", value)
-        self._save("knowledge_projection", value)
+        self._atomic_graph_save("knowledge_projection", value)
 
     def get_knowledge_projection(self, projection_id: str) -> KnowledgeProjection | None:
         return self._get("knowledge_projection", KnowledgeProjection, projection_id)
@@ -408,6 +445,7 @@ class SQLiteStateStore:
                     return False
                 # Validate against the same locked snapshot that the
                 # conditional update will mutate.
+                self._reject_unproven_terminal_write(kind, new_value)
                 self._validate_candidate_write(kind, new_value)
                 cur.execute(
                     self._CAS_UPDATE_SQL,
@@ -674,11 +712,13 @@ class SQLiteStateStore:
         except Exception:
             pass
         from portable_runtime.records.validation import validate_canonical_write, validate_record
-        errs = [*validate_record(value), *validate_canonical_write(value)]
-        if errs:
-            raise ValueError("; ".join(errs))
-        self._validate_candidate_write("record", value)
-        self._save("record", value)
+
+        def validate() -> None:
+            errs = [*validate_record(value), *validate_canonical_write(value)]
+            if errs:
+                raise ValueError("; ".join(errs))
+
+        self._atomic_graph_save("record", value, validate)
 
     def get_record(self, record_id: str) -> BaseRecord | None:
         return self._get("record", BaseRecord, record_id)
@@ -689,22 +729,24 @@ class SQLiteStateStore:
 
     def save_relation(self, value: RecordRelation) -> None:
         from portable_runtime.records.relations import validate_relation
-        errs = validate_relation(value)
-        if errs:
-            raise ValueError("; ".join(errs))
-        self._validate_candidate_write("relation", value)
-        self._save("relation", value)
+        def validate() -> None:
+            errs = validate_relation(value)
+            if errs:
+                raise ValueError("; ".join(errs))
+
+        self._atomic_graph_save("relation", value, validate)
 
     def get_relation(self, relation_id: str) -> RecordRelation | None:
         return self._get("relation", RecordRelation, relation_id)
     def save_authorization(self, value: Any) -> None:
         from portable_runtime.records.authorization import AuthorizationGrant, validate_grant
-        if isinstance(value, AuthorizationGrant):
-            errs = validate_grant(value)
-            if errs:
-                raise ValueError("; ".join(errs))
-        self._validate_candidate_write("authorization", value)
-        self._save("authorization", value)
+        def validate() -> None:
+            if isinstance(value, AuthorizationGrant):
+                errs = validate_grant(value)
+                if errs:
+                    raise ValueError("; ".join(errs))
+
+        self._atomic_graph_save("authorization", value, validate)
     def get_authorization(self, auth_id: str) -> Any | None:
         from portable_runtime.records.authorization import AuthorizationGrant
         return self._get("authorization", AuthorizationGrant, auth_id)

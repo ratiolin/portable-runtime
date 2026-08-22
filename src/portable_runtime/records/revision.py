@@ -14,12 +14,13 @@ from __future__ import annotations
 
 from contextlib import nullcontext as _nullcontext
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, cast
 
 from portable_runtime.core.models import new_id
 from portable_runtime.records.authorization import (
     AuthorizationGrant,
     CanonicalAuthorizationRequest,
+    EffectClass,
     is_authorized_for,
     validate_grant,
 )
@@ -74,6 +75,9 @@ def apply_revision(
     store: Any | None = None,
     *,
     authorization_ref: str | AuthorizationGrant | None = None,
+    actor_ref: str | None = None,
+    resource_ref: str | None = None,
+    effect_class: str = "write-local",
 ) -> RevisionRecord:
     """Advance a revision toward ``applied`` with an explicit grant proof.
 
@@ -108,19 +112,39 @@ def apply_revision(
         raise ValueError("apply_revision requires an existing AuthorizationGrant")
     grant_errors = validate_grant(grant)
     expected_versions = [revision.id, f"{revision.id}:v{revision.version}"]
+    metadata = stored_revision.metadata if isinstance(stored_revision.metadata, dict) else {}
+    # New callers must provide the actor that actually performed the apply.
+    # A grant is evidence of authorization, never the source of actor
+    # identity.  The fallback is retained only for pre-actor metadata records
+    # and is marked as legacy so migrations can make the identity explicit.
+    actual_actor = actor_ref or metadata.get("actor_ref")
+    legacy_actor = False
+    if not isinstance(actual_actor, str) or not actual_actor.strip():
+        actual_actor = grant.grantee_ref
+        legacy_actor = True
+    actual_resource = resource_ref or metadata.get("resource_ref") or stored_revision.subject_ref
+    if not isinstance(actual_resource, str) or not actual_resource.strip():
+        raise ValueError("apply_revision requires a non-empty resource_ref")
     request = CanonicalAuthorizationRequest(
         capability="revision.apply",
-        actor_ref=grant.grantee_ref,
-        resource_ref=stored_revision.subject_ref,
+        actor_ref=actual_actor,
+        resource_ref=actual_resource,
         subject_version_refs=expected_versions,
-        effect_class="write-local",
+        effect_class=cast(EffectClass, effect_class),
     )
     if grant_errors or not is_authorized_for(request, grant) or not set(expected_versions).intersection(grant.subject_version_refs):
         detail = "; ".join(grant_errors) if grant_errors else "grant does not bind this revision version"
         raise ValueError(f"revision authorization rejected: {detail}")
-    revision = stored_revision.model_copy(
-        update={"metadata": {**stored_revision.metadata, "authorization_ref": grant_id}}
-    )
+    revision_metadata = {
+        **stored_revision.metadata,
+        "authorization_ref": grant_id,
+        "actor_ref": actual_actor,
+        "resource_ref": actual_resource,
+        "effect_class": effect_class,
+    }
+    if legacy_actor:
+        revision_metadata["legacy_actor_identity"] = "grant-grantee-compat"
+    revision = stored_revision.model_copy(update={"metadata": revision_metadata})
     cur = revision.lifecycle_status
     targets: list[str] = []
     if cur == "proposed":
@@ -200,12 +224,21 @@ def supersede(
             raise ValueError("supersede authorization proof not found")
         grant_errors = validate_grant(grant)
         expected_versions = [revision_record.id, f"{revision_record.id}:v{revision_record.version}"]
+        revision_metadata = revision_record.metadata if isinstance(revision_record.metadata, dict) else {}
+        actor_ref = revision_metadata.get("actor_ref")
+        if not isinstance(actor_ref, str) or not actor_ref.strip():
+            # Legacy revisions are still readable, but their actor identity is
+            # explicitly treated as compatibility evidence rather than being
+            # silently re-derived for newly authored revisions.
+            actor_ref = grant.grantee_ref
+        resource_ref = revision_metadata.get("resource_ref") or revision_record.subject_ref
+        effect_class = revision_metadata.get("effect_class") or "write-local"
         request = CanonicalAuthorizationRequest(
             capability="revision.apply",
-            actor_ref=grant.grantee_ref,
-            resource_ref=revision_record.subject_ref,
+            actor_ref=actor_ref,
+            resource_ref=resource_ref,
             subject_version_refs=expected_versions,
-            effect_class="write-local",
+            effect_class=cast(EffectClass, effect_class),
         )
         if grant_errors or not is_authorized_for(request, grant) or not set(expected_versions).intersection(grant.subject_version_refs):
             raise ValueError("supersede authorization proof is invalid")
