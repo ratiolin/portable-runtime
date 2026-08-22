@@ -8,6 +8,40 @@ from portable_runtime.records.knowledge import KnowledgeProjection
 from portable_runtime.records.models import Assertion, ChangeObjectRecord, EvidenceArtifact, PolicyRecord
 
 
+def test_policy_promotion_capability_cannot_be_selected_by_metadata() -> None:
+    policy = PolicyRecord(
+        id="policy_capability_fixed",
+        lifecycle_status="official",
+        metadata={
+            "previous_lifecycle_status": "candidate",
+            "verification_refs": ["verification_policy_capability_fixed"],
+            "actor_ref": "agent:promoter",
+            "resource_ref": "policy_capability_fixed",
+            "effect_class": "write-local",
+            "promotion_capability": "change.promote",
+        },
+    )
+    verification = EvidenceArtifact(
+        id="verification_policy_capability_fixed",
+        kind="closed-verification",
+        metadata={"verification_result": {"result": "pass"}},
+    )
+    grant = create_grant_for_approval(
+        principal_ref="human:owner",
+        grantee_ref="agent:promoter",
+        allowed_capabilities=["policy.promote"],
+        subject_version_refs=[f"{policy.id}:v{policy.version}"],
+    )
+    errors = validate_state_graph(
+        {
+            "record": [policy.model_dump(mode="json"), verification.model_dump(mode="json")],
+            "authorization": [grant.model_dump(mode="json")],
+        },
+        strict=False,
+    )
+    assert not any("structurally bound AuthorizationGrant" in error for error in errors)
+
+
 def test_policy_promotion_rejects_grant_for_unrelated_actor() -> None:
     policy = PolicyRecord(
         id="policy_actor_bound",

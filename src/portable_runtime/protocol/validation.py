@@ -20,6 +20,7 @@ from typing import cast
 from portable_runtime.core.models import Run, Work
 from portable_runtime.records.authorization import (
     AuthorizationGrant,
+    AuthorizationUse,
     CanonicalAuthorizationRequest,
     EffectClass,
     is_authorized_for,
@@ -48,6 +49,13 @@ _KNOWN_KINDS = {
     "record",
     "relation",
     "authorization",
+    "authorization_use",
+}
+
+_PROMOTION_CAPABILITIES = {
+    "policy": "policy.promote",
+    "changeobject": "change.promote",
+    "knowledgeprojection": "knowledge.promote",
 }
 
 _EXTERNAL_REF_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_.-]*:[^\s]+$")
@@ -176,6 +184,8 @@ def _iter_ref_edges(kind: str, raw: dict[str, object]) -> Iterable[tuple[str, st
             yield from one("reopen_assessment_id", metadata.get("reopen_assessment_id"))
     elif kind == "authorization":
         yield from one("source_decision_ref", raw.get("source_decision_ref"))
+    elif kind == "authorization_use":
+        yield from one("authorization_ref", raw.get("authorization_ref"))
 
 
 def _target_shape_ok(
@@ -290,16 +300,13 @@ def _has_structural_authorization_proof(
             continue
         try:
             grant = AuthorizationGrant.model_validate(raw)
-            if validate_grant(grant):
-                continue
+            grant_errors = validate_grant(grant)
             metadata_value = target.get("metadata")
             metadata: dict[str, object] = metadata_value if isinstance(metadata_value, dict) else {}
             record_type = str(target.get("record_type", "")).lower()
-            default_capability = {
-                "policy": "policy.promote",
-                "changeobject": "change.promote",
-            }.get(record_type, f"{record_type}.promote")
-            capability = str(metadata.get("promotion_capability") or default_capability)
+            capability = _PROMOTION_CAPABILITIES.get(record_type)
+            if capability is None:
+                continue
             actor_ref = metadata.get("actor_ref")
             resource_ref = metadata.get("resource_ref")
             effect_class = metadata.get("effect_class")
@@ -315,7 +322,35 @@ def _has_structural_authorization_proof(
                 subject_version_refs=sorted(expected_refs),
                 effect_class=cast(EffectClass, str(effect_class)),
             )
-            if not is_authorized_for(request, grant):
+            use_ref = metadata.get("authorization_use_ref")
+            if isinstance(use_ref, str):
+                use_raw = next(
+                    (
+                        item
+                        for item in state.get("authorization_use", [])
+                        if isinstance(item, dict) and item.get("id") == use_ref
+                    ),
+                    None,
+                )
+                if use_raw is None:
+                    continue
+                try:
+                    use = AuthorizationUse.model_validate(use_raw)
+                    grant_errors = validate_grant(grant, now=use.authorized_at)
+                    if (
+                        use.authorization_ref != grant.id
+                        or use.capability != capability
+                        or use.actor_ref != request.actor_ref
+                        or use.resource_ref != request.resource_ref
+                        or use.effect_class != request.effect_class
+                        or not set(request.subject_version_refs).intersection(use.subject_version_refs)
+                        or grant_errors
+                        or not is_authorized_for(request, grant, now=use.authorized_at)
+                    ):
+                        continue
+                except ValueError:
+                    continue
+            elif grant_errors or not is_authorized_for(request, grant):
                 continue
         except ValueError:
             continue
@@ -532,6 +567,40 @@ def validate_state_graph(
             identifier = raw.get("id", "<unknown>") if isinstance(raw, dict) else "<unknown>"
             errors.append(f"authorization {identifier}: invalid grant: {exc}")
 
+    # AuthorizationUse is immutable at-time evidence.  It is validated against
+    # the grant's validity window at ``authorized_at`` rather than now, so a
+    # later expiry/revocation cannot rewrite the historical fact that an
+    # already-executed action was authorized.
+    for raw in normalized.get("authorization_use", []):
+        try:
+            use = AuthorizationUse.model_validate(raw)
+            grant_raw = next(
+                (
+                    item
+                    for item in normalized["authorization"]
+                    if isinstance(item, dict) and item.get("id") == use.authorization_ref
+                ),
+                None,
+            )
+            if grant_raw is None:
+                errors.append(f"authorization use {use.id} references unknown grant {use.authorization_ref!r}")
+                continue
+            grant = AuthorizationGrant.model_validate(grant_raw)
+            request = CanonicalAuthorizationRequest(
+                capability=use.capability,
+                actor_ref=use.actor_ref,
+                resource_ref=use.resource_ref,
+                subject_version_refs=list(use.subject_version_refs),
+                effect_class=use.effect_class,
+            )
+            if validate_grant(grant, now=use.authorized_at) or not is_authorized_for(
+                request, grant, now=use.authorized_at
+            ):
+                errors.append(f"authorization use {use.id} is not valid at authorized_at")
+        except Exception as exc:
+            identifier = raw.get("id", "<unknown>") if isinstance(raw, dict) else "<unknown>"
+            errors.append(f"authorization use {identifier}: invalid: {exc}")
+
     # Candidate -> official promotion is a graph-level governance transition:
     # the record itself cannot prove either verification or authorization.
     relation_values = parsed_relations
@@ -635,7 +704,6 @@ def validate_state_graph(
                 else:
                     try:
                         grant = AuthorizationGrant.model_validate(grant_raw)
-                        grant_errors = validate_grant(grant)
                         projection_metadata_value = raw.get("metadata")
                         projection_metadata: dict[str, object] = (
                             projection_metadata_value if isinstance(projection_metadata_value, dict) else {}
@@ -652,7 +720,7 @@ def validate_state_graph(
                                 "is missing actual actor/resource/effect"
                             )
                             continue
-                        capability = projection_metadata.get("promotion_capability") or "knowledge.promote"
+                        capability = "knowledge.promote"
                         request = CanonicalAuthorizationRequest(
                             capability=str(capability),
                             actor_ref=str(actor_ref),
@@ -660,7 +728,40 @@ def validate_state_graph(
                             subject_version_refs=[identifier, f"{identifier}:v1"],
                             effect_class=cast(EffectClass, str(effect_class)),
                         )
-                        if grant_errors or not is_authorized_for(request, grant):
+                        use_ref = projection_metadata.get("authorization_use_ref")
+                        use_valid = True
+                        grant_errors = validate_grant(grant)
+                        if isinstance(use_ref, str):
+                            use_raw = next(
+                                (
+                                    item
+                                    for item in normalized.get("authorization_use", [])
+                                    if isinstance(item, dict) and item.get("id") == use_ref
+                                ),
+                                None,
+                            )
+                            if use_raw is None:
+                                use_valid = False
+                            else:
+                                try:
+                                    use = AuthorizationUse.model_validate(use_raw)
+                                    grant_errors = validate_grant(grant, now=use.authorized_at)
+                                    use_valid = (
+                                        use.authorization_ref == grant.id
+                                        and use.capability == capability
+                                        and use.actor_ref == request.actor_ref
+                                        and use.resource_ref == request.resource_ref
+                                        and use.effect_class == request.effect_class
+                                        and bool(
+                                            set(request.subject_version_refs).intersection(use.subject_version_refs)
+                                        )
+                                        and is_authorized_for(request, grant, now=use.authorized_at)
+                                    )
+                                except Exception:
+                                    use_valid = False
+                        elif not is_authorized_for(request, grant):
+                            use_valid = False
+                        if grant_errors or not use_valid:
                             errors.append(f"knowledge projection {identifier} authorization ref {ref!r} is invalid")
                     except Exception:
                         errors.append(f"knowledge projection {identifier} authorization ref {ref!r} is invalid")
@@ -694,22 +795,50 @@ def validate_state_graph(
             else:
                 try:
                     grant = AuthorizationGrant.model_validate(grants_by_id[auth_refs[0]])
-                    grant_errors = validate_grant(grant)
-                    if grant_errors:
-                        errors.extend(f"revision {record.id}: {error}" for error in grant_errors)
                     expected_versions = {record.id, f"{record.id}:v{record.version}"}
                     if not expected_versions.intersection(grant.subject_version_refs):
                         errors.append(f"revision {record.id} authorization does not bind this revision version")
                     revision_metadata = record.metadata if isinstance(record.metadata, dict) else {}
                     actor_ref = revision_metadata.get("actor_ref")
-                    resource_ref = revision_metadata.get("resource_ref") or getattr(record, "subject_ref", "")
-                    effect_class = revision_metadata.get("effect_class")
+                    canonical_resource = getattr(record, "subject_ref", "")
+                    resource_ref = canonical_resource
+                    effect_class = "write-local"
                     if not isinstance(actor_ref, str) or not actor_ref.strip():
                         errors.append(f"revision {record.id} authorization missing actual actor_ref")
                     if not isinstance(resource_ref, str) or not resource_ref.strip():
                         errors.append(f"revision {record.id} authorization missing resource_ref")
                     if not isinstance(effect_class, str) or not effect_class.strip():
                         errors.append(f"revision {record.id} authorization missing effect_class")
+                    if revision_metadata.get("resource_ref") != canonical_resource:
+                        errors.append(f"revision {record.id} resource_ref must match canonical subject_ref")
+                    if revision_metadata.get("effect_class") != "write-local":
+                        errors.append(f"revision {record.id} effect_class is fixed to write-local")
+                    use_ref = revision_metadata.get("authorization_use_ref")
+                    use_raw = next(
+                        (
+                            item
+                            for item in normalized.get("authorization_use", [])
+                            if isinstance(item, dict) and item.get("id") == use_ref
+                        ),
+                        None,
+                    ) if isinstance(use_ref, str) else None
+                    grant_errors = validate_grant(grant)
+                    if use_raw is None:
+                        errors.append(f"revision {record.id} requires authorization-use evidence")
+                    else:
+                        use = AuthorizationUse.model_validate(use_raw)
+                        grant_errors = validate_grant(grant, now=use.authorized_at)
+                        if (
+                            use.authorization_ref != auth_refs[0]
+                            or use.capability != "revision.apply"
+                            or use.actor_ref != actor_ref
+                            or use.resource_ref != resource_ref
+                            or use.effect_class != "write-local"
+                            or not expected_versions.intersection(use.subject_version_refs)
+                        ):
+                            errors.append(f"revision {record.id} authorization-use binding is invalid")
+                    if grant_errors:
+                        errors.extend(f"revision {record.id}: {error}" for error in grant_errors)
                     if (
                         isinstance(actor_ref, str)
                         and isinstance(resource_ref, str)
@@ -722,7 +851,7 @@ def validate_state_graph(
                             subject_version_refs=sorted(expected_versions),
                             effect_class=cast(EffectClass, effect_class),
                         )
-                        if not is_authorized_for(request, grant):
+                        if use_raw is not None and not is_authorized_for(request, grant, now=use.authorized_at):
                             errors.append(
                                 f"revision {record.id} authorization does not authorize actor/resource/effect"
                             )
@@ -767,8 +896,8 @@ def validate_state_graph(
         revision_metadata = revision.metadata if isinstance(revision.metadata, dict) else {}
         auth_ref = revision_metadata.get("authorization_ref")
         actor_ref = revision_metadata.get("actor_ref")
-        resource_ref = revision_metadata.get("resource_ref") or getattr(revision, "subject_ref", "")
-        effect_class = revision_metadata.get("effect_class")
+        resource_ref = getattr(revision, "subject_ref", "")
+        effect_class = "write-local"
         grant_raw = next(
             (item for item in normalized["authorization"] if isinstance(item, dict) and item.get("id") == auth_ref),
             None,
@@ -785,7 +914,23 @@ def validate_state_graph(
                 subject_version_refs=[revision.id, f"{revision.id}:v{revision.version}"],
                 effect_class=cast(EffectClass, effect_class if isinstance(effect_class, str) else ""),
             )
-            if validate_grant(grant) or not is_authorized_for(request, grant):
+            use_ref = revision_metadata.get("authorization_use_ref")
+            use_raw = next(
+                (
+                    item
+                    for item in normalized.get("authorization_use", [])
+                    if isinstance(item, dict) and item.get("id") == use_ref
+                ),
+                None,
+            ) if isinstance(use_ref, str) else None
+            if use_raw is None:
+                raise ValueError("authorization-use evidence missing")
+            use = AuthorizationUse.model_validate(use_raw)
+            if use.authorization_ref != auth_ref or use.capability != "revision.apply":
+                raise ValueError("authorization-use binding invalid")
+            if validate_grant(grant, now=use.authorized_at) or not is_authorized_for(
+                request, grant, now=use.authorized_at
+            ):
                 errors.append(f"supersedes relation {relation.id} revision authorization proof is invalid")
         except Exception as exc:
             errors.append(f"supersedes relation {relation.id} revision authorization proof is invalid: {exc}")
@@ -913,10 +1058,9 @@ def assert_valid_candidate_write(
         if not isinstance(raw, dict) or raw.get("id") != value_id
     ]
     candidate[kind].append(value.model_dump(mode="json"))  # type: ignore[attr-defined]
-    # The private terminal capability validates the complete Work/Run pair at
-    # context exit.  Individual saves are allowed to pass through the
-    # transitional half of that paired commit, but ordinary terminal writes
-    # are rejected by the stores before reaching this function.
+    # commit_terminal validates the complete Work/Run pair before opening the
+    # store's internal paired write.  Ordinary terminal writes are rejected by
+    # the stores before reaching this function.
     errors = validate_state_graph(candidate, enforce_terminal=False)
     if errors:
         raise ValueError("state graph validation failed: " + "; ".join(errors))
