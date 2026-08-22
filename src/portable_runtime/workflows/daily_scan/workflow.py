@@ -28,6 +28,8 @@ class DailyScanWorkflow:
         return work.kind in _SUPPORTED_SCAN_KINDS
 
     async def run(self, context: WorkflowContext, work: Work, run: Run) -> str:
+        if context.run.status == "succeeded":
+            return "succeeded"
         # Ensure run is marked running; dedup-safe transition
         try:
             if context.run.status == "queued":

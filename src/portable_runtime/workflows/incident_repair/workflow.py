@@ -119,6 +119,8 @@ class IncidentRepairWorkflow:
         return work.kind in {"incident", "alert", "repair", "incident-repair"}
 
     async def run(self, context: WorkflowContext, work: Work, run: Run) -> str:
+        if context.run.status == "succeeded":
+            return "succeeded"
         # Ensure resumable state handling
         try:
             if context.run.status == "queued":
