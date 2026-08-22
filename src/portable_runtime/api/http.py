@@ -95,29 +95,70 @@ def _require_semantic_edge_authority(runtime: Runtime, rel: Any) -> None:
     if not (_is_local_semantic_ref(runtime, rel.subject_ref) and _is_local_semantic_ref(runtime, rel.object_ref)):
         return
     metadata = rel.metadata if isinstance(getattr(rel, "metadata", None), dict) else {}
-    revision_ref = metadata.get("revision_ref")
+    # A reopen assessment is created and committed only by POST /v1/reopen.
+    # A string-shaped id on the generic relation ingress is not authority.
+    if isinstance(metadata.get("reopen_assessment_id"), str):
+        raise HTTPException(status_code=422, detail="reopen lineage requires the /v1/reopen control action")
+
+    from portable_runtime.records.authorization import (
+        AuthorizationUse,
+        CanonicalAuthorizationRequest,
+        authorization_use_covers_request,
+    )
+
     use_ref = metadata.get("authorization_use_ref")
-    has_revision = False
+    if isinstance(use_ref, str) and use_ref.strip():
+        try:
+            use = runtime.store.get_authorization_use(use_ref)
+            get_authorization = getattr(runtime.store, "get_authorization", None)
+            grant = (
+                get_authorization(use.authorization_ref)
+                if isinstance(use, AuthorizationUse) and callable(get_authorization)
+                else None
+            )
+        except Exception:
+            use = None
+            grant = None
+        if not isinstance(use, AuthorizationUse) or grant is None:
+            raise HTTPException(status_code=422, detail="relation authorization_use proof is unavailable")
+        subject = runtime.store.get_record(rel.subject_ref)
+        expected_refs = (
+            [f"{subject.id}:v{subject.version}"]
+            if subject is not None and hasattr(subject, "version")
+            else [rel.subject_ref]
+        )
+        request = CanonicalAuthorizationRequest(
+            capability="graph.write",
+            actor_ref=use.actor_ref,
+            resource_ref=rel.subject_ref,
+            subject_version_refs=expected_refs,
+            effect_class="write-local",
+        )
+        if not authorization_use_covers_request(use, grant, request):
+            raise HTTPException(status_code=422, detail="relation AuthorizationUse does not cover this edge")
+        return
+
+    # A Revision proof is narrowly scoped to the Revision's own endpoint
+    # relation.  An unrelated applied Revision cannot authorize arbitrary
+    # graph edges through this generic ingress.
+    revision_ref = metadata.get("revision_ref")
     if isinstance(revision_ref, str) and revision_ref.strip():
         revision = runtime.store.get_record(revision_ref)
-        has_revision = bool(
-            revision is not None
-            and getattr(revision, "record_type", None) == "Revision"
-            and getattr(revision, "lifecycle_status", None) in {"applied", "verified", "accepted"}
-        )
-    has_use = False
-    if isinstance(use_ref, str) and use_ref.strip():
-        has_use = runtime.store.get_authorization_use(use_ref) is not None
-    has_reopen = (
-        rel.relation_type == "supersedes"
-        and isinstance(metadata.get("reopen_assessment_id"), str)
-        and str(metadata.get("reopen_assessment_id")).startswith("reopen_")
+        if (
+            revision is None
+            or getattr(revision, "record_type", None) != "Revision"
+            or getattr(revision, "lifecycle_status", None) not in {"applied", "verified", "accepted"}
+            or rel.relation_type not in {"revises", "supersedes"}
+            or getattr(revision, "produces_ref", None) != rel.subject_ref
+            or getattr(revision, "revises_ref", None) != rel.object_ref
+        ):
+            raise HTTPException(status_code=422, detail="Revision proof does not match relation endpoints")
+        return
+
+    raise HTTPException(
+        status_code=422,
+        detail="local governance edge requires a matching graph.write AuthorizationUse or Revision endpoint proof",
     )
-    if not (has_revision or has_use or has_reopen):
-        raise HTTPException(
-            status_code=422,
-            detail="local governance edge requires Revision, AuthorizationUse, or reopen assessment authority",
-        )
 
 
 def _append_control_event(runtime: Runtime, event_type: str, subject_ref: str, payload: dict[str, Any]) -> None:

@@ -794,19 +794,27 @@ class SQLiteStateStore:
         )
         if not isinstance(value, AuthorizationUse):
             raise ValueError("authorization use must be typed AuthorizationUse")
-        grant = self.get_authorization(value.authorization_ref)
-        if not isinstance(grant, AuthorizationGrant):
-            raise ValueError("authorization use references unknown grant")
-        request = CanonicalAuthorizationRequest(
-            capability=value.capability,
-            actor_ref=value.actor_ref,
-            resource_ref=value.resource_ref,
-            subject_version_refs=list(value.subject_version_refs),
-            effect_class=value.effect_class,
-        )
-        if not is_authorized_for(request, grant, now=value.authorized_at):
-            raise ValueError("authorization use is not valid at authorized_at")
-        self._atomic_graph_save("authorization_use", value)
+
+        def validate() -> None:
+            existing = self.get_authorization_use(value.id)
+            if existing is not None and existing.model_dump(mode="json") != value.model_dump(mode="json"):
+                raise ValueError(f"authorization use {value.id!r} is immutable")
+            grant = self.get_authorization(value.authorization_ref)
+            if not isinstance(grant, AuthorizationGrant):
+                raise ValueError("authorization use references unknown grant")
+            request = CanonicalAuthorizationRequest(
+                capability=value.capability,
+                actor_ref=value.actor_ref,
+                resource_ref=value.resource_ref,
+                subject_version_refs=list(value.subject_version_refs),
+                effect_class=value.effect_class,
+            )
+            if not is_authorized_for(request, grant, now=value.authorized_at):
+                raise ValueError("authorization use is not valid at authorized_at")
+
+        # The existing-row check executes inside _atomic_graph_save's
+        # BEGIN IMMEDIATE transaction, avoiding a TOCTOU overwrite.
+        self._atomic_graph_save("authorization_use", value, validate)
 
     def get_authorization_use(self, use_id: str) -> Any | None:
         from portable_runtime.records.authorization import AuthorizationUse
@@ -845,26 +853,33 @@ class SQLiteStateStore:
                 from portable_runtime.records.authorization import AuthorizationGrant
 
                 self._types["authorization"] = AuthorizationGrant
-            prepared: dict[str, list[BaseRecord]] = {}
+            prepared: dict[str, list[Any]] = {}
             candidate: dict[str, list[dict[str, object]]] = {kind: [] for kind in self._types}
+            current: dict[str, list[dict[str, object]]] = {kind: [] for kind in self._types}
             cur = self._connection.cursor()
             cur.execute("BEGIN IMMEDIATE")
             try:
                 rows = cur.execute("SELECT kind, data FROM runtime_records ORDER BY kind, id").fetchall()
                 for row in rows:
-                    candidate.setdefault(row["kind"], []).append(json.loads(row["data"]))
+                    payload = json.loads(row["data"])
+                    current.setdefault(row["kind"], []).append(payload)
+                    candidate.setdefault(row["kind"], []).append(payload)
                 for kind, values in state.items():
                     value_type = self._types.get(kind)
                     if value_type is None:
                         continue
-                    prepared[kind] = [cast(BaseRecord, value_type.model_validate(raw)) for raw in values]
+                    prepared[kind] = [value_type.model_validate(raw) for raw in values]
                     incoming_ids = {value.id for value in prepared[kind]}  # type: ignore[attr-defined]
                     candidate[kind] = [
                         raw for raw in candidate.get(kind, [])
                         if isinstance(raw, dict) and raw.get("id") not in incoming_ids
                     ] + [value.model_dump(mode="json") for value in prepared[kind]]
-                from portable_runtime.protocol.validation import assert_valid_state_graph
+                from portable_runtime.protocol.validation import (
+                    assert_valid_state_graph,
+                    assert_valid_state_transition,
+                )
 
+                assert_valid_state_transition(current, candidate, prepared)
                 assert_valid_state_graph(candidate)
                 for kind, prepared_values in prepared.items():
                     for value in prepared_values:

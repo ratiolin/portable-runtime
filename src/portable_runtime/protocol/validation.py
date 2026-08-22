@@ -15,7 +15,9 @@ from __future__ import annotations
 import re
 from collections import defaultdict
 from collections.abc import Iterable
-from typing import cast
+from typing import Any, cast
+
+from pydantic import BaseModel
 
 from portable_runtime.core.models import Run, Work
 from portable_runtime.records.authorization import (
@@ -1173,6 +1175,93 @@ def assert_valid_state_graph(state: dict[str, list[dict[str, object]]]) -> None:
         raise ValueError("state graph validation failed: " + "; ".join(errors))
 
 
+def assert_valid_state_transition(
+    current_state: dict[str, list[dict[str, object]]],
+    candidate_state: dict[str, list[dict[str, object]]],
+    incoming: dict[str, list[BaseModel]],
+) -> None:
+    """Validate import collisions using the same future-write invariants.
+
+    State/bundle import remains a compatibility boundary (so it deliberately
+    does not call ``validate_canonical_write``), but it must not become a
+    replacement for normal semantic writes.  Existing records therefore use
+    their normal version/authority checks, relations remain append-only, and
+    ``AuthorizationUse`` remains an immutable event.  All checks run before
+    either store mutates its current snapshot.
+    """
+
+    current_records = {
+        str(raw.get("id")): raw
+        for raw in current_state.get("record", [])
+        if isinstance(raw, dict) and isinstance(raw.get("id"), str)
+    }
+    current_relations = {
+        str(raw.get("id")): raw
+        for raw in current_state.get("relation", [])
+        if isinstance(raw, dict) and isinstance(raw.get("id"), str)
+    }
+    current_uses = {
+        str(raw.get("id")): raw
+        for raw in current_state.get("authorization_use", [])
+        if isinstance(raw, dict) and isinstance(raw.get("id"), str)
+    }
+
+    def _reject_duplicate_ids(kind: str, values: list[BaseModel]) -> None:
+        seen: dict[str, dict[str, Any]] = {}
+        for value in values:
+            identifier = getattr(value, "id", None)
+            if not isinstance(identifier, str):
+                continue
+            dump = value.model_dump(mode="json")
+            previous = seen.get(identifier)
+            if previous is not None and previous != dump:
+                raise ValueError(f"import contains conflicting {kind} id {identifier!r}")
+            seen[identifier] = dump
+
+    for kind, values in incoming.items():
+        if kind in {"record", "relation", "authorization_use"}:
+            _reject_duplicate_ids(kind, values)
+
+    for value in incoming.get("record", []):
+        if not isinstance(value, BaseRecord):
+            continue
+        existing_raw = current_records.get(value.id)
+        if existing_raw is None:
+            continue
+        existing = BaseRecord.model_validate(existing_raw)
+        errors = validate_record_write(value, existing)
+        if errors:
+            raise ValueError("; ".join(errors))
+        # This is the same authority gate used by save_record(), evaluated
+        # against the complete candidate bundle so proofs may arrive in the
+        # same portable import.
+        assert_semantic_mutation_authorized(value, existing, candidate_state)
+
+    for value in incoming.get("relation", []):
+        if not isinstance(value, RecordRelation):
+            continue
+        existing_raw = current_relations.get(value.id)
+        if existing_raw is None:
+            continue
+        old_dump = dict(existing_raw)
+        new_dump = value.model_dump(mode="json")
+        old_dump.pop("created_at", None)
+        new_dump.pop("created_at", None)
+        if old_dump != new_dump:
+            raise ValueError(
+                f"relation {value.id!r} is append-only; semantic edge changes require a Revision authority"
+            )
+
+    for value in incoming.get("authorization_use", []):
+        if not isinstance(value, AuthorizationUse):
+            continue
+        existing_raw = current_uses.get(value.id)
+        if existing_raw is None:
+            continue
+        if dict(existing_raw) != value.model_dump(mode="json"):
+            raise ValueError(f"authorization use {value.id!r} is immutable")
+
+
 def assert_valid_candidate_write(
     state: dict[str, list[dict[str, object]]],
     kind: str,
@@ -1336,14 +1425,22 @@ def assert_semantic_mutation_authorized(
             if isinstance(raw, dict) and isinstance(raw.get("id"), str)
         }
         grant_raw = grants.get(str(use_raw.get("authorization_ref")))
-        refs = {record.id, f"{record.id}:v{record.version}", f"{record.id}:v{existing.version}"}
-        raw_refs = use_raw.get("subject_version_refs")
-        use_refs = {str(ref) for ref in raw_refs} if isinstance(raw_refs, list) else set()
-        if isinstance(grant_raw, dict) and refs.intersection(use_refs):
+        if isinstance(grant_raw, dict):
             try:
+                from portable_runtime.records.authorization import authorization_use_covers_request
+
                 grant = AuthorizationGrant.model_validate(grant_raw)
                 use = AuthorizationUse.model_validate(use_raw)
-                if use.authorization_ref == grant.id and not validate_grant(grant, now=use.authorized_at):
+                # A semantic update consumes the exact predecessor version;
+                # the same historical use must not be reusable for v2.
+                request = CanonicalAuthorizationRequest(
+                    capability="record.write",
+                    actor_ref=use.actor_ref,
+                    resource_ref=record.id,
+                    subject_version_refs=[f"{existing.id}:v{existing.version}"],
+                    effect_class="write-local",
+                )
+                if authorization_use_covers_request(use, grant, request):
                     return
             except ValueError:
                 pass
