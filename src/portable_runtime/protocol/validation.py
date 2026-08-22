@@ -294,7 +294,11 @@ def _has_structural_authorization_proof(
             metadata_value = target.get("metadata")
             metadata: dict[str, object] = metadata_value if isinstance(metadata_value, dict) else {}
             record_type = str(target.get("record_type", "")).lower()
-            capability = str(metadata.get("promotion_capability") or f"{record_type}.promote")
+            default_capability = {
+                "policy": "policy.promote",
+                "changeobject": "change.promote",
+            }.get(record_type, f"{record_type}.promote")
+            capability = str(metadata.get("promotion_capability") or default_capability)
             actor_ref = metadata.get("actor_ref") or grant.grantee_ref
             resource_ref = metadata.get("resource_ref") or target_id
             effect_class = metadata.get("effect_class") or "write-local"
