@@ -291,6 +291,22 @@ def _has_structural_authorization_proof(
             grant = AuthorizationGrant.model_validate(raw)
             if validate_grant(grant):
                 continue
+            metadata_value = target.get("metadata")
+            metadata: dict[str, object] = metadata_value if isinstance(metadata_value, dict) else {}
+            record_type = str(target.get("record_type", "")).lower()
+            capability = str(metadata.get("promotion_capability") or f"{record_type}.promote")
+            actor_ref = metadata.get("actor_ref") or grant.grantee_ref
+            resource_ref = metadata.get("resource_ref") or target_id
+            effect_class = metadata.get("effect_class") or "write-local"
+            request = CanonicalAuthorizationRequest(
+                capability=capability,
+                actor_ref=str(actor_ref),
+                resource_ref=str(resource_ref),
+                subject_version_refs=sorted(expected_refs),
+                effect_class=cast(EffectClass, str(effect_class)),
+            )
+            if not is_authorized_for(request, grant):
+                continue
         except ValueError:
             continue
         return True
@@ -604,7 +620,23 @@ def validate_state_graph(state: dict[str, list[dict[str, object]]], *, strict: b
                 else:
                     try:
                         grant = AuthorizationGrant.model_validate(grant_raw)
-                        if validate_grant(grant):
+                        grant_errors = validate_grant(grant)
+                        projection_metadata_value = raw.get("metadata")
+                        projection_metadata: dict[str, object] = (
+                            projection_metadata_value if isinstance(projection_metadata_value, dict) else {}
+                        )
+                        actor_ref = projection_metadata.get("actor_ref") or grant.grantee_ref
+                        resource_ref = projection_metadata.get("resource_ref") or identifier
+                        effect_class = projection_metadata.get("effect_class") or "write-local"
+                        capability = projection_metadata.get("promotion_capability") or "knowledge.promote"
+                        request = CanonicalAuthorizationRequest(
+                            capability=str(capability),
+                            actor_ref=str(actor_ref),
+                            resource_ref=str(resource_ref),
+                            subject_version_refs=[identifier, f"{identifier}:v1"],
+                            effect_class=cast(EffectClass, str(effect_class)),
+                        )
+                        if grant_errors or not is_authorized_for(request, grant):
                             errors.append(f"knowledge projection {identifier} authorization ref {ref!r} is invalid")
                     except Exception:
                         errors.append(f"knowledge projection {identifier} authorization ref {ref!r} is invalid")
