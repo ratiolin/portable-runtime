@@ -227,14 +227,9 @@ async def test_context_transition_and_step() -> None:
     assert ctx.run.current_step == "step1"
     ctx.set_step("step2")
     assert ctx.run.current_step == "step2"
-    # invalid transition should raise
-    ctx.transition_run("succeeded")
-    assert ctx.run.status == "succeeded"
-    try:
-        ctx.transition_run("running")
-        raise AssertionError()
-    except ValueError:
-        pass
+    # Terminal success must go through durable CompletionAuthority proofs.
+    with pytest.raises(ValueError, match="complete_with_proofs"):
+        ctx.transition_run("succeeded")
 
 
 @pytest.mark.asyncio
@@ -607,7 +602,8 @@ async def test_generic_task_can_close_only_with_explicit_objective_verifier() ->
 
     result = await GenericTaskWorkflow(objective_verifier=verifier).run(ctx, work, run)
 
-    assert result == "succeeded"
+    # A boolean verifier is not durable evidence and cannot terminalize a Run.
+    assert result == "waiting"
 
 
 def test_workflow_compatibility_signatures() -> None:

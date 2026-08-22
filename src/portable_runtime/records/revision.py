@@ -12,11 +12,17 @@ Provides create_revision, apply_revision, supersede.
 
 from __future__ import annotations
 
+from contextlib import nullcontext as _nullcontext
 from datetime import UTC, datetime
 from typing import Any
 
 from portable_runtime.core.models import new_id
-from portable_runtime.records.authorization import AuthorizationGrant, validate_grant
+from portable_runtime.records.authorization import (
+    AuthorizationGrant,
+    CanonicalAuthorizationRequest,
+    is_authorized_for,
+    validate_grant,
+)
 from portable_runtime.records.lifecycle import validate_lifecycle_transition
 from portable_runtime.records.models import RevisionRecord
 from portable_runtime.records.relations import RecordRelation
@@ -74,26 +80,47 @@ def apply_revision(
     Revision lifecycle helpers do not manufacture authorization.  A durable
     grant must already exist in ``store`` and bind this revision id/version.
     """
+    input_revision = revision
     if store is None or not hasattr(store, "get_authorization"):
         raise ValueError("apply_revision requires a state store and authorization_ref")
+    stored_revision = store.get_record(revision.id) if hasattr(store, "get_record") else None
+    if stored_revision is None and revision.lifecycle_status == "proposed":
+        old_endpoint = store.get_record(revision.revises_ref) if revision.revises_ref else None
+        new_endpoint = store.get_record(revision.produces_ref) if revision.produces_ref else None
+        if old_endpoint is None or new_endpoint is None or old_endpoint.record_type != new_endpoint.record_type:
+            raise ValueError("apply_revision requires canonical revision endpoints")
+        # A proposal may be materialized once, but authorization is still
+        # checked below through the canonical typed request before it can take
+        # effect.
+        store.save_record(revision)
+        stored_revision = store.get_record(revision.id)
+    if not isinstance(stored_revision, RevisionRecord):
+        raise ValueError("apply_revision requires the canonical persisted Revision")
+    if any(
+        getattr(stored_revision, field, None) != getattr(revision, field, None)
+        for field in ("version", "subject_ref", "revises_ref", "produces_ref", "supersedes_ref")
+    ):
+        raise ValueError("apply_revision revision endpoints/version do not match canonical state")
     grant_ref = authorization_ref
-    if isinstance(grant_ref, AuthorizationGrant):
-        grant = grant_ref
-        grant_id = grant.id
-    elif isinstance(grant_ref, str) and grant_ref:
-        grant_id = grant_ref
-        grant = store.get_authorization(grant_ref)
-    else:
-        grant_id = None
-        grant = None
+    grant_id = grant_ref.id if isinstance(grant_ref, AuthorizationGrant) else grant_ref if isinstance(grant_ref, str) else None
+    grant = store.get_authorization(grant_id) if isinstance(grant_id, str) and grant_id else None
     if not isinstance(grant, AuthorizationGrant):
         raise ValueError("apply_revision requires an existing AuthorizationGrant")
     grant_errors = validate_grant(grant)
-    expected_versions = {revision.id, f"{revision.id}:v{revision.version}"}
-    if grant_errors or not expected_versions.intersection(grant.subject_version_refs):
+    expected_versions = [revision.id, f"{revision.id}:v{revision.version}"]
+    request = CanonicalAuthorizationRequest(
+        capability="revision.apply",
+        actor_ref=grant.grantee_ref,
+        resource_ref=stored_revision.subject_ref,
+        subject_version_refs=expected_versions,
+        effect_class="write-local",
+    )
+    if grant_errors or not is_authorized_for(request, grant) or not set(expected_versions).intersection(grant.subject_version_refs):
         detail = "; ".join(grant_errors) if grant_errors else "grant does not bind this revision version"
         raise ValueError(f"revision authorization rejected: {detail}")
-    revision.metadata = {**revision.metadata, "authorization_ref": grant_id}
+    revision = stored_revision.model_copy(
+        update={"metadata": {**stored_revision.metadata, "authorization_ref": grant_id}}
+    )
     cur = revision.lifecycle_status
     targets: list[str] = []
     if cur == "proposed":
@@ -109,6 +136,11 @@ def apply_revision(
         revision.lifecycle_status = nxt  # type: ignore[assignment]
     if store is not None and hasattr(store, "save_record"):
         store.save_record(revision)
+    # Preserve the historical in-process helper contract for callers holding
+    # the proposal object, while the persisted canonical copy remains the
+    # authority used for subsequent operations.
+    input_revision.lifecycle_status = revision.lifecycle_status
+    input_revision.metadata = dict(revision.metadata)
     return revision
 
 
@@ -147,8 +179,15 @@ def supersede(
         if actual_revision is None:
             raise ValueError("supersede requires an applied revision authorization")
         revision_record = actual_revision
-        if isinstance(actual_revision, str):
-            revision_record = actual_store.get_record(actual_revision)
+        revision_ref_id = actual_revision.id if isinstance(actual_revision, RevisionRecord) else actual_revision
+        canonical_revision = actual_store.get_record(revision_ref_id) if isinstance(revision_ref_id, str) else None
+        if isinstance(canonical_revision, RevisionRecord):
+            if isinstance(actual_revision, RevisionRecord) and any(
+                getattr(canonical_revision, field, None) != getattr(actual_revision, field, None)
+                for field in ("version", "subject_ref", "revises_ref", "produces_ref", "supersedes_ref")
+            ):
+                raise ValueError("supersede revision endpoints/version do not match canonical state")
+            revision_record = canonical_revision
         if not isinstance(revision_record, RevisionRecord):
             raise ValueError("supersede revision proof not found")
         if revision_record.lifecycle_status not in {"applied", "verified", "accepted"}:
@@ -160,12 +199,23 @@ def supersede(
         if not isinstance(grant, AuthorizationGrant):
             raise ValueError("supersede authorization proof not found")
         grant_errors = validate_grant(grant)
-        expected_versions = {revision_record.id, f"{revision_record.id}:v{revision_record.version}"}
-        if grant_errors or not expected_versions.intersection(grant.subject_version_refs):
+        expected_versions = [revision_record.id, f"{revision_record.id}:v{revision_record.version}"]
+        request = CanonicalAuthorizationRequest(
+            capability="revision.apply",
+            actor_ref=grant.grantee_ref,
+            resource_ref=revision_record.subject_ref,
+            subject_version_refs=expected_versions,
+            effect_class="write-local",
+        )
+        if grant_errors or not is_authorized_for(request, grant) or not set(expected_versions).intersection(grant.subject_version_refs):
             raise ValueError("supersede authorization proof is invalid")
         old_rec = actual_store.get_record(old_id)
         new_rec = actual_store.get_record(new_id_val)
-        if old_rec is not None:
+        if revision_record.revises_ref != old_id or revision_record.produces_ref != new_id_val or revision_record.supersedes_ref != old_id:
+            raise ValueError("supersede endpoints do not match the applied revision")
+        if old_rec is None or new_rec is None:
+            raise ValueError("supersede requires both revision endpoints to exist")
+        with actual_store.transaction() if hasattr(actual_store, "transaction") else _nullcontext():
             if old_rec.lifecycle_status == "draft":
                 validate_lifecycle_transition(old_rec.record_type, "draft", "current")
                 old_rec = old_rec.model_copy(update={"lifecycle_status": "current"})
@@ -173,10 +223,22 @@ def supersede(
             old_rec = old_rec.model_copy(update={"lifecycle_status": "superseded"})
             if hasattr(actual_store, "save_record"):
                 actual_store.save_record(old_rec)
-        if new_rec is not None and new_rec.lifecycle_status == "draft":
-            validate_lifecycle_transition(new_rec.record_type, "draft", "current")
-            new_rec = new_rec.model_copy(update={"lifecycle_status": "current"})
-            actual_store.save_record(new_rec)
+            if new_rec.lifecycle_status == "draft":
+                validate_lifecycle_transition(new_rec.record_type, "draft", "current")
+                new_rec = new_rec.model_copy(update={"lifecycle_status": "current"})
+                actual_store.save_record(new_rec)
+            rel = RecordRelation(
+                id=new_id("relation"),
+                relation_type="supersedes",
+                subject_ref=new_id_val,
+                object_ref=old_id,
+                created_at=datetime.now(UTC),
+                created_by=created_by,
+                metadata={"revision_ref": rev_id} if rev_id else {},
+            )
+            if hasattr(actual_store, "save_relation"):
+                actual_store.save_relation(rel)
+            return rel
     rel = RecordRelation(
         id=new_id("relation"),
         relation_type="supersedes",
@@ -186,8 +248,6 @@ def supersede(
         created_by=created_by,
         metadata={"revision_ref": rev_id} if rev_id else {},
     )
-    if actual_store is not None and hasattr(actual_store, "save_relation"):
-        actual_store.save_relation(rel)
     return rel
 
 

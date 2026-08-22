@@ -507,6 +507,26 @@ def validate_state_graph(state: dict[str, list[dict[str, object]]], *, strict: b
         if previous not in {"candidate", "official"}:
             continue
         identifier = str(raw.get("id", "<unknown>"))
+        if isinstance(metadata, dict):
+            # Governance refs are authoritative edges.  Do not coerce scalar
+            # values or mixed lists into strings during promotion checks.
+            for field in (
+                "verification_refs",
+                "verification_ref",
+                "closed_verification_refs",
+                "authorization_refs",
+                "authorization_ref",
+            ):
+                if field not in metadata:
+                    continue
+                value = metadata[field]
+                if field.endswith("_ref"):
+                    if not isinstance(value, str) or not value.strip():
+                        errors.append(f"record {identifier} {field} must be a non-empty string")
+                elif not isinstance(value, list) or any(
+                    not isinstance(item, str) or not item.strip() for item in value
+                ):
+                    errors.append(f"record {identifier} {field} must be a list of non-empty strings")
         if not _has_effective_verification(raw, normalized, relation_values):
             errors.append(f"record {identifier} official promotion requires a passing ClosedVerificationResult proof")
         if not _has_structural_authorization_proof(raw, normalized):

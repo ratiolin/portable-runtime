@@ -60,6 +60,11 @@ class InMemoryStateStore:
         with self._lock:
             self._records[kind][identifier] = value
 
+    def _save_checked(self, kind: str, value: BaseModel) -> None:
+        """Run every normal state mutation through the graph commit gate."""
+        self._validate_candidate_write(kind, value)
+        self._save(kind, value)
+
     def _validate_candidate_write(self, kind: str, value: BaseModel) -> None:
         """Validate semantic writes against the full current graph."""
         from portable_runtime.protocol.validation import assert_valid_candidate_write
@@ -76,20 +81,20 @@ class InMemoryStateStore:
             values = [value for value in self._records[kind].values() if isinstance(value, value_type)]
         return sorted(values, key=lambda value: value.created_at, reverse=True)
 
-    def save_work(self, value: Work) -> None: self._save("work", value)
+    def save_work(self, value: Work) -> None: self._save_checked("work", value)
     def get_work(self, work_id: str) -> Work | None: return self._get("work", Work, work_id)
     def list_work(self, status: str | None = None) -> list[Work]:
         return [value for value in self._list("work", Work) if status is None or value.status == status]
 
-    def save_run(self, value: Run) -> None: self._save("run", value)
+    def save_run(self, value: Run) -> None: self._save_checked("run", value)
     def get_run(self, run_id: str) -> Run | None: return self._get("run", Run, run_id)
     def list_runs(self, work_id: str | None = None) -> list[Run]:
         return [value for value in self._list("run", Run) if work_id is None or value.work_id == work_id]
 
-    def save_artifact(self, value: Artifact) -> None: self._save("artifact", value)
+    def save_artifact(self, value: Artifact) -> None: self._save_checked("artifact", value)
     def get_artifact(self, artifact_id: str) -> Artifact | None: return self._get("artifact", Artifact, artifact_id)
 
-    def save_evidence(self, value: Evidence) -> None: self._save("evidence", value)
+    def save_evidence(self, value: Evidence) -> None: self._save_checked("evidence", value)
     def get_evidence(self, evidence_id: str) -> Evidence | None: return self._get("evidence", Evidence, evidence_id)
     def list_evidence(self, subject_ref: str | None = None) -> list[Evidence]:
         values = self.list_raw_legacy_evidence(subject_ref)
@@ -114,11 +119,11 @@ class InMemoryStateStore:
             if subject_ref is None or subject_ref in value.subject_refs
         ]
 
-    def save_decision(self, value: Decision) -> None: self._save("decision", value)
+    def save_decision(self, value: Decision) -> None: self._save_checked("decision", value)
     def get_decision(self, decision_id: str) -> Decision | None: return self._get("decision", Decision, decision_id)
-    def save_action(self, value: Action) -> None: self._save("action", value)
-    def save_outcome(self, value: Outcome) -> None: self._save("outcome", value)
-    def save_knowledge(self, value: KnowledgeItem) -> None: self._save("knowledge", value)
+    def save_action(self, value: Action) -> None: self._save_checked("action", value)
+    def save_outcome(self, value: Outcome) -> None: self._save_checked("outcome", value)
+    def save_knowledge(self, value: KnowledgeItem) -> None: self._save_checked("knowledge", value)
     def get_knowledge(self, knowledge_id: str) -> KnowledgeItem | None:
         legacy = self._get("knowledge", KnowledgeItem, knowledge_id)
         for projection in self._list("knowledge_projection", KnowledgeProjection):
@@ -185,7 +190,7 @@ class InMemoryStateStore:
             if subject_ref is None or value.subject_ref == subject_ref
         ]
 
-    def save_step(self, value: Step) -> None: self._save("step", value)
+    def save_step(self, value: Step) -> None: self._save_checked("step", value)
     def get_step(self, step_id: str) -> Step | None: return self._get("step", Step, step_id)
     def list_steps(self, run_id: str | None = None) -> list[Step]:
         return [v for v in self._list("step", Step) if run_id is None or v.run_id == run_id]
@@ -194,14 +199,14 @@ class InMemoryStateStore:
         now = datetime.datetime.now(datetime.UTC)
         cutoff = now - datetime.timedelta(seconds=before_seconds)
         return [v for v in self._list("step", Step) if v.status == "running" and v.updated_at < cutoff]
-    def save_attempt(self, value: StepAttempt) -> None: self._save("attempt", value)
+    def save_attempt(self, value: StepAttempt) -> None: self._save_checked("attempt", value)
     def get_attempt(self, attempt_id: str) -> StepAttempt | None: return self._get("attempt", StepAttempt, attempt_id)
     def list_attempts(self, step_id: str | None = None) -> list[StepAttempt]:
         return [v for v in self._list("attempt", StepAttempt) if step_id is None or v.step_id == step_id]
-    def save_checkpoint(self, value: Checkpoint) -> None: self._save("checkpoint", value)
+    def save_checkpoint(self, value: Checkpoint) -> None: self._save_checked("checkpoint", value)
     def get_checkpoint(self, checkpoint_id: str) -> Checkpoint | None:
         return self._get("checkpoint", Checkpoint, checkpoint_id)
-    def save_compensation(self, value: Compensation) -> None: self._save("compensation", value)
+    def save_compensation(self, value: Compensation) -> None: self._save_checked("compensation", value)
 
     def compare_and_swap(self, kind: str, identifier: str, expected_version: int, new_value: Any) -> bool:
         with self._lock:
@@ -211,13 +216,27 @@ class InMemoryStateStore:
             current_version = getattr(existing, "version", 0) if hasattr(existing, "version") else 0
             if current_version != expected_version:
                 return False
+            # CAS is a state mutation, not a storage escape hatch.  Validate
+            # the complete candidate graph while holding the same lock before
+            # replacing the value, so an invalid semantic update cannot land.
+            self._validate_candidate_write(kind, new_value)
             self._records[kind][identifier] = new_value
             return True
 
     @contextmanager
     def transaction(self):
         with self._lock:
-            yield self
+            # Keep the in-memory implementation's transaction semantics
+            # aligned with SQLite: a failed multi-record commit must not
+            # leave an already-mutated prefix behind.
+            snapshot = {kind: dict(values) for kind, values in self._records.items()}
+            lease_snapshot = {run_id: dict(value) for run_id, value in self._leases.items()}
+            try:
+                yield self
+            except Exception:
+                self._records = snapshot
+                self._leases = lease_snapshot
+                raise
 
     def acquire_lease(self, run_id: str, owner: str, ttl_seconds: float = 30) -> bool:
         with self._lock:
