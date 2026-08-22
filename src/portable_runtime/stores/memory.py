@@ -55,12 +55,20 @@ class InMemoryStateStore:
         self._lock = threading.RLock()
         self._terminal_commit_depth = 0
 
+    _SEMANTIC_KINDS = frozenset({"record", "relation", "authorization", "authorization_use", "knowledge_projection"})
+
+    @staticmethod
+    def _snapshot(value: Any) -> Any:
+        """Keep semantic state isolated from caller-owned mutable models."""
+        copier = getattr(value, "model_copy", None)
+        return copier(deep=True) if callable(copier) else value
+
     def _save(self, kind: str, value: BaseModel) -> None:
         identifier = getattr(value, "id", None)
         if not isinstance(identifier, str):
             raise ValueError("runtime records require a string id")
         with self._lock:
-            self._records[kind][identifier] = value
+            self._records[kind][identifier] = self._snapshot(value) if kind in self._SEMANTIC_KINDS else value
 
     def _save_checked(self, kind: str, value: BaseModel) -> None:
         """Run every normal state mutation through the graph commit gate."""
@@ -103,11 +111,17 @@ class InMemoryStateStore:
     def _get(self, kind: str, value_type: type[Any], identifier: str) -> Any | None:
         with self._lock:
             value = self._records[kind].get(identifier)
-        return value if isinstance(value, value_type) else None
+        if not isinstance(value, value_type):
+            return None
+        return self._snapshot(value) if kind in self._SEMANTIC_KINDS else value
 
     def _list(self, kind: str, value_type: type[Any]) -> list[Any]:
         with self._lock:
-            values = [value for value in self._records[kind].values() if isinstance(value, value_type)]
+            values = [
+                self._snapshot(value) if kind in self._SEMANTIC_KINDS else value
+                for value in self._records[kind].values()
+                if isinstance(value, value_type)
+            ]
         return sorted(values, key=lambda value: value.created_at, reverse=True)
 
     def save_work(self, value: Work) -> None: self._save_checked("work", value)
@@ -332,13 +346,14 @@ class InMemoryStateStore:
                 return
         except Exception:
             pass
-        from portable_runtime.protocol.validation import validate_record_write
+        from portable_runtime.protocol.validation import assert_semantic_mutation_authorized, validate_record_write
         from portable_runtime.records.validation import validate_canonical_write
         def validate() -> None:
             existing = cast(BaseRecord | None, self._records["record"].get(value.id))
             errs = [*validate_record_write(value, existing), *validate_canonical_write(value)]
             if errs:
                 raise ValueError("; ".join(errs))
+            assert_semantic_mutation_authorized(value, existing, self.export_state())
 
         with self._lock:
             validate()
@@ -352,9 +367,19 @@ class InMemoryStateStore:
     def save_relation(self, value: RecordRelation) -> None:
         from portable_runtime.records.relations import validate_relation
         with self._lock:
+            existing = cast(RecordRelation | None, self._records["relation"].get(value.id))
             errs = validate_relation(value)
             if errs:
                 raise ValueError("; ".join(errs))
+            if existing is not None:
+                old_dump = existing.model_dump(mode="json")
+                new_dump = value.model_dump(mode="json")
+                old_dump.pop("created_at", None)
+                new_dump.pop("created_at", None)
+                if old_dump != new_dump:
+                    raise ValueError(
+                        f"relation {value.id!r} is append-only; semantic edge changes require a Revision authority"
+                    )
             self._validate_candidate_write("relation", value)
             self._save("relation", value)
     def get_relation(self, relation_id: str) -> RecordRelation | None:
