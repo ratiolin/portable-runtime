@@ -1365,6 +1365,162 @@ def _semantic_payload_changed(record: BaseRecord, existing: BaseRecord) -> bool:
     return old_dump != new_dump
 
 
+_REVISION_APPLY_METADATA_KEYS = frozenset(
+    {
+        "authorization_ref",
+        "actor_ref",
+        "resource_ref",
+        "effect_class",
+        "authorization_use_ref",
+        "legacy_actor_identity",
+    }
+)
+
+
+def _revision_proposal_payload(record: BaseRecord) -> dict[str, object]:
+    """Return the persisted proposal content of a Revision.
+
+    Lifecycle/version and the runtime-owned authority metadata are the only
+    fields that may change when a proposal is applied.  All descriptive
+    proposal fields (including ``created_at``) remain immutable so an
+    already-authorized Revision cannot silently switch endpoints or scope.
+    """
+
+    payload = record.model_dump(mode="json")
+    payload.pop("lifecycle_status", None)
+    payload.pop("version", None)
+    payload.pop("metadata", None)
+    return payload
+
+
+def _revision_authority_metadata_is_valid(
+    record: BaseRecord,
+    existing: BaseRecord,
+    state: dict[str, list[dict[str, object]]],
+) -> bool:
+    """Validate the sole allowed semantic Revision transition: authorized apply."""
+
+    if existing.lifecycle_status not in {"proposed", "authorized"}:
+        return False
+    if record.lifecycle_status != "applied" or record.version != existing.version + 1:
+        return False
+
+    previous_metadata = existing.metadata if isinstance(existing.metadata, dict) else {}
+    next_metadata = record.metadata if isinstance(record.metadata, dict) else {}
+    changed_keys = {
+        key
+        for key in set(previous_metadata) | set(next_metadata)
+        if previous_metadata.get(key) != next_metadata.get(key)
+    }
+    if not changed_keys or not changed_keys.issubset(_REVISION_APPLY_METADATA_KEYS):
+        return False
+
+    authorization_ref = next_metadata.get("authorization_ref")
+    use_ref = next_metadata.get("authorization_use_ref")
+    actor_ref = next_metadata.get("actor_ref")
+    resource_ref = next_metadata.get("resource_ref")
+    effect_class = next_metadata.get("effect_class")
+    if not all(
+        isinstance(value, str) and value.strip()
+        for value in (authorization_ref, use_ref, actor_ref, resource_ref)
+    ):
+        return False
+    auth_ref = cast(str, authorization_ref)
+    durable_use_ref = cast(str, use_ref)
+    actual_actor = cast(str, actor_ref)
+    actual_resource = cast(str, resource_ref)
+    revision_subject = getattr(existing, "subject_ref", None)
+    if not isinstance(revision_subject, str) or not revision_subject.strip():
+        return False
+    if effect_class != "write-local" or actual_resource != revision_subject:
+        return False
+
+    grants = {
+        str(raw.get("id")): raw
+        for raw in state.get("authorization", [])
+        if isinstance(raw, dict) and isinstance(raw.get("id"), str)
+    }
+    uses = {
+        str(raw.get("id")): raw
+        for raw in state.get("authorization_use", [])
+        if isinstance(raw, dict) and isinstance(raw.get("id"), str)
+    }
+    grant_raw = grants.get(auth_ref)
+    use_raw = uses.get(durable_use_ref)
+    if grant_raw is None or use_raw is None:
+        return False
+
+    from portable_runtime.records.authorization import (
+        AuthorizationGrant,
+        AuthorizationUse,
+        CanonicalAuthorizationRequest,
+        is_authorized_for,
+        validate_grant,
+    )
+
+    try:
+        grant = AuthorizationGrant.model_validate(grant_raw)
+        use = AuthorizationUse.model_validate(use_raw)
+    except ValueError:
+        return False
+
+    expected_refs = [existing.id, f"{existing.id}:v{existing.version}"]
+    if (
+        use.authorization_ref != grant.id
+        or use.capability != "revision.apply"
+        or use.actor_ref != actual_actor
+        or use.resource_ref != revision_subject
+        or use.effect_class != "write-local"
+        or not set(expected_refs).issubset(set(use.subject_version_refs))
+        or validate_grant(grant, now=use.authorized_at)
+    ):
+        return False
+
+    request = CanonicalAuthorizationRequest(
+        capability="revision.apply",
+        actor_ref=actual_actor,
+        resource_ref=revision_subject,
+        subject_version_refs=expected_refs,
+        effect_class="write-local",
+    )
+    return is_authorized_for(request, grant, now=use.authorized_at)
+
+
+def _assert_revision_mutation_integrity(
+    record: BaseRecord,
+    existing: BaseRecord,
+    state: dict[str, list[dict[str, object]]],
+) -> None:
+    """Keep a persisted Revision proposal immutable except for real apply."""
+
+    if _revision_proposal_payload(record) != _revision_proposal_payload(existing):
+        raise ValueError(f"persisted Revision proposal {record.id!r} is immutable")
+
+    previous_metadata = existing.metadata if isinstance(existing.metadata, dict) else {}
+    next_metadata = record.metadata if isinstance(record.metadata, dict) else {}
+    changed_keys = {
+        key
+        for key in set(previous_metadata) | set(next_metadata)
+        if previous_metadata.get(key) != next_metadata.get(key)
+    }
+    if (
+        existing.lifecycle_status in {"proposed", "authorized"}
+        and record.lifecycle_status == "applied"
+        and not _revision_authority_metadata_is_valid(record, existing, state)
+    ):
+        raise ValueError(
+            "Revision authority metadata may change only during authorized apply"
+        )
+    if not changed_keys:
+        # Lifecycle-only transitions remain governed by the normal lifecycle
+        # and graph validators.  They do not need to mint another authority use.
+        return
+    if not _revision_authority_metadata_is_valid(record, existing, state):
+        raise ValueError(
+            "Revision authority metadata may change only during authorized apply"
+        )
+
+
 def assert_semantic_mutation_authorized(
     record: BaseRecord,
     existing: BaseRecord | None,
@@ -1380,9 +1536,8 @@ def assert_semantic_mutation_authorized(
     """
     if existing is None or not _semantic_payload_changed(record, existing):
         return
-    # Revision records are the authority carrier themselves; apply_revision()
-    # performs the grant/use check before advancing them.
     if record.record_type == "Revision":
+        _assert_revision_mutation_integrity(record, existing, state)
         return
 
     old_dump = existing.model_dump(mode="json")
