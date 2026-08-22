@@ -1166,6 +1166,8 @@ def assert_valid_candidate_write(
     state: dict[str, list[dict[str, object]]],
     kind: str,
     value: object,
+    *,
+    enforce_terminal: bool = True,
 ) -> None:
     """Validate one normal write against the complete candidate graph.
 
@@ -1186,10 +1188,37 @@ def assert_valid_candidate_write(
         if not isinstance(raw, dict) or raw.get("id") != value_id
     ]
     candidate[kind].append(value.model_dump(mode="json"))  # type: ignore[attr-defined]
-    # commit_terminal validates the complete Work/Run pair before opening the
-    # store's internal paired write.  Ordinary terminal writes are rejected by
-    # the stores before reaching this function.
-    errors = validate_state_graph(candidate, enforce_terminal=False)
+    errors = validate_state_graph(candidate, enforce_terminal=enforce_terminal)
+    if errors:
+        raise ValueError("state graph validation failed: " + "; ".join(errors))
+
+
+def assert_valid_terminal_pair(
+    state: dict[str, list[dict[str, object]]],
+    work: Work,
+    run: Run,
+) -> None:
+    """Validate a completed Work/succeeded Run pair in one full snapshot.
+
+    The paired terminal write is the one place where two objects must change
+    together.  Building the candidate snapshot first lets the normal graph
+    validator enforce the terminal proof invariant without opening a global
+    exemption while either half is written.
+    """
+
+    candidate = {bucket: list(values) for bucket, values in state.items()}
+    for kind, value in (("work", work), ("run", run)):
+        if kind not in _KNOWN_KINDS:
+            raise ValueError(f"unknown state graph bucket {kind!r}")
+        if not isinstance(getattr(value, "id", None), str):
+            raise ValueError(f"{kind} writes require a model with a string id")
+        candidate.setdefault(kind, [])
+        candidate[kind] = [
+            raw for raw in candidate[kind]
+            if not isinstance(raw, dict) or raw.get("id") != value.id
+        ]
+        candidate[kind].append(value.model_dump(mode="json"))
+    errors = validate_state_graph(candidate, enforce_terminal=True)
     if errors:
         raise ValueError("state graph validation failed: " + "; ".join(errors))
 

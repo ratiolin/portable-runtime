@@ -270,12 +270,46 @@ def test_completion_pairs_work_and_run_and_retry_is_idempotent(backend: str, tmp
             store.close()
 
 
+@pytest.mark.parametrize("backend", ["memory", "sqlite"])
+def test_terminal_proof_cannot_be_overwritten_or_invalidated_by_semantic_write(backend: str, tmp_path) -> None:
+    store = InMemoryStateStore() if backend == "memory" else SQLiteStateStore(tmp_path / "terminal-proof-integrity.db")
+    try:
+        work = Work(id="work_terminal_proof_integrity", title="proof integrity")
+        run = Run(id="run_terminal_proof_integrity", work_id=work.id, status="running")
+        store.save_work(work)
+        store.save_run(run)
+        proof = _proof(work, run)
+        store.save_record(proof)
+        CompletionAuthority(store).authorize(work=work, run=run, verification_refs=[proof.id])
+
+        same_version = proof.model_copy(
+            update={"metadata": {**proof.metadata, "verification_result": {"result": "fail"}}}
+        )
+        with pytest.raises(ValueError, match="version"):
+            store.save_record(same_version)
+
+        advanced_invalid = same_version.model_copy(
+            update={"version": proof.version + 1}
+        )
+        with pytest.raises(ValueError, match="terminal|proof|state graph"):
+            store.save_record(advanced_invalid)
+
+        persisted = store.get_record(proof.id)
+        assert persisted is not None
+        assert persisted.metadata["verification_result"]["result"] == "pass"
+        assert store.get_work(work.id).status == "completed"
+        assert store.get_run(run.id).status == "succeeded"
+    finally:
+        if backend == "sqlite":
+            store.close()
+
+
 def test_completion_failure_rolls_back_paired_terminal_write() -> None:
     class FailingRunStore(InMemoryStateStore):
-        def save_run(self, value: Run) -> None:
-            if value.status == "succeeded":
+        def _save(self, kind: str, value: object) -> None:
+            if getattr(value, "status", None) == "succeeded":
                 raise RuntimeError("simulated crash before run commit")
-            super().save_run(value)
+            super()._save(kind, value)  # type: ignore[arg-type]
 
     store = FailingRunStore()
     work = Work(id="work_terminal_rollback", title="rollback")
