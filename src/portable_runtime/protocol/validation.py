@@ -294,10 +294,8 @@ def _has_structural_authorization_proof(
         refs = raw.get("subject_version_refs")
         if not isinstance(refs, list) or not any(str(ref) in expected_refs for ref in refs):
             continue
-        # This graph-level check proves shape, binding and non-revocation.  The
-        # live boundary remains responsible for current validity windows.
-        if raw.get("revoked_at"):
-            continue
+        # This graph-level check proves shape and binding.  Live validity is
+        # evaluated at action time when an AuthorizationUse is present.
         try:
             grant = AuthorizationGrant.model_validate(raw)
             grant_errors = validate_grant(grant)
