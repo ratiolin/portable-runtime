@@ -191,7 +191,7 @@ def test_lifecycle_revision_proposed_authorized_applied_verified_accepted():
     grant = create_grant_for_approval(principal_ref="human:owner", grantee_ref="agent:revision", allowed_capabilities=["revision.apply"], subject_version_refs=[rev.id])
     store.save_authorization(grant)
     apply_revision(rev, store=store, authorization_ref=grant.id, actor_ref="agent:revision", resource_ref=old.id)
-    validate_lifecycle_transition("Revision", "applied", "verified"); rev.lifecycle_status = "verified"; store.save_record(rev)
+    validate_lifecycle_transition("Revision", "applied", "verified"); rev.lifecycle_status = "verified"; rev.version += 1; store.save_record(rev)
     validate_lifecycle_transition("Revision", "verified", "accepted"); rev.lifecycle_status = "accepted"; store.save_record(rev)
     assert store.get_record(rev.id).lifecycle_status == "accepted"
     with pytest.raises(ValueError): validate_lifecycle_transition("Revision", "proposed", "applied")

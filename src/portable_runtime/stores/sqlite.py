@@ -225,6 +225,7 @@ class SQLiteStateStore:
         if work_refs != refs or run_refs != refs or work_refs != run_refs:
             raise ValueError("terminal commit requires symmetric proof refs on Work and Run")
         with self._lock:
+            from portable_runtime.protocol.validation import assert_valid_terminal_pair
             from portable_runtime.workflows.completion import CompletionAuthority
 
             CompletionAuthority.validate_proof_invariant(work, run, verification_refs, self.get_record)
@@ -232,12 +233,9 @@ class SQLiteStateStore:
             if owns_transaction:
                 self._connection.execute("BEGIN IMMEDIATE")
             try:
-                self._terminal_commit_depth += 1
-                try:
-                    self.save_work(work)
-                    self.save_run(run)
-                finally:
-                    self._terminal_commit_depth -= 1
+                assert_valid_terminal_pair(self.export_state(), work, run)
+                self._save("work", work)
+                self._save("run", run)
                 if owns_transaction:
                     self._connection.execute("COMMIT")
             except Exception:
@@ -250,7 +248,7 @@ class SQLiteStateStore:
         """Validate semantic writes against the complete current graph."""
         from portable_runtime.protocol.validation import assert_valid_candidate_write
 
-        assert_valid_candidate_write(self.export_state(), kind, value)
+        assert_valid_candidate_write(self.export_state(), kind, value, enforce_terminal=True)
 
     def _get(self, kind: str, value_type: type[Any], identifier: str) -> Any | None:
         with self._lock:
@@ -731,10 +729,12 @@ class SQLiteStateStore:
                 return
         except Exception:
             pass
-        from portable_runtime.records.validation import validate_canonical_write, validate_record
+        from portable_runtime.protocol.validation import validate_record_write
+        from portable_runtime.records.validation import validate_canonical_write
 
         def validate() -> None:
-            errs = [*validate_record(value), *validate_canonical_write(value)]
+            existing = self.get_record(value.id)
+            errs = [*validate_record_write(value, existing), *validate_canonical_write(value)]
             if errs:
                 raise ValueError("; ".join(errs))
 

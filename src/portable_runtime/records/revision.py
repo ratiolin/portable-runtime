@@ -159,7 +159,15 @@ def apply_revision(
     }
     if legacy_actor:
         revision_metadata["legacy_actor_identity"] = "grant-grantee-compat"
-    revision = stored_revision.model_copy(update={"metadata": revision_metadata})
+    revision = stored_revision.model_copy(
+        update={
+            "metadata": revision_metadata,
+            # Applying a persisted Revision changes its lifecycle and
+            # authorization-use provenance; advance its semantic version so
+            # save_record's lineage guard accepts the intentional update.
+            "version": stored_revision.version + 1,
+        }
+    )
     cur = revision.lifecycle_status
     targets: list[str] = []
     if cur == "proposed":
@@ -179,6 +187,7 @@ def apply_revision(
     # the proposal object, while the persisted canonical copy remains the
     # authority used for subsequent operations.
     input_revision.lifecycle_status = revision.lifecycle_status
+    input_revision.version = revision.version
     input_revision.metadata = dict(revision.metadata)
     return revision
 
@@ -270,12 +279,16 @@ def supersede(
                 validate_lifecycle_transition(old_rec.record_type, "draft", "current")
                 old_rec = old_rec.model_copy(update={"lifecycle_status": "current"})
             validate_lifecycle_transition(old_rec.record_type, old_rec.lifecycle_status, "superseded")
-            old_rec = old_rec.model_copy(update={"lifecycle_status": "superseded"})
+            old_rec = old_rec.model_copy(
+                update={"lifecycle_status": "superseded", "version": old_rec.version + 1}
+            )
             if hasattr(actual_store, "save_record"):
                 actual_store.save_record(old_rec)
             if new_rec.lifecycle_status == "draft":
                 validate_lifecycle_transition(new_rec.record_type, "draft", "current")
-                new_rec = new_rec.model_copy(update={"lifecycle_status": "current"})
+                new_rec = new_rec.model_copy(
+                    update={"lifecycle_status": "current", "version": new_rec.version + 1}
+                )
                 actual_store.save_record(new_rec)
             rel = RecordRelation(
                 id=new_id("relation"),
