@@ -1,0 +1,20 @@
+{
+  "schema_version": "o0-withdrawal-cert-v1",
+  "fragment": "history-retaining-qualification-withdrawal",
+  "subject_ref": "runtime-subject",
+  "historical_trace_before": true,
+  "historical_trace_after": true,
+  "qualification_before": "qualified",
+  "qualification_after": "withdrawn",
+  "accepted_discharge_evidence_after": false,
+  "b0_coordinates": [
+    "historicalTrace:trace.referent-present",
+    "operativeStatus:qualification.current"
+  ],
+  "source_semantics_tags": [
+    "runtime.record.Assertion",
+    "runtime.record.Assertion",
+    "runtime.assertion-epistemic-status",
+    "runtime.assertion-epistemic-status"
+  ]
+}

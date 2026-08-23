@@ -1,5 +1,10 @@
 """Neutral observational bridge surfaces."""
 
+from portable_runtime.observation.certificates import (
+    QualificationWithdrawalCertificate,
+    build_qualification_withdrawal_certificate,
+    render_lean_certificate,
+)
 from portable_runtime.observation.o0 import (
     B0Coordinate,
     FormalActivationInput,
@@ -36,8 +41,11 @@ __all__ = [
     "O0ComparisonCase",
     "O0Observation",
     "O0Snapshot",
+    "QualificationWithdrawalCertificate",
     "RuntimeObservationBundle0",
     "alpha_f0",
     "alpha_r0",
+    "build_qualification_withdrawal_certificate",
     "discover_b0",
+    "render_lean_certificate",
 ]
