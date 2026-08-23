@@ -44,7 +44,7 @@ semantic_contract:
 
 The V1 public interface of this document includes `E₀`, `E₁`, difference, retention, distinction, factor, organizational structure, orientation, judgment, action, correction, open / closure, the three analysis layers, and the minimum normative boundary. Candidate invariants, quantitative change, interruption of quantitative change, and qualitative change may still be rigorously defined here, but as document-local working vocabulary; their appearance in the prose does not expand the platform-level canonical surface.
 
-[Theory of Cognitive Responsibility](03-theory-of-cognitive-responsibility.md) specializes the upstream concepts at the mechanism level; [Responsibility Structure Candidate Catalog](06-responsibility-structure-candidate-catalog.md) preserves transferable candidates; domain models own concrete mechanisms and evidence; [Action Responsibility Practice](08-action-responsibility-practice.md) owns proceduralization. When machine recording is required, responsibility is handed to the [Responsibility Record Plane](09-responsibility-record-plane.md), but this document does not import its epistemic states, lifecycles, or other record tokens. Downstream documents must not silently change the public definitions here.
+[Theory of Cognitive Responsibility](theory-of-cognitive-responsibility.md) specializes the upstream concepts at the mechanism level; [Responsibility Structure Candidate Catalog](responsibility-structure-candidate-catalog.md) preserves transferable candidates; domain models own concrete mechanisms and evidence; [Action Responsibility Practice](action-responsibility-practice.md) owns proceduralization. When machine recording is required, responsibility is handed to the [Responsibility Record Plane](responsibility-record-plane.md), but this document does not import its epistemic states, lifecycles, or other record tokens. Downstream documents must not silently change the public definitions here.
 
 ## I. Epistemic Boundary and Minimum Determinable Structure
 
@@ -122,7 +122,7 @@ Cross-context identity or comparability must likewise be supported by an explici
 
 **Distinction** is the process or functional relation by which a finite system, under its current boundary, channels, scale, and purpose, turns real inputs available to current processing into usable differences that can be separated or merged, compared, and passed into subsequent processing.
 
-Distinction does not fully define the mechanism of connection to and acquisition from reality. How perception, measurement, sampling, logs, retrieval, interviews, experimental apparatus, or other connections obtain inputs is outside the minimum meta-model definition. When the acquisition mechanism itself becomes an important object of judgment, [Theory of Cognitive Responsibility](03-theory-of-cognitive-responsibility.md) explicitly specializes it as material acquisition $\mathcal Q$.
+Distinction does not fully define the mechanism of connection to and acquisition from reality. How perception, measurement, sampling, logs, retrieval, interviews, experimental apparatus, or other connections obtain inputs is outside the minimum meta-model definition. When the acquisition mechanism itself becomes an important object of judgment, [Theory of Cognitive Responsibility](theory-of-cognitive-responsibility.md) explicitly specializes it as material acquisition $\mathcal Q$.
 
 A viable distinction requires both a differentiated result and enough retention to recognize, compare, or invoke that difference repeatedly. Distinction does not guarantee truth: it may omit key items, merge them incorrectly, split them excessively, or form a stable classification at the wrong scale that has no action value.
 
@@ -241,7 +241,7 @@ $$
 }
 $$
 
-One must therefore distinguish whether each local determination is clear, whether the determinations are compatible, and whether they are sufficient to determine the joint structure presently under discussion. Concrete judgment of these questions belongs to [Theory of Cognitive Responsibility](03-theory-of-cognitive-responsibility.md) and domain models.
+One must therefore distinguish whether each local determination is clear, whether the determinations are compatible, and whether they are sufficient to determine the joint structure presently under discussion. Concrete judgment of these questions belongs to [Theory of Cognitive Responsibility](theory-of-cognitive-responsibility.md) and domain models.
 
 ### 3. Factors
 
@@ -251,7 +251,7 @@ Factors are not an ultimate inventory of the constituents of reality. Changing t
 
 ### 4. Organizational structure and orientation
 
-An **organizational structure** is a retainable structure among factors, including classification, identity, configuration, order, dependency, causality, feedback, constraints, value, orientation, roles, authority, relations, games, and other forms. See the [Responsibility Structure Candidate Catalog](06-responsibility-structure-candidate-catalog.md) for concrete candidates.
+An **organizational structure** is a retainable structure among factors, including classification, identity, configuration, order, dependency, causality, feedback, constraints, value, orientation, roles, authority, relations, games, and other forms. See the [Responsibility Structure Candidate Catalog](responsibility-structure-candidate-catalog.md) for concrete candidates.
 
 **Orientation** is a structure within organizational structure that gives possible states, actions, or retained conditions different salience, priority, approach/avoid directions, or completion criteria. Goals, values, and functional references may all form orientations, but their sources and status must be distinguished.
 
@@ -291,7 +291,7 @@ Distinction determines which real differences enter the current processable stru
 
 **Feedback** means that results re-enter a later process; **regulation** means that feedback actually changes the process; **correction** requires the system, under its current standards, functional references, purposes, or judgment procedure, to modify distinctions, structures, judgments, actions, or conditions. The three must not be substituted for one another.
 
-Correction has no preset depth. A local anomaly does not automatically require global reconstruction, while persistent structural mismatch cannot indefinitely be downgraded into a parameter, execution, or measurement problem. Correction within a structure usually remains quantitative change; when the principal retained structure itself enters revision, the change may become qualitative. See [Theory of Cognitive Responsibility](03-theory-of-cognitive-responsibility.md) for the intelligence mechanism of revision depth and [Action Responsibility Practice](08-action-responsibility-practice.md) for proceduralization.
+Correction has no preset depth. A local anomaly does not automatically require global reconstruction, while persistent structural mismatch cannot indefinitely be downgraded into a parameter, execution, or measurement problem. Correction within a structure usually remains quantitative change; when the principal retained structure itself enters revision, the change may become qualitative. See [Theory of Cognitive Responsibility](theory-of-cognitive-responsibility.md) for the intelligence mechanism of revision depth and [Action Responsibility Practice](action-responsibility-practice.md) for proceduralization.
 
 The epistemic discipline of this theory is: **form structures boldly, believe structures cautiously; allow reality to veto current distinctions, organization, and judgment.**
 
@@ -321,7 +321,7 @@ $$
 }
 $$
 
-These correspond to provisional closures for different purposes. Concrete action conditions are proceduralized by [Action Responsibility Practice](08-action-responsibility-practice.md).
+These correspond to provisional closures for different purposes. Concrete action conditions are proceduralized by [Action Responsibility Practice](action-responsibility-practice.md).
 
 When a compressed notation is needed, $C_t^E$ and $C_t^A$ may denote closure configurations for epistemic and action purposes respectively. They are working notation only; they do not denote fixed field sets and do not require a strict set-inclusion relation. Thus one may write:
 
@@ -403,10 +403,10 @@ When judgment acquires real-world effect, distinguish who proposed the structure
 
 ## VI. Responsibility Boundaries and Revision Discipline
 
-- [Theory of Cognitive Responsibility](03-theory-of-cognitive-responsibility.md): mechanism specialization, including structure formation, invocation, learning, search, reorganization, agency, and the working boundary of subjectivity.
-- [Responsibility Structure Candidate Catalog](06-responsibility-structure-candidate-catalog.md): preserves transferable but fallible organizational forms and problem interfaces.
+- [Theory of Cognitive Responsibility](theory-of-cognitive-responsibility.md): mechanism specialization, including structure formation, invocation, learning, search, reorganization, agency, and the working boundary of subjectivity.
+- [Responsibility Structure Candidate Catalog](responsibility-structure-candidate-catalog.md): preserves transferable but fallible organizational forms and problem interfaces.
 - Domain models and situational facts: own concrete objects, mechanisms, causality, thresholds, and professional evidence.
-- [Action Responsibility Practice](08-action-responsibility-practice.md): proceduralizes judgment and makes it enter reality.
-- [Responsibility Record Plane](09-responsibility-record-plane.md): represents evidence, assertions, goals, decisions, actions, outcomes, and revisions when machine recording is required; its schema is not a definitional dependency of this document.
+- [Action Responsibility Practice](action-responsibility-practice.md): proceduralizes judgment and makes it enter reality.
+- [Responsibility Record Plane](responsibility-record-plane.md): represents evidence, assertions, goals, decisions, actions, outcomes, and revisions when machine recording is required; its schema is not a definitional dependency of this document.
 
 When modifying this document, give priority to the following tests: the proposition should still hold after concrete domain mechanisms are removed; a new concept must genuinely be inexpressible in the existing meta-model language; a new structure must state its epistemic status; and real-world counterexamples must be able to trigger narrowing, revision, or deletion rather than merely generating additional exceptions that make the theory unfalsifiable.

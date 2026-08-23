@@ -23,7 +23,7 @@ runtime_implementation_milestone: R2.0
 runtime_protocol: "2.0"
 owner: metra
 updated: 2026-08-20
-last_verified: 2026-08-20
+last_verified: 2026-08-23
 verification_method: Manual alignment of the Framework V1.0 fixed record interface with the Control Plane schema official-1.0.0 pin; no claim that 1.1.0-draft has passed runtime acceptance
 revision_basis: framework-v1-control-plane-pin-2026-08-20
 semantic_contract:
@@ -80,13 +80,13 @@ semantic_contract:
 
 This document owns the Framework V1.0 definitions for the record interface: `record_type`, epistemic status, lifecycle, record relations, common fields, and revalidation semantics.
 
-It only **represents** distinction, factors, organization, orientation, judgment, and action from [Theory of Determinative Responsibility](02-theory-of-determinative-responsibility.md); it does not redefine them. It records procedural facts from [Action Responsibility Practice](08-action-responsibility-practice.md) but does not define the practice procedure. It only references structure candidates from the [Responsibility Structure Candidate Catalog](06-responsibility-structure-candidate-catalog.md), and does not rewrite an epistemic "structure candidate" as the Record Plane lifecycle state `candidate`. Theory / Practice do not import this specification's tokens in the reverse direction.
+It only **represents** distinction, factors, organization, orientation, judgment, and action from [Theory of Determinative Responsibility](theory-of-determinative-responsibility.md); it does not redefine them. It records procedural facts from [Action Responsibility Practice](action-responsibility-practice.md) but does not define the practice procedure. It only references structure candidates from the [Responsibility Structure Candidate Catalog](responsibility-structure-candidate-catalog.md), and does not rewrite an epistemic "structure candidate" as the Record Plane lifecycle state `candidate`. Theory / Practice do not import this specification's tokens in the reverse direction.
 
 This document is not responsible for theories of truth, statistical or causal methodology, value ranking, the normative legitimacy of authorization, domain evidence standards, privacy or legal criteria, current project ports, commands, scheduled tasks, database layouts, or runtime topology. Those belong to project READMEs, code, and RUNBOOKs.
 
 ## I. Cross-cutting position and purpose
 
-The Responsibility Record Plane is not a downstream stage of [Action Responsibility Practice](08-action-responsibility-practice.md). It cuts across research, experiments, project changes, runtime incidents, rule promotion, and real-world action, providing common record semantics to different processes.
+The Responsibility Record Plane is not a downstream stage of [Action Responsibility Practice](action-responsibility-practice.md). It cuts across research, experiments, project changes, runtime incidents, rule promotion, and real-world action, providing common record semantics to different processes.
 
 The minimum objectives of this specification are:
 
@@ -126,7 +126,7 @@ Statements about allowed states, excluded paths, bottlenecks, limiting factors, 
 
 ### 2. "Judgment" is not a `record_type`
 
-The canonical definition of judgment belongs to [Theory of Determinative Responsibility](02-theory-of-determinative-responsibility.md). In the Responsibility Record Plane, judgment is the current integrated reading of existing `Assertion`, `Derivation`, `Goal`, `Constraint`, evidence, unknowns, and other records.
+The canonical definition of judgment belongs to [Theory of Determinative Responsibility](theory-of-determinative-responsibility.md). In the Responsibility Record Plane, judgment is the current integrated reading of existing `Assertion`, `Derivation`, `Goal`, `Constraint`, evidence, unknowns, and other records.
 
 If that integration changes subsequent real-world action, create a separate `Decision` and record authorization relations explicitly. Do not add a `Judgment` record type in order to bypass this boundary.
 
@@ -171,7 +171,7 @@ Policy, Skill, or persistent rule
 draft → candidate --promote--> official → deprecated → archived
 ```
 
-In this specification, `candidate` is a lifecycle state of a `Policy`, Skill, or persistent rule. It is not a `record_type`, and it is not the same as the epistemic "structure candidate" in the [Responsibility Structure Candidate Catalog](06-responsibility-structure-candidate-catalog.md).
+In this specification, `candidate` is a lifecycle state of a `Policy`, Skill, or persistent rule. It is not a `record_type`, and it is not the same as the epistemic "structure candidate" in the [Responsibility Structure Candidate Catalog](responsibility-structure-candidate-catalog.md).
 
 Public release, broad acceptance, entry into `official`, or long-running operation establishes only facts about dissemination, adoption, or lifecycle. Truth, legitimacy of purpose, effectiveness of action, independent uptake by a community, and conditions of affected parties still require independent evidence.
 

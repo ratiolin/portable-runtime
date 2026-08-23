@@ -109,9 +109,9 @@ The V1 public interface includes only **finite civilizational reliability, corre
 
 Observation failure, dissent failure, validation failure, correction failure, memory failure, epistemic lineage, reliability heterogeneity, common-cause containment for recovery, fault domain, irreversible failure surface, reliability profile, and reliability claim may still be used rigorously in the prose, but they are document-local working vocabulary. Naming them does not enlarge the platform-level canonical surface.
 
-Difference, factor, organizational structure, orientation, judgment, action, correction, and open / closure are inherited from the [Theory of Determinative Responsibility](02-theory-of-determinative-responsibility.md); candidate generation, cognitive frontier, open validation, revision depth, finite reflexivity, and selective consolidation from the [Theory of Cognitive Responsibility](03-theory-of-cognitive-responsibility.md); strategic actor and strategic reopen attribution from the [Theory of Interaction Responsibility](04-theory-of-interaction-responsibility.md).
+Difference, factor, organizational structure, orientation, judgment, action, correction, and open / closure are inherited from the [Theory of Determinative Responsibility](theory-of-determinative-responsibility.md); candidate generation, cognitive frontier, open validation, revision depth, finite reflexivity, and selective consolidation from the [Theory of Cognitive Responsibility](theory-of-cognitive-responsibility.md); strategic actor and strategic reopen attribution from the [Theory of Interaction Responsibility](theory-of-interaction-responsibility.md).
 
-This document answers only **what structural reliability problems should be diagnosed**. Concrete checks, procedure strength, authority, execution, verification, stopping, recovery, and exit are uniformly handed to [Action Responsibility Practice](08-action-responsibility-practice.md). This document does not maintain a second operational checklist.
+This document answers only **what structural reliability problems should be diagnosed**. Concrete checks, procedure strength, authority, execution, verification, stopping, recovery, and exit are uniformly handed to [Action Responsibility Practice](action-responsibility-practice.md). This document does not maintain a second operational checklist.
 
 When structural diagnosis enters runtime governance, facts, risk interpretation, and governance action must remain separate. A runtime may use an explicit policy profile for local rate, parallelism, side-effect, blast-radius, exposure, cooldown, and recovery-window thresholds. These numerical values belong to replaceable, versioned profiles, not to this theory or the framework as universal safety invariants. An assessment should be able to answer separately: what was observed (**observation**), what risk is judged from it (**risk assessment**), and what action the current profile requires (**disposition**).
 
@@ -312,7 +312,7 @@ $$
 }
 $$
 
-Emergency, experimental, or temporary high-authority states are especially prone to becoming permanent through inertia, dependency, sunk cost, or lack of exit paths. Reliability analysis identifies this structural risk only; who may authorize, default state at expiry, legality, and rights boundaries belong to law, institutions, and [Action Responsibility Practice](08-action-responsibility-practice.md).
+Emergency, experimental, or temporary high-authority states are especially prone to becoming permanent through inertia, dependency, sunk cost, or lack of exit paths. Reliability analysis identifies this structural risk only; who may authorize, default state at expiry, legality, and rights boundaries belong to law, institutions, and [Action Responsibility Practice](action-responsibility-practice.md).
 
 ## VII. Civilizational Maneuverability
 
@@ -383,7 +383,7 @@ The following changes may trigger reopening:
 - previously reachable alternatives close because prerequisites disappear;
 - new candidates or anomalous outcomes reveal omissions in the existing reliability profile.
 
-On reopening, first judge whether the answer, evidence, model, system boundary, or whole problem definition needs revision. Concrete revision procedures are handed to [Action Responsibility Practice](08-action-responsibility-practice.md).
+On reopening, first judge whether the answer, evidence, model, system boundary, or whole problem definition needs revision. Concrete revision procedures are handed to [Action Responsibility Practice](action-responsibility-practice.md).
 
 ## XI. Normative Boundary and Practice Handoff
 
@@ -405,8 +405,8 @@ $$
 
 When entering real-world action:
 
-- procedure strength, authority, third-party boundaries, execution, verification, recovery, and exit are handed to [Action Responsibility Practice](08-action-responsibility-practice.md);
-- subject experience, individual value commitments, and value-conflict boundaries are handed to the [Theory of Value Responsibility](05-theory-of-value-responsibility.md);
+- procedure strength, authority, third-party boundaries, execution, verification, recovery, and exit are handed to [Action Responsibility Practice](action-responsibility-practice.md);
+- subject experience, individual value commitments, and value-conflict boundaries are handed to the [Theory of Value Responsibility](theory-of-value-responsibility.md);
 - rights, obligations, legality, and institutional legitimacy are handed to legal and normative procedures;
 - mechanisms, probabilities, thresholds, damage, and recovery costs are handed to domain models.
 

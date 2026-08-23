@@ -33,6 +33,10 @@ class UppercaseProvider:
 
     async def cancel(self, request_id: str) -> None:
         return None
+
+    async def reconcile(self, request_id: str) -> CapabilityResult | None:
+        """Optional recovery hook for an ambiguous provider attempt."""
+        return None
 ```
 
 Register at runtime:
@@ -65,6 +69,15 @@ async def invoke(request: CapabilityRequest) -> CapabilityResult:
 ```
 
 Providers return structured `status` (`succeeded/failed/unavailable/needs-input/cancelled`) and `output_artifact_refs/evidence_refs`. They must not write Runtime state directly; Runtime records `Action/Outcome` around invocation.
+
+`reconcile(request_id)` is an optional part of the provider contract.  Runtime
+calls it only during recovery of an ambiguous attempt and keeps the result
+behind the same reality boundary as `invoke`.  A provider without an
+authoritative operation ledger may omit the method or return `None`; for
+reconcilable or irreversible effects, Runtime then preserves the outcome as
+`unknown` rather than guessing success or failure.  Providers that can query a
+remote operation should return a structured `CapabilityResult` (including
+`unknown` when the remote system still cannot establish the outcome).
 
 Capabilities are open strings, e.g. `reason.generate, code.edit, verify.http, human.approve, notify.send`. Core never hardcodes the set.
 

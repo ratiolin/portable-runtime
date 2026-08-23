@@ -1,15 +1,15 @@
 # Plugin authoring
 
-You can add a provider without reading the whole runtime. Only this document + `templates/provider-python/` is required.
+You can add a provider without reading the whole runtime. Only this document +
+the runnable `examples/echo-provider/` example is required.
 
-## 1. Copy the template
+## 1. Copy the example
 
 ```powershell
-Copy-Item -Recurse templates/provider-python my-provider
-# or: templates/provider-stdio for a language-neutral external provider
+Copy-Item -Recurse examples/echo-provider my-provider
 ```
 
-`templates/provider-python/` contains:
+`examples/echo-provider/` contains:
 
 ```
 manifest.json
@@ -24,16 +24,24 @@ provider.py   # <50 lines example
   "name": "Uppercase Provider",
   "version": "1.0.0",
   "protocol_version": "1",
-  "transport": "python",
+  "transport": "stdio-jsonl",
+  "command": ["python", "provider.py"],
   "capabilities": ["text.uppercase"]
 }
 ```
 
 `id` must be stable, `capabilities` are open strings (e.g. `text.uppercase`). Do not use a closed enum.
 
-## 3. Implement invoke
+## 3. Implement the provider
 
-`templates/provider-python/provider.py`:
+For an external stdio plugin, edit the copied `provider.py`.  It reads one
+JSON request per stdin line and writes one result per stdout line.  The
+language-neutral wire contract is described in
+`docs/provider-protocol.md`.
+
+For an in-process Python provider (registered directly with
+`ProviderRegistry`, not loaded by `PluginManager`), the decorator form is the
+smallest implementation:
 
 ```python
 from portable_runtime.plugin import provider
@@ -48,8 +56,6 @@ async def invoke(request: CapabilityRequest) -> CapabilityResult:
         message=(request.instruction or "").upper(),
     )
 ```
-
-For stdio, implement `provider.py` that reads one JSON line from stdin and prints one JSON result to stdout (see `examples/echo-provider/`).
 
 ## 4. Validate
 
@@ -68,6 +74,7 @@ invoke accepted
 result schema valid
 timeout handled
 cancel handled or explicit unsupported
+reconcile handled or explicit unsupported; unresolved effects remain unknown
 invalid input returns structured error
 provider exit does not kill Runtime
 ```

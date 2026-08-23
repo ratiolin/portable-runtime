@@ -91,7 +91,7 @@ semantic_contract:
 
 # Theory of Value Responsibility
 
-> **Knowledge and evidence boundary:** This document specializes possible endogenous sources of orientation `G` in the [Theory of Determinative Responsibility](02-theory-of-determinative-responsibility.md). It explains how real differences form system relevance and regulatory polarity within finite systems, and—only for objects that there is already reason to treat as experiencing subjects—how experiential polarity, first-order orientation, reflective endorsement, and individual value commitment may further form. This document does not derive norms from facts, does not explain how consciousness is generated, does not determine whether a concrete object actually has subjective experience, and does not establish an ultimate good or universal ethics.
+> **Knowledge and evidence boundary:** This document specializes possible endogenous sources of orientation `G` in the [Theory of Determinative Responsibility](theory-of-determinative-responsibility.md). It explains how real differences form system relevance and regulatory polarity within finite systems, and—only for objects that there is already reason to treat as experiencing subjects—how experiential polarity, first-order orientation, reflective endorsement, and individual value commitment may further form. This document does not derive norms from facts, does not explain how consciousness is generated, does not determine whether a concrete object actually has subjective experience, and does not establish an ultimate good or universal ethics.
 
 > **Core discipline:** A system being affected is not value; regulation is not experience; experience is not an ought; individual endorsement is not a legitimate constraint on others.
 
@@ -99,13 +99,13 @@ semantic_contract:
 
 This document has only four public interface items: **finite value genesis, experience-status gate, individual value commitment, and reopening under value conflict**. Consequence difference, system relevance, regulatory polarity, experiential polarity, subject-relative self-involvement, first-order orientation, reflective endorsement, and value-source tracing are still used rigorously in the prose but belong to document-local working vocabulary. Adjusting these auxiliary layers should not automatically trigger cross-document compatibility changes.
 
-`E₀`, `E₁`, distinction, factor, organization, orientation `G`, judgment, action, correction, and open / closure are inherited from the [Theory of Determinative Responsibility](02-theory-of-determinative-responsibility.md). Candidate generation, structural tension, counterfactual construction, open validation, revision depth, finite reflexivity, functional agency, and the working boundary of subjectivity are inherited from the [Theory of Cognitive Responsibility](03-theory-of-cognitive-responsibility.md). Authority, risk, verification, recovery, stopping, and exit in real-world action are handed to [Action Responsibility Practice](08-action-responsibility-practice.md).
+`E₀`, `E₁`, distinction, factor, organization, orientation `G`, judgment, action, correction, and open / closure are inherited from the [Theory of Determinative Responsibility](theory-of-determinative-responsibility.md). Candidate generation, structural tension, counterfactual construction, open validation, revision depth, finite reflexivity, functional agency, and the working boundary of subjectivity are inherited from the [Theory of Cognitive Responsibility](theory-of-cognitive-responsibility.md). Authority, risk, verification, recovery, stopping, and exit in real-world action are handed to [Action Responsibility Practice](action-responsibility-practice.md).
 
 This document must not redefine `G`; it answers only: **which reality–system–subject relations can become endogenous sources of `G`, and what epistemic and normative status do those sources have?**
 
 ## I. Working Structure of Finite Value Genesis
 
-In the main chain of the [Theory of Determinative Responsibility](02-theory-of-determinative-responsibility.md), orientation satisfies:
+In the main chain of the [Theory of Determinative Responsibility](theory-of-determinative-responsibility.md), orientation satisfies:
 
 $$
 G_t\subseteq S_t.
@@ -205,7 +205,7 @@ Orientation may also arise from inheritance, teaching, social relations, institu
 
 ## III. Experience-Status Gate
 
-The **experience-status gate** states that analysis of experiential polarity, subject-relative self-involvement, and first-person value formation is permitted only when the current object, under relevant domain evidence and the working boundary of subjectivity in the [Theory of Cognitive Responsibility](03-theory-of-cognitive-responsibility.md), already has reason to be treated as a subject with its own experience.
+The **experience-status gate** states that analysis of experiential polarity, subject-relative self-involvement, and first-person value formation is permitted only when the current object, under relevant domain evidence and the working boundary of subjectivity in the [Theory of Cognitive Responsibility](theory-of-cognitive-responsibility.md), already has reason to be treated as a subject with its own experience.
 
 Thus:
 
@@ -346,7 +346,7 @@ $$
 \text{normative conclusion}.
 $$
 
-When value enters shared affairs, affected parties, loss, exit, power asymmetry, non-compensable boundaries, decision and stopping authority, and institutional legitimacy must be handled separately. These questions are handed to the shared-affairs and normative boundaries of the [Theory of Determinative Responsibility](02-theory-of-determinative-responsibility.md), [Action Responsibility Practice](08-action-responsibility-practice.md), and the relevant legal and normative procedures.
+When value enters shared affairs, affected parties, loss, exit, power asymmetry, non-compensable boundaries, decision and stopping authority, and institutional legitimacy must be handled separately. These questions are handed to the shared-affairs and normative boundaries of the [Theory of Determinative Responsibility](theory-of-determinative-responsibility.md), [Action Responsibility Practice](action-responsibility-practice.md), and the relevant legal and normative procedures.
 
 ## IX. Open, Closure, and Domain Handoff
 
