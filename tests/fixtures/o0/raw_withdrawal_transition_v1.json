@@ -1,0 +1,61 @@
+{
+  "schema_version": "raw-withdrawal-transition-v1",
+  "subject_ref": "assertion-ref4-1",
+  "before_raw_snapshot": {
+    "id": "assertion-ref4-1",
+    "record_type": "Assertion",
+    "created_at": "2026-08-24T00:00:00Z",
+    "created_by": "ref4-fixture",
+    "system_boundary": "runtime",
+    "scope": {},
+    "source_refs": [
+      "evidence-ref4-1"
+    ],
+    "environment_versions": {
+      "validator": "v1"
+    },
+    "assumptions": [],
+    "known_limitations": [],
+    "unknown_scopes": [],
+    "invalidation_conditions": [
+      "validator-change"
+    ],
+    "lifecycle_status": "current",
+    "epistemic_status": "supported",
+    "version": 7,
+    "metadata": {
+      "fixture": "ref4"
+    },
+    "kind": "claim",
+    "statement": "selected assertion remains historically recorded"
+  },
+  "after_raw_snapshot": {
+    "id": "assertion-ref4-1",
+    "record_type": "Assertion",
+    "created_at": "2026-08-24T00:00:00Z",
+    "created_by": "ref4-fixture",
+    "system_boundary": "runtime",
+    "scope": {},
+    "source_refs": [
+      "evidence-ref4-1"
+    ],
+    "environment_versions": {
+      "validator": "v1"
+    },
+    "assumptions": [],
+    "known_limitations": [],
+    "unknown_scopes": [],
+    "invalidation_conditions": [
+      "validator-change"
+    ],
+    "lifecycle_status": "current",
+    "epistemic_status": "revalidation-required",
+    "version": 8,
+    "metadata": {
+      "fixture": "ref4"
+    },
+    "kind": "claim",
+    "statement": "selected assertion remains historically recorded"
+  },
+  "event_ref": "fixture-transition:assertion-ref4-1:7-8"
+}
