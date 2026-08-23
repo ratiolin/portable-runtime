@@ -330,7 +330,7 @@ Practice concepts such as "situation" or "procedure profile" do not thereby auto
 
 ## IX. Implementation boundary and acceptance
 
-The implementation layer must comply with these semantics, but storage table names, file layouts, APIs, agent commands, scheduled tasks, health ports, model routing, network policies, concrete verifiers, and runtime states belong to the [control-plane project README](https://github.com/ratiolin/control-plane/blob/main/README.md), code, tests, CI, and RUNBOOKs; they are not duplicated here.
+The implementation layer must comply with these semantics, but storage table names, file layouts, APIs, agent commands, scheduled tasks, health ports, model routing, network policies, concrete verifiers, and runtime states belong to the [control-plane project README](https://github.com/xiongweilin/control-plane/blob/main/README.md), code, tests, CI, and RUNBOOKs; they are not duplicated here.
 
 At minimum, an implementation should be able to:
 

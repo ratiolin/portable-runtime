@@ -3,7 +3,7 @@
 Thanks for your interest!
 
 ## Scope
-This repository is maintained primarily by @ratiolin. Issues and pull requests are welcome.
+This repository is maintained primarily by @xiongweilin. Issues and pull requests are welcome.
 
 ## Workflow
 1. Open an issue to discuss major changes.
