@@ -21,7 +21,7 @@ This document governs the relationship between this repository and `xiongweilin/
 The two repositories belong to the same broader research program, but they have different responsibility owners:
 
 - `portable-runtime` owns Framework V1.0 documentation, record semantics, operational/runtime mechanisms, implementation behavior, and executable evidence;
-- `responsibility_topology` owns Lean specializations, theorem statements, proof artifacts, and paper-specific formal claim surfaces.
+- `responsibility_topology` owns Lean specializations, theorem statements, proof artifacts, paper-specific formal claim surfaces, and the current cross-repository REF-1 observation-bridge specification.
 
 The relationship is intentionally **not** a verified implementation/refinement relation.
 
@@ -93,53 +93,143 @@ This runtime's R1.3 revalidation surface uses typed dependency relations to prod
 
 Therefore the following is safe:
 
-> Both repositories preserve the distinction between recorded/historical dependency and mutable current qualification, while using different dependency-propagation semantics for their respective object models.
+> Both repositories preserve distinctions among historical dependency, mutable operative/current qualification, observed impact, and subsequent review/discharge responsibilities, while using different propagation and execution semantics for their respective object models.
 
 The following is not currently supported:
 
 > The Lean challenge semantics verify the portable-runtime revalidation engine.
 
-## 4. Future bridge target
+## 4. REF-1 observation bridge status
 
-If a formal execution bridge is developed later, the preferred target is observational abstraction/refinement, not literal state equality.
+The first bridge-design pass is now recorded in `responsibility_topology/OBSERVATION_BRIDGE_ALPHA0.md`.
 
-Candidate shape:
+It changes the previous candidate bridge shape.
+
+### 4.1 The state-only signature is rejected
+
+The earlier planning shape:
 
 ```text
 alpha : RuntimeState -> FormalObservation
 ```
 
-followed by a theorem family such as:
+is now considered underspecified for the current systems.
+
+Runtime authorization currentness can depend on observation time through grant validity, expiry, and revocation, while durable `AuthorizationUse` deliberately preserves authorization at the historical action time.
+
+On the formal side, some impact/repair observations depend on challenge/repair trace witnesses or supplied repair problems rather than on the final state alone.
+
+Therefore the current bridge inputs are conceptual observation bundles:
 
 ```text
-RuntimeStep(r, r')
+RuntimeObservationBundle0 :=
+  runtime snapshot
+  + observedAt
+  + relevant records/relations
+  + optional impact/reopen views
+
+FormalObservationBundle0 :=
+  formal state
+  + finite observation boundary
+  + optional challenge/revalidation/problem witnesses
+```
+
+### 4.2 Neutral common observation algebra
+
+The current target is a neutral `O0` rather than a Lean-state-shaped object:
+
+```text
+RuntimeObservationBundle0
+        | alpha_R0
+        v
+       O0
+        ^
+        | alpha_F0
+FormalObservationBundle0
+```
+
+`O0` keeps distinct observation families for:
+
+```text
+historicalTrace
+historicalDependency
+operativeStatus
+activationUse
+impactObservation
+reviewInvalidation
+dischargeRequirement
+dischargeEvidence
+regimeReference
+mismatchAnnotations
+```
+
+This vocabulary is intentionally weaker than either repository's full internal model.
+
+### 4.3 XDI constraints inherited by REF-1
+
+The cross-domain falsification work changes bridge assumptions:
+
+- historical trace and operative status are separate; a historical record must not imply continued operative force;
+- impact observation remains separate from discharge requirement/evidence;
+- regime/policy/version references may be preserved, but higher-order adequacy is not projected as a Boolean fact.
+
+### 4.4 Current mapping status
+
+The bridge currently classifies mappings as:
+
+```text
+EXACT-SHAPE
+ABSTRACTION
+PARTIAL
+SEMANTIC-MISMATCH
+NOT-REPRESENTED
+```
+
+No broad runtime/formal coordinate is currently approved as unconditional `EXACT-SHAPE`.
+
+Important known mismatches include:
+
+```text
+runtime direct typed dependency impact
+!=
+formal transitive historical challenge closure
+
+runtime clock-indexed grant currentness
+!=
+formal state-indexed Usable/BaseCurrent/Grounded
+
+runtime RevalidationDisposition policy action
+!=
+formal RepairProblem / RepairAction / RepairSet
+
+runtime Work/Action/AuthorizationUse execution evidence
+!=
+formal Grounded activation topology
+
+runtime deep ReopenAssessment scopes
+!=
+formal Q_open entitlement theory
+```
+
+### 4.5 What REF-1 does establish
+
+REF-1 identifies a non-trivial **partial observational boundary**. It does not establish implementation refinement.
+
+The next bridge step, if undertaken, is finite fixture adapters that emit `O0` observations from each side and expose information loss/mismatch mechanically.
+
+Do not jump directly to:
+
+```text
+RuntimeStep(r,r')
 ->
-FormalStep* (alpha r) (alpha r')
+FormalStep*(...)
 ```
 
-or a weaker observational correspondence over a selected interface.
-
-Any such bridge must specify:
-
-1. which runtime records/states are observed;
-2. which Lean objects those observations denote;
-3. which runtime transitions are in scope;
-4. whether one runtime step maps to zero, one, or multiple formal steps;
-5. which observations are preserved, reflected, or only simulated;
-6. what runtime detail is abstracted away;
-7. where dependency-policy differences require separate semantics instead of forced equivalence.
-
-Do not target:
-
-```text
-LeanState = PythonState
-```
-
-unless future model design first makes that identity meaningful.
+until those fixture projections are stable without extensive ad hoc case distinctions.
 
 ## 5. Adequacy remains a separate responsibility
 
-Even a correct future refinement theorem would not prove that the shared responsibility vocabulary is adequate.
+Even a correct future observational or refinement theorem would not prove that the shared responsibility vocabulary is adequate.
 
 Keep distinct:
 
@@ -159,19 +249,30 @@ entitlement to conclude that the model itself is sufficient
 
 The latter is the `Q_open`-level problem: when may a system conclude that its responsibility vocabulary, dependency cuts, or governing regime must itself be reopened?
 
-## 6. Cross-domain invariance remains unproved
+Runtime deep reopen is currently an operational representation of a selected revision scope. It is not proof that the revision-scope judgment is correct.
 
-The current Lean kernel is an epistemic/state-backed specialization. Similar structures in other domains are research candidates, not established invariants merely because the same terminology can be applied.
+## 6. Cross-domain candidate status
 
-A future cross-domain result must distinguish:
+Cross-domain falsification no longer supports the unqualified statement:
 
 ```text
-shared analogy
-!=
-shared formal structure
-!=
-proved invariant under specialization
+persistent relation != current responsibility
 ```
+
+as a candidate invariant. Historical trace/record persistence and operative-relation persistence must be separated.
+
+Two narrower candidate invariants currently survive at `formal similarity` only:
+
+```text
+CI-2
+Affectedness does not by itself constitute sufficient discharge.
+
+CI-3
+Conformance within a represented regime does not by itself settle
+higher-order adequacy/validity/fitness of that regime for its relied-upon purpose.
+```
+
+Neither has established mechanism similarity or universality.
 
 ## 7. Strong-claim gate
 
@@ -183,6 +284,7 @@ formal refinement
 implements exactly
 semantically equivalent
 complete dependency extraction
+universal responsibility invariant
 ```
 
 must cite a concrete theorem/artifact establishing that relation.
@@ -197,6 +299,7 @@ operationalize
 represent
 handoff
 conceptual alignment
+partial observational boundary
 selected conformance / observational evidence
 ```
 
