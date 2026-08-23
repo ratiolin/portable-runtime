@@ -70,13 +70,13 @@ semantic_contract:
 
 # Theory of Cognitive Responsibility
 
-> **Knowledge and evidence boundary:** This document specializes the finite-system intervention layer of the [Theory of Determinative Responsibility](02-theory-of-determinative-responsibility.md). It explains how finite systems form, invoke, test, and reorganize usable structures, and how they selectively allocate cognitive activity when neither reality nor unrealized possibilities can be completely acquired or exhaustively unfolded. Its boundaries for intelligence, agency, and subjectivity are a working original synthesis; concrete mechanisms of perception, attention, memory, affect, learning, neuroscience, animal cognition, and artificial systems remain matters for domain evidence.
+> **Knowledge and evidence boundary:** This document specializes the finite-system intervention layer of the [Theory of Determinative Responsibility](theory-of-determinative-responsibility.md). It explains how finite systems form, invoke, test, and reorganize usable structures, and how they selectively allocate cognitive activity when neither reality nor unrealized possibilities can be completely acquired or exhaustively unfolded. Its boundaries for intelligence, agency, and subjectivity are a working original synthesis; concrete mechanisms of perception, attention, memory, affect, learning, neuroscience, animal cognition, and artificial systems remain matters for domain evidence.
 
 ## Definition Dependencies
 
 The V1 public interface includes finite intelligence, candidate generation, structural tension, directional revision candidates, epistemic action, material acquisition, open validation, revision-depth judgment, finite reflexivity, counterfactual construction, cognitive-search-allocation judgment, cognitive frontier, selective consolidation, functional agency, and the working boundary of subjectivity. Other named processes and working notation belong to the internal vocabulary of this document and may be revised without changing the cross-document interface.
 
-`E₀`, difference, retention, distinction, factor, organizational structure, orientation, judgment, action, correction, and open / closure are inherited from the [Theory of Determinative Responsibility](02-theory-of-determinative-responsibility.md). When persistent recording of current support, versions, or processing state is required, responsibility is handed to the [Responsibility Record Plane](09-responsibility-record-plane.md), but this theory does not import its record tokens. This document specializes mechanisms only; it does not establish a second meta-model, normative legitimacy, an action procedure, or a record schema.
+`E₀`, difference, retention, distinction, factor, organizational structure, orientation, judgment, action, correction, and open / closure are inherited from the [Theory of Determinative Responsibility](theory-of-determinative-responsibility.md). When persistent recording of current support, versions, or processing state is required, responsibility is handed to the [Responsibility Record Plane](responsibility-record-plane.md), but this theory does not import its record tokens. This document specializes mechanisms only; it does not establish a second meta-model, normative legitimacy, an action procedure, or a record schema.
 
 ## I. Working Definitions and System Boundary
 
@@ -266,7 +266,7 @@ This denotes the current correspondence, under retention standard $K$, by which 
 
 These judgments should at minimum preserve current status, reasons, scope, and unknowns. “Undefined,” “incompatible,” “insufficiently determined,” and “currently not real-world-testable” must not be collapsed into one generic state of “insufficient information.”
 
-They are all fallible higher-order judgments and inherit two disciplines from the [Theory of Determinative Responsibility](02-theory-of-determinative-responsibility.md):
+They are all fallible higher-order judgments and inherit two disciplines from the [Theory of Determinative Responsibility](theory-of-determinative-responsibility.md):
 
 $$
 \text{separately determinable}
@@ -320,7 +320,7 @@ The ability to construct a new orientation $G'$ also does not grant authority to
 
 $\Lambda$ concerns the opportunity value of epistemic activity: how likely continued generation, unfolding, fact-checking, tool use, or experimentation is to change the current judgment, preserve critical options, or expose structural error, relative to time, resources, risk, and opportunity cost.
 
-For cognitive investment across time, one should also check whether the current investment changes the future feasible set for learning, judgment, and action. Some investment is valuable not because it immediately changes a current judgment, but because it builds callable structure that requires long accumulation, or identifies external prerequisites that must be acquired within a time window, thereby preserving paths that would later be difficult to reopen or reducing switching cost. Conversely, maintaining a cognitive direction over time also has maintenance and opportunity costs. Qualifications, relations, records, institutional entry points, and similar items are external real-world conditions rather than cognitive structures themselves; their accumulation mechanisms, sensitive windows, qualification requirements, and irreversible conditions are owned by the relevant domain evidence and [Action Responsibility Practice](08-action-responsibility-practice.md), not presupposed by this theory.
+For cognitive investment across time, one should also check whether the current investment changes the future feasible set for learning, judgment, and action. Some investment is valuable not because it immediately changes a current judgment, but because it builds callable structure that requires long accumulation, or identifies external prerequisites that must be acquired within a time window, thereby preserving paths that would later be difficult to reopen or reducing switching cost. Conversely, maintaining a cognitive direction over time also has maintenance and opportunity costs. Qualifications, relations, records, institutional entry points, and similar items are external real-world conditions rather than cognitive structures themselves; their accumulation mechanisms, sensitive windows, qualification requirements, and irreversible conditions are owned by the relevant domain evidence and [Action Responsibility Practice](action-responsibility-practice.md), not presupposed by this theory.
 
 $\Lambda$ can determine which candidates to continue forming, which deserve $\Phi$, when to consult sources or invoke tools, which unknowns require real-world exploration, which directions to hold or prune, and when further search is unlikely to change the current selection. Therefore, **stopping search can itself be intelligent behavior**.
 
@@ -499,7 +499,7 @@ $$
 
 The arrow only indicates that mechanism tendencies may change over time with experience and real-world outcomes. It does not state a numerical state-update equation.
 
-Structured teaching and public externalization may both participate in consolidation and invocation, but neither removes the need for reality-testing. Where community acceptance, authorization, maintenance, succession, dissent, and retirement are involved, hand off to governance questions in the [Responsibility Structure Candidate Catalog](06-responsibility-structure-candidate-catalog.md) and the relevant domain model.
+Structured teaching and public externalization may both participate in consolidation and invocation, but neither removes the need for reality-testing. Where community acceptance, authorization, maintenance, succession, dissent, and retirement are involved, hand off to governance questions in the [Responsibility Structure Candidate Catalog](responsibility-structure-candidate-catalog.md) and the relevant domain model.
 
 ## VI. Working Boundaries Among Intelligence, Agency, and Subjectivity
 
@@ -529,10 +529,10 @@ Properties can be copied, functions can be taken over, roles can be inherited; a
 
 ### 3. Separation of intelligence, power, and legitimacy
 
-Greater intelligence means stronger capacity for structure formation, invocation, and correction. It does not automatically grant the power to set goals, decide, execute, stop, or assign responsibility. Analysis of power and legitimacy belongs to the shared-affairs and normative boundaries of the [Theory of Determinative Responsibility](02-theory-of-determinative-responsibility.md), [Action Responsibility Practice](08-action-responsibility-practice.md), and concrete institutions.
+Greater intelligence means stronger capacity for structure formation, invocation, and correction. It does not automatically grant the power to set goals, decide, execute, stop, or assign responsibility. Analysis of power and legitimacy belongs to the shared-affairs and normative boundaries of the [Theory of Determinative Responsibility](theory-of-determinative-responsibility.md), [Action Responsibility Practice](action-responsibility-practice.md), and concrete institutions.
 
 ## VII. Handoff to Empirical Mechanisms and Domains
 
 Attention, memory, affect, heuristics, habits, neural mechanisms, teaching effects, animal perception, and artificial-model architectures may implement or limit the functions described here, but they are not meta-definitions in this document. Whether such mechanisms hold, and in what direction or strength, must be supported by evidence in the corresponding domain.
 
-When evidence, assertions, decisions, actions, outcomes, and revisions require persistent recording, hand off to the [Responsibility Record Plane](09-responsibility-record-plane.md). For how actions acquire procedural strength and enter reality, see [Action Responsibility Practice](08-action-responsibility-practice.md).
+When evidence, assertions, decisions, actions, outcomes, and revisions require persistent recording, hand off to the [Responsibility Record Plane](responsibility-record-plane.md). For how actions acquire procedural strength and enter reality, see [Action Responsibility Practice](action-responsibility-practice.md).

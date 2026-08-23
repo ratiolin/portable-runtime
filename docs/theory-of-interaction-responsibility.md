@@ -90,7 +90,7 @@ semantic_contract:
 
 # Theory of Interaction Responsibility
 
-> **Knowledge and evidence boundary:** This document specializes the finite-system intervention and shared-affairs layers of the [Theory of Determinative Responsibility](02-theory-of-determinative-responsibility.md). It explains how multiple finite systems, under incomplete, heterogeneous, and potentially mutually influencing information and representation conditions, form strategic structures, models of others, judgments, and actions, and when an open strategic problem can be provisionally closed into a joint representation suitable for handoff to formal tools. It does not presuppose a unique, complete, actor-accessible “true game,” does not establish a second cognitive machine, and does not replace game theory, economics, organization studies, political science, military studies, law, or other domain models.
+> **Knowledge and evidence boundary:** This document specializes the finite-system intervention and shared-affairs layers of the [Theory of Determinative Responsibility](theory-of-determinative-responsibility.md). It explains how multiple finite systems, under incomplete, heterogeneous, and potentially mutually influencing information and representation conditions, form strategic structures, models of others, judgments, and actions, and when an open strategic problem can be provisionally closed into a joint representation suitable for handoff to formal tools. It does not presuppose a unique, complete, actor-accessible “true game,” does not establish a second cognitive machine, and does not replace game theory, economics, organization studies, political science, military studies, law, or other domain models.
 >
 > **Core discipline:** Finite strategic actors act on currently callable, fallible, and potentially incomplete strategic structures. Their actions then enter subsequent interaction through each other actor's own connection to reality, distinction, organization, and judgment. Only after analytical purpose, scope, and residual unknowns have been made explicit, and the joint strategic representation has reached proportionate closure, should the current representation be handed to closed formal tools.
 
@@ -98,7 +98,7 @@ semantic_contract:
 
 The V1 public interface includes finite-system strategic interaction, strategic actor, strategic-situation representation, other-actor model, joint strategic-representation closure, strategic reopen attribution, and formal-model handoff. Strategic cognitive frontier, relational strategic signal, strategic epistemic closure, and strategic epistemic action remain rigorously defined here but are document-local working vocabulary.
 
-Distinction, factor, organizational structure, orientation, judgment, action, and open / closure are inherited from the [Theory of Determinative Responsibility](02-theory-of-determinative-responsibility.md). Candidate generation, cognitive frontier, counterfactual construction, epistemic action, material acquisition, open validation, revision-depth judgment, cognitive-search-allocation judgment, finite reflexivity, and the working boundary of subjectivity are inherited from the [Theory of Cognitive Responsibility](03-theory-of-cognitive-responsibility.md). Relevant cross-domain patterns are taken only as candidate questions from the [Responsibility Structure Candidate Catalog](06-responsibility-structure-candidate-catalog.md); real-world action procedures are handed off to [Action Responsibility Practice](08-action-responsibility-practice.md).
+Distinction, factor, organizational structure, orientation, judgment, action, and open / closure are inherited from the [Theory of Determinative Responsibility](theory-of-determinative-responsibility.md). Candidate generation, cognitive frontier, counterfactual construction, epistemic action, material acquisition, open validation, revision-depth judgment, cognitive-search-allocation judgment, finite reflexivity, and the working boundary of subjectivity are inherited from the [Theory of Cognitive Responsibility](theory-of-cognitive-responsibility.md). Relevant cross-domain patterns are taken only as candidate questions from the [Responsibility Structure Candidate Catalog](responsibility-structure-candidate-catalog.md); real-world action procedures are handed off to [Action Responsibility Practice](action-responsibility-practice.md).
 
 This document must not redefine `G` as “game” or “strategic situation.” In this framework:
 
@@ -110,7 +110,7 @@ continues to designate orientation. Strategic-situation representation uniformly
 
 ### Local notation boundary
 
-See the [Responsibility Topology Overview](01-responsibility-topology-overview.md) for general notation discipline. This document adds only that $M_i^j$ does not automatically denote a probabilistic belief, $\mathscr G_i$ does not automatically denote a standard game, and $C^{\mathscr G}$ does not mean that reality itself “has closed.” If formal tools are to promote these working symbols into mathematical objects, participants, states, types, actions, information, preferences, time, probability, observations, and validation conditions must be specified separately.
+See the [Responsibility Topology Overview](responsibility-topology-overview.md) for general notation discipline. This document adds only that $M_i^j$ does not automatically denote a probabilistic belief, $\mathscr G_i$ does not automatically denote a standard game, and $C^{\mathscr G}$ does not mean that reality itself “has closed.” If formal tools are to promote these working symbols into mathematical objects, participants, states, types, actions, information, preferences, time, probability, observations, and validation conditions must be specified separately.
 
 ## I. Working Boundary of Finite-System Strategic Interaction
 
@@ -128,7 +128,7 @@ $$
 \boxed{\text{strategic capability}\not\Rightarrow\text{qualification for responsibility, decision authority, or legitimate authority}}
 $$
 
-Concrete judgments of subjectivity use the working boundary in the [Theory of Cognitive Responsibility](03-theory-of-cognitive-responsibility.md). Rights, authorization, and responsibility belong to shared affairs, domain institutions, and [Action Responsibility Practice](08-action-responsibility-practice.md).
+Concrete judgments of subjectivity use the working boundary in the [Theory of Cognitive Responsibility](theory-of-cognitive-responsibility.md). Rights, authorization, and responsibility belong to shared affairs, domain institutions, and [Action Responsibility Practice](action-responsibility-practice.md).
 
 ### 2. Finite-system strategic interaction
 
@@ -257,7 +257,7 @@ $$
 M_i^{j(i)},\qquad M_i^{j(k)},\qquad M_i^{j(i(k))}.
 $$
 
-The notation does not require infinite levels or common knowledge. Following finite reflexivity from the [Theory of Cognitive Responsibility](03-theory-of-cognitive-responsibility.md):
+The notation does not require infinite levels or common knowledge. Following finite reflexivity from the [Theory of Cognitive Responsibility](theory-of-cognitive-responsibility.md):
 
 $$
 \boxed{
@@ -560,7 +560,7 @@ $$
 \text{authorized for real-world implementation}.
 $$
 
-Where others' rights, shared resources, irreversible loss, public power, privacy, safety, or major asymmetry are involved, hand off to the authority, procedure-strength, verification, recovery, and residual-responsibility checks of [Action Responsibility Practice](08-action-responsibility-practice.md).
+Where others' rights, shared resources, irreversible loss, public power, privacy, safety, or major asymmetry are involved, hand off to the authority, procedure-strength, verification, recovery, and residual-responsibility checks of [Action Responsibility Practice](action-responsibility-practice.md).
 
 ### 3. Power and role positions
 
@@ -582,7 +582,7 @@ $$
 
 to game theory or other formal tools. Formal tools answer “what follows under the currently and adequately specified objects, variables, actions, information, preferences, and rules?” This document answers “how are those strategic determinations formed and tested, and when do they have enough qualification to enter formalization?”
 
-On entering a concrete domain, domain models and situational facts must still determine actors, states, actions, information, preferences, time, mechanisms, probabilities, rights, authorization, risk, thresholds, and validation conditions. Formal results must carry applicability scope, key assumptions, residual unknowns, and reopening conditions; authority for real-world action, third-party boundaries, verification, recovery, stopping, and exit are uniformly handed to [Action Responsibility Practice](08-action-responsibility-practice.md).
+On entering a concrete domain, domain models and situational facts must still determine actors, states, actions, information, preferences, time, mechanisms, probabilities, rights, authorization, risk, thresholds, and validation conditions. Formal results must carry applicability scope, key assumptions, residual unknowns, and reopening conditions; authority for real-world action, third-party boundaries, verification, recovery, stopping, and exit are uniformly handed to [Action Responsibility Practice](action-responsibility-practice.md).
 
 The minimum discipline is:
 

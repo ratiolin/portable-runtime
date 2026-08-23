@@ -23,7 +23,7 @@ semantic_contract:
 
 # Genesis and Architectural Principles of Responsibility Topology
 
-> **Document status:** This document only preserves why the framework formed its current responsibility structure, which shortcuts were rejected, and why some questions are intentionally left open. It does not own canonical definitions. Current owners, invocation relations, and governance rules are determined by [Responsibility Topology Overview](01-responsibility-topology-overview.md) and the `semantic_contract` of each canonical document.
+> **Document status:** This document only preserves why the framework formed its current responsibility structure, which shortcuts were rejected, and why some questions are intentionally left open. It does not own canonical definitions. Current owners, invocation relations, and governance rules are determined by [Responsibility Topology Overview](responsibility-topology-overview.md) and the `semantic_contract` of each canonical document.
 >
 > **Core question:** By what entitlement may a finite system situated inside reality—limited by time, channels, scale, history, and its own structure—extend a currently obtained determination into a stronger epistemic claim, value judgment, intersubjective constraint, or real-world action?
 
@@ -353,7 +353,7 @@ $$
 }
 $$
 
-During competition, frameworks may be compared on real consequences, exposure of failures, unknowns, reconstructability of history, and real and institutional constraints without requiring semantic isomorphism. Migration responsibility arises only when a candidate is ready to enter current routing, replace a component, or form a federation. The concrete governance of migration belongs to the [Responsibility Topology Overview](01-responsibility-topology-overview.md).
+During competition, frameworks may be compared on real consequences, exposure of failures, unknowns, reconstructability of history, and real and institutional constraints without requiring semantic isomorphism. Migration responsibility arises only when a candidate is ready to enter current routing, replace a component, or form a federation. The concrete governance of migration belongs to the [Responsibility Topology Overview](responsibility-topology-overview.md).
 
 ### 3. Review outcome
 
@@ -391,7 +391,7 @@ If such research would only improve explanatory precision without changing publi
 
 ## XI. Relation to the current document architecture
 
-This document does not maintain a second canonical-owner table. Current document identities, definition ownership, invocation modes, the one-way representational relation of the Control Plane, and the V1 modification gate are aggregated by the [Responsibility Topology Overview](01-responsibility-topology-overview.md), with each canonical document's front matter serving as the machine source of truth.
+This document does not maintain a second canonical-owner table. Current document identities, definition ownership, invocation modes, the one-way representational relation of the Control Plane, and the V1 modification gate are aggregated by the [Responsibility Topology Overview](responsibility-topology-overview.md), with each canonical document's front matter serving as the machine source of truth.
 
 The genesis history only explains why the current framework formed these boundaries, which shortcuts were rejected, and why the current implementation can itself still be revised or replaced. If later real-world failures require a concrete definition to change, return to the corresponding canonical owner. If they generate only new cross-framework research questions, keep them in the non-canonical research workspace.
 

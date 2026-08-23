@@ -108,13 +108,13 @@ semantic_contract:
 
 # Action Responsibility Practice
 
-> **Knowledge and evidence boundary:** This document operationalizes the analytical language of [Theory of Determinative Responsibility](02-theory-of-determinative-responsibility.md) into procedures for action, so that an endorsed or undertaken change can be executed, verified, stopped, recovered, narrowed, reopened, or exited. It does not redefine theoretical concepts, nor does it substitute for legal, medical, safety, engineering, organizational, or other professional standards. Concrete mechanisms, thresholds, intervention effects, and boundaries of rights belong to domain models, fact owners, and professional norms.
+> **Knowledge and evidence boundary:** This document operationalizes the analytical language of [Theory of Determinative Responsibility](theory-of-determinative-responsibility.md) into procedures for action, so that an endorsed or undertaken change can be executed, verified, stopped, recovered, narrowed, reopened, or exited. It does not redefine theoretical concepts, nor does it substitute for legal, medical, safety, engineering, organizational, or other professional standards. Concrete mechanisms, thresholds, intervention effects, and boundaries of rights belong to domain models, fact owners, and professional norms.
 
 ## Definition dependencies
 
 This document owns the definitions of the action procedure for finite change, procedure profiles, hard procedure triggers, the six-stage change cycle, residual responsibility, the minimum change record, and the supplementary governance check for persistent systems.
 
-The open / closure distinction from [Theory of Determinative Responsibility](02-theory-of-determinative-responsibility.md), and candidate generation, structural tension, directional revision candidates, counterfactual construction, cognitive search allocation judgment, the cognitive frontier, epistemic action, material acquisition, open validation, revision-depth judgment, and selective consolidation from [Theory of Cognitive Responsibility](03-theory-of-cognitive-responsibility.md), are only **operationalized** here. The [Responsibility Structure Candidate Catalog](06-responsibility-structure-candidate-catalog.md) is used only as a source of candidate questions; [System Responsibility Reliability](07-system-responsibility-reliability.md) provides diagnostic dimensions for long-horizon systems. When machine recording is needed, responsibility is handed off to the [Responsibility Record Plane](09-responsibility-record-plane.md); this document does not depend on its specific record tokens.
+The open / closure distinction from [Theory of Determinative Responsibility](theory-of-determinative-responsibility.md), and candidate generation, structural tension, directional revision candidates, counterfactual construction, cognitive search allocation judgment, the cognitive frontier, epistemic action, material acquisition, open validation, revision-depth judgment, and selective consolidation from [Theory of Cognitive Responsibility](theory-of-cognitive-responsibility.md), are only **operationalized** here. The [Responsibility Structure Candidate Catalog](responsibility-structure-candidate-catalog.md) is used only as a source of candidate questions; [System Responsibility Reliability](system-responsibility-reliability.md) provides diagnostic dimensions for long-horizon systems. When machine recording is needed, responsibility is handed off to the [Responsibility Record Plane](responsibility-record-plane.md); this document does not depend on its specific record tokens.
 
 ## I. Scope and procedure strength
 
@@ -166,7 +166,7 @@ At minimum, make explicit:
 - the state to be created or maintained, completion criteria, principal beneficiaries, and those who may bear losses;
 - what new facts would require the goal itself to be reviewed.
 
-Evidence materials, observations, factual assertions, inferences, candidate mechanisms, value judgments, and unknowns should remain distinguishable. For concrete record semantics, see the [Responsibility Record Plane](09-responsibility-record-plane.md). Where there is no explicit endorsement of purpose, one may describe a functional reference, stable tendency, or externally assigned task, but may not rewrite an observer's interpretation as the system's own purpose.
+Evidence materials, observations, factual assertions, inferences, candidate mechanisms, value judgments, and unknowns should remain distinguishable. For concrete record semantics, see the [Responsibility Record Plane](responsibility-record-plane.md). Where there is no explicit endorsement of purpose, one may describe a functional reference, stable tendency, or externally assigned task, but may not rewrite an observer's interpretation as the system's own purpose.
 
 ### 2. Conditions and authority
 
@@ -191,7 +191,7 @@ If the object, factors, causal structure, or key unknowns have not reached a deg
 
 #### Cognitive investment allocation
 
-Using candidate generation, $\mathcal F$, $\Phi$, $\Lambda$, and the higher-order judgment responsibilities defined by [Theory of Cognitive Responsibility](03-theory-of-cognitive-responsibility.md), practice need only leave five explicit judgments:
+Using candidate generation, $\mathcal F$, $\Phi$, $\Lambda$, and the higher-order judgment responsibilities defined by [Theory of Cognitive Responsibility](theory-of-cognitive-responsibility.md), practice need only leave five explicit judgments:
 
 1. **Current candidates and frontier:** which candidates have actually been formed, and which continue to be developed, held, or pruned; do not assume that ungenerated candidates already form a complete space.
 2. **Determination and composition:** whether key candidates are individually clear enough; whether they are compatible when they must be combined; whether local representations, even when compatible, are sufficient for the current joint conclusion; and whether the retention standard required for cross-context comparison holds.
@@ -223,7 +223,7 @@ The executor acts only within the authorized scope and records actual actions, a
 
 If an action also performs material acquisition, record the real connection corresponding to $\mathcal Q$: the observed or measured object, channel, apparatus or data source, sampling conditions, time range, key transformations, and known defects. Judgments about real outcomes must be grounded in material acquisition and evidential-force judgments proportionate to the object boundary; an executing system's own report cannot substitute for them.
 
-If overreach, serious risk, failure of a key condition, or loss of recovery capacity is discovered, pause, narrow, or escalate. Record implementation is handed off to the [Responsibility Record Plane](09-responsibility-record-plane.md). This document requires only that key facts remain traceable; it does not create a separate practice-state schema or depend on specific Control Plane tokens.
+If overreach, serious risk, failure of a key condition, or loss of recovery capacity is discovered, pause, narrow, or escalate. Record implementation is handed off to the [Responsibility Record Plane](responsibility-record-plane.md). This document requires only that key facts remain traceable; it does not create a separate practice-state schema or depend on specific Control Plane tokens.
 
 ### 5. Verification and correction
 
@@ -231,7 +231,7 @@ Verification first distinguishes **material acquisition, the manner of distincti
 
 In a closed task, where the object boundary, factors, primary structure, and completion criteria are already proportionately fixed, use explicit verifiers such as tests, formal proofs, state constraints, dual records, or independent measurements.
 
-In an open task, distinguish material acquisition, factor-forming distinction, and judgment of evidential force as in [Theory of Cognitive Responsibility](03-theory-of-cognitive-responsibility.md). When material acquisition itself must be analyzed explicitly, write:
+In an open task, distinguish material acquisition, factor-forming distinction, and judgment of evidential force as in [Theory of Cognitive Responsibility](theory-of-cognitive-responsibility.md). When material acquisition itself must be analyzed explicitly, write:
 
 $$
 R_t
@@ -292,13 +292,13 @@ Passing verification means only that the current scope satisfies the current sta
 
 The outcome must enter an explicit disposition: continue, expand, narrow, observe, recover, pause, retire, or reopen. Expansion requires new evidence and authorization proportionate to the added scope. Renewal is a new judgment and cannot be extended automatically on the basis of historical success.
 
-Where experience must persist across time, preserve proportionate structures, applicability boundaries, key counterexamples, failed paths, verifier defects, rejected candidates, reopen signals, revision-depth judgments, and successful or unsuccessful search paths. The mechanism of selective consolidation is defined by [Theory of Cognitive Responsibility](03-theory-of-cognitive-responsibility.md).
+Where experience must persist across time, preserve proportionate structures, applicability boundaries, key counterexamples, failed paths, verifier defects, rejected candidates, reopen signals, revision-depth judgments, and successful or unsuccessful search paths. The mechanism of selective consolidation is defined by [Theory of Cognitive Responsibility](theory-of-cognitive-responsibility.md).
 
 ## III. Cumulative consequences and persistent systems
 
 After one cycle of change ends, examine whether it changes the next cycle's inputs, factors, organization, orientation, capabilities, relationships, power, and option space, and whether it creates new assets, dependencies, commitments, or complexity that must be maintained.
 
-When similar changes recur, identify possible reinforcing or balancing loops, cycles, feedback delays, external costs, lock-in, and interruptible links. Related patterns appear in the [Responsibility Structure Candidate Catalog](06-responsibility-structure-candidate-catalog.md).
+When similar changes recur, identify possible reinforcing or balancing loops, cycles, feedback delays, external costs, lock-in, and interruptible links. Related patterns appear in the [Responsibility Structure Candidate Catalog](responsibility-structure-candidate-catalog.md).
 
 ### Supplementary governance check for persistent systems
 
@@ -345,7 +345,7 @@ Where action is necessary despite the absence of a complete recovery plan, narro
 
 ## V. Minimum change record
 
-This document specifies only what practice must be able to answer. Concrete fields and machine representation are handed off to the [Responsibility Record Plane](09-responsibility-record-plane.md). A `minimal` record may be reduced according to risk; `standard` and `enhanced` add progressively more detail.
+This document specifies only what practice must be able to answer. Concrete fields and machine representation are handed off to the [Responsibility Record Plane](responsibility-record-plane.md). A `minimal` record may be reduced according to risk; `standard` and `enhanced` add progressively more detail.
 
 An important change should at least answer:
 
@@ -370,8 +370,8 @@ Where changes repeat, accumulate, or involve structural reorganization, answer a
 
 ## VI. Domain handoff and the Control Plane
 
-Concrete mechanisms and rights boundaries in bodily, psychological, relational, educational, labor, marriage and fertility, organizational and institutional, economic, software, safety, and other domains belong to the corresponding domain models. Where subjects are involved, preserve their conditions of expression, endorsement, refusal, and exit; the working boundary of subjectivity is defined in [Theory of Cognitive Responsibility](03-theory-of-cognitive-responsibility.md).
+Concrete mechanisms and rights boundaries in bodily, psychological, relational, educational, labor, marriage and fertility, organizational and institutional, economic, software, safety, and other domains belong to the corresponding domain models. Where subjects are involved, preserve their conditions of expression, endorsement, refusal, and exit; the working boundary of subjectivity is defined in [Theory of Cognitive Responsibility](theory-of-cognitive-responsibility.md).
 
 Specific rules for agent authority, project execution gates, tests, APIs, processes, monitoring, and recovery belong to the currently authoritative execution specifications of each project, such as the README, ADRs, `AGENTS.md`, skills, and RUNBOOKs.
 
-[Action Responsibility Practice](08-action-responsibility-practice.md) answers **how to act**; the [Responsibility Record Plane](09-responsibility-record-plane.md) answers **how to represent, trace, and reject invalid record states**. The two are orthogonal. Practice may hand recording responsibility to the Record Plane, but it does not make the Record Plane schema a procedural definition dependency; complete records also do not prove that an action was correct, sufficiently authorized, or beneficial in outcome.
+[Action Responsibility Practice](action-responsibility-practice.md) answers **how to act**; the [Responsibility Record Plane](responsibility-record-plane.md) answers **how to represent, trace, and reject invalid record states**. The two are orthogonal. Practice may hand recording responsibility to the Record Plane, but it does not make the Record Plane schema a procedural definition dependency; complete records also do not prove that an action was correct, sufficiently authorized, or beneficial in outcome.

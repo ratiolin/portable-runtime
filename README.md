@@ -30,8 +30,11 @@ These identifiers intentionally describe different compatibility surfaces:
 | Control Plane schema | `official-1.0.0` |
 | Portable Runtime implementation milestone | `R2.0` |
 | Runtime protocol | `2.0` |
+| External provider protocol | `1` (`stdio-jsonl` manifest/transport) |
 | Python package | `0.1.0` |
 | Framework compatibility | `framework-v1` |
+
+`Runtime protocol 2.0` covers the portable runtime's state, bundle, HTTP, and CLI compatibility surfaces. The external provider protocol is a separate adapter boundary: provider manifests and stdio-JSONL messages remain at protocol version `1`. A protocol-v1 provider can therefore be consumed by a Runtime-protocol-2.0 deployment; changing one axis does not imply changing the other.
 
 ## Highlights (R1.1–R2.0)
 
@@ -106,15 +109,16 @@ Intelligence / Domain Layer (model / human / solver → generate / compare / val
 
 Cross-cutting: `append-only history / provenance / versioning / authorization / revalidation / recovery / portability`.
 
-- **Provider** – implements `CapabilityProvider`; open capability strings (`text.echo`, `verify.http`, `code.edit`, `human.approve`, …). `effect_semantics` and `reconcile()` are part of the contract.
+- **Provider** – implements `CapabilityProvider`; open capability strings (`text.echo`, `verify.http`, `code.edit`, `human.approve`, …). `effect_semantics` is part of the contract, while `reconcile()` is an optional recovery hook: Runtime invokes it behind the reality boundary after an ambiguous or stale invocation, and the provider may return an authoritative result, `unknown`, or `None`.
 - **Trigger** – creates Work (`webhook`, `schedule`, `alertmanager`-compatible with `IdempotencyStore` + HMAC).
 - **Store** – `StateStore / ArtifactStore / EventStore` on `src/portable_runtime/interfaces`; `SQLite` (WAL, CAS, Lease) and `InMemory` / `Filesystem` included, plus `Bundle` tar.zst with manifest validation.
 - **Workflow** – orchestrates `context.invoke(capability, ...)` and `context.require("purpose-identified")`; built-ins: `generic_task`, `incident_repair`, `daily_scan`, `knowledge_consolidation` + `ProcedureProfile` gates.
 
 See [docs/architecture.md](docs/architecture.md),
-[docs/portable-runtime-reality-boundary-authoritative-plan.md](docs/portable-runtime-reality-boundary-authoritative-plan.md),
-[docs/portable-runtime-strict-enforcement-closure-plan.md](docs/portable-runtime-strict-enforcement-closure-plan.md),
-[docs/portable-runtime-strict-enforcement-plan.md](docs/portable-runtime-strict-enforcement-plan.md),
+[docs/responsibility-topology-overview.md](docs/responsibility-topology-overview.md),
+[docs/responsibility-record-plane.md](docs/responsibility-record-plane.md),
+[docs/action-responsibility-practice.md](docs/action-responsibility-practice.md),
+[docs/system-responsibility-reliability.md](docs/system-responsibility-reliability.md),
 [docs/provider-api.md](docs/provider-api.md),
 [docs/provider-protocol.md](docs/provider-protocol.md),
 [docs/plugin-authoring.md](docs/plugin-authoring.md),
@@ -132,11 +136,10 @@ See [docs/architecture.md](docs/architecture.md),
 
 ## Plugin authoring
 
-Copy a template and declare capabilities – no Core change required:
+Copy the runnable example and declare capabilities – no Core change required. The repository does not ship a `templates/` directory:
 
 ```powershell
-Copy-Item -Recurse templates/provider-python my-provider  # optional local template
-# or start from examples/echo-provider
+Copy-Item -Recurse examples/echo-provider my-provider
 ```
 
 `examples/echo-provider/manifest.json`:
@@ -172,7 +175,7 @@ from portable_runtime.deployment.local import create_local_runtime
 runtime = create_local_runtime(Path("data/portable-runtime.db"), Path("data/artifacts"))
 ```
 
-Reference profile: `examples/personal-platform-profile` is a minimal trigger/provider mapping example (Schedule/Alertmanager + verifiers) you can adapt to your own deployment.
+Reference profile: `examples/personal-platform-profile` is a legacy/reference-only note. Its current directory contains documentation only; it is not a runnable trigger/provider mapping or deployment bundle.
 
 ## Development
 
@@ -180,7 +183,7 @@ Reference profile: `examples/personal-platform-profile` is a minimal trigger/pro
 uv sync --extra dev
 uv run ruff check .
 uv run mypy src
-uv run pytest              # 244 tests; current local verification
+uv run pytest              # 337 tests; current local verification
 uv run pytest --cov=src --cov-report=xml  # for SonarCloud
 ```
 
