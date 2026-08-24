@@ -1,12 +1,6 @@
 name: Apply responsibility contracts P1-P4
 
 on:
-  push:
-    branches:
-      - codex/responsibility-contracts-p1-p4
-    paths:
-      - tools/apply_responsibility_contracts_p1_p4.py
-      - .github/workflows/apply-responsibility-contracts.yml
   pull_request:
     branches:
       - main
@@ -15,7 +9,7 @@ on:
       - .github/workflows/apply-responsibility-contracts.yml
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   apply-and-verify:
@@ -50,11 +44,15 @@ jobs:
       - name: Pytest
         run: uv run pytest
 
-      - name: Commit verified rollout
-        if: github.event_name == 'pull_request'
+      - name: Pack verified tree
         run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add -A
-          git commit -m "feat: harden responsibility separation contracts"
-          git push origin HEAD:codex/responsibility-contracts-p1-p4
+          rm -rf .venv .pytest_cache .mypy_cache .ruff_cache
+          tar --exclude=.git -czf /tmp/responsibility-rollout.tar.gz .
+
+      - name: Upload verified tree
+        uses: actions/upload-artifact@v4
+        with:
+          name: responsibility-rollout
+          path: /tmp/responsibility-rollout.tar.gz
+          if-no-files-found: error
+          retention-days: 1
