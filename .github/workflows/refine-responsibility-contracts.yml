@@ -6,6 +6,7 @@ on:
       - main
     paths:
       - tools/refine_responsibility_contracts.py
+      - tools/fix_refine_metadata_typing.py
       - .github/workflows/refine-responsibility-contracts.yml
 
 permissions:
@@ -24,9 +25,12 @@ jobs:
       - name: Apply refinements
         run: |
           python tools/refine_responsibility_contracts.py
+          python tools/fix_refine_metadata_typing.py
           cp tools/refine_responsibility_contracts.py /tmp/refine_responsibility_contracts.py
+          cp tools/fix_refine_metadata_typing.py /tmp/fix_refine_metadata_typing.py
           cp .github/workflows/refine-responsibility-contracts.yml /tmp/refine-responsibility-contracts.yml
           rm tools/refine_responsibility_contracts.py
+          rm tools/fix_refine_metadata_typing.py
           rm .github/workflows/refine-responsibility-contracts.yml
 
       - name: Install uv
@@ -50,6 +54,7 @@ jobs:
         run: |
           mkdir -p tools .github/workflows
           cp /tmp/refine_responsibility_contracts.py tools/refine_responsibility_contracts.py
+          cp /tmp/fix_refine_metadata_typing.py tools/fix_refine_metadata_typing.py
           cp /tmp/refine-responsibility-contracts.yml .github/workflows/refine-responsibility-contracts.yml
 
       - name: Commit verified refinements
