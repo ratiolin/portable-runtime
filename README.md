@@ -115,10 +115,10 @@ Cross-cutting: `append-only history / provenance / versioning / authorization / 
 - **Workflow** – orchestrates `context.invoke(capability, ...)` and `context.require("purpose-identified")`; built-ins: `generic_task`, `incident_repair`, `daily_scan`, `knowledge_consolidation` + `ProcedureProfile` gates.
 
 See [docs/architecture.md](docs/architecture.md),
-[docs/responsibility-topology-overview.md](docs/responsibility-topology-overview.md),
 [docs/responsibility-record-plane.md](docs/responsibility-record-plane.md),
 [docs/action-responsibility-practice.md](docs/action-responsibility-practice.md),
-[docs/system-responsibility-reliability.md](docs/system-responsibility-reliability.md),
+[docs/formal-kernel-relationship.md](docs/formal-kernel-relationship.md),
+[docs/responsibility-separation-contracts.md](docs/responsibility-separation-contracts.md),
 [docs/provider-api.md](docs/provider-api.md),
 [docs/provider-protocol.md](docs/provider-protocol.md),
 [docs/plugin-authoring.md](docs/plugin-authoring.md),
