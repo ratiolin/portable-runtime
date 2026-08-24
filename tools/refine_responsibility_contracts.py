@@ -32,16 +32,16 @@ replace_once(
 ''',
     '''    before_payload = before.model_dump(mode="json")
     after_payload = after.model_dump(mode="json")
-    before_metadata = before_payload.pop("metadata", {})
-    after_metadata = after_payload.pop("metadata", {})
+    before_metadata_raw = before_payload.pop("metadata", {})
+    after_metadata_raw = after_payload.pop("metadata", {})
     for payload in (before_payload, after_payload):
         payload.pop("created_at", None)
         payload.pop("epistemic_status", None)
         payload.pop("version", None)
     if before_payload != after_payload:
         raise ValueError("qualification transition cannot bundle other semantic changes")
-    before_metadata = before_metadata if isinstance(before_metadata, dict) else {}
-    after_metadata = after_metadata if isinstance(after_metadata, dict) else {}
+    before_metadata: dict[str, Any] = before_metadata_raw if isinstance(before_metadata_raw, dict) else {}
+    after_metadata: dict[str, Any] = after_metadata_raw if isinstance(after_metadata_raw, dict) else {}
     changed_metadata = {
         key
         for key in set(before_metadata) | set(after_metadata)
@@ -73,8 +73,8 @@ replace_once(
         )
     old_payload = existing.model_dump(mode="json")
     new_payload = record.model_dump(mode="json")
-    old_metadata = old_payload.pop("metadata", {})
-    new_metadata = new_payload.pop("metadata", {})
+    old_metadata_raw = old_payload.pop("metadata", {})
+    new_metadata_raw = new_payload.pop("metadata", {})
     for payload in (old_payload, new_payload):
         payload.pop("created_at", None)
         payload.pop("epistemic_status", None)
@@ -83,8 +83,8 @@ replace_once(
         raise ValueError(
             f"qualification transition for {record.id!r} cannot bundle other semantic changes"
         )
-    old_metadata = old_metadata if isinstance(old_metadata, dict) else {}
-    new_metadata = new_metadata if isinstance(new_metadata, dict) else {}
+    old_metadata: dict[str, Any] = old_metadata_raw if isinstance(old_metadata_raw, dict) else {}
+    new_metadata: dict[str, Any] = new_metadata_raw if isinstance(new_metadata_raw, dict) else {}
     changed_metadata = {
         key
         for key in set(old_metadata) | set(new_metadata)
