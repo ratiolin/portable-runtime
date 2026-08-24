@@ -156,3 +156,28 @@ def test_positive_assertion_qualification_must_be_current_and_supported() -> Non
     store.save_record(revalidation)
     with pytest.raises(QualificationResolutionError, match="currently supported"):
         AssessmentContext.resolve(store, _qualification_request(revalidation))
+
+
+def test_qualification_transition_cannot_bundle_other_semantic_changes() -> None:
+    store = InMemoryStateStore()
+    before = Assertion(
+        id="assert_narrow_transition",
+        statement="same proposition",
+        lifecycle_status="current",
+        epistemic_status="supported",
+        version=1,
+    )
+    store.save_record(before)
+    after = _authorized_after(store, before, "contested").model_copy(
+        update={"assumptions": ["silently changed"]}
+    )
+    with pytest.raises(ValueError, match="cannot bundle other semantic changes"):
+        commit_qualification_transition(
+            store,
+            after,
+            expected_version=1,
+            reason_refs=["observation:new"],
+            event_id="event_narrow_transition",
+        )
+    assert store.get_event("event_narrow_transition") is None
+    assert store.get_record(before.id).assumptions == []

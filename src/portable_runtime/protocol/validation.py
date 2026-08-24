@@ -1553,6 +1553,37 @@ def _assert_qualification_transition_journaled(
         raise ValueError(
             f"qualification transition for {record.id!r} must advance version by exactly one"
         )
+    old_payload = existing.model_dump(mode="json")
+    new_payload = record.model_dump(mode="json")
+    old_metadata_raw = old_payload.pop("metadata", {})
+    new_metadata_raw = new_payload.pop("metadata", {})
+    for snapshot_payload in (old_payload, new_payload):
+        snapshot_payload.pop("created_at", None)
+        snapshot_payload.pop("epistemic_status", None)
+        snapshot_payload.pop("version", None)
+    if old_payload != new_payload:
+        raise ValueError(
+            f"qualification transition for {record.id!r} cannot bundle other semantic changes"
+        )
+    old_metadata = (
+        {str(key): value for key, value in old_metadata_raw.items()}
+        if isinstance(old_metadata_raw, dict)
+        else {}
+    )
+    new_metadata = (
+        {str(key): value for key, value in new_metadata_raw.items()}
+        if isinstance(new_metadata_raw, dict)
+        else {}
+    )
+    changed_metadata = {
+        key
+        for key in set(old_metadata) | set(new_metadata)
+        if old_metadata.get(key) != new_metadata.get(key)
+    }
+    if not changed_metadata.issubset({"authorization_use_ref", "revision_ref"}):
+        raise ValueError(
+            f"qualification transition for {record.id!r} may only change authority metadata"
+        )
     expected_before = _qualification_transition_snapshot(existing)
     expected_after = _qualification_transition_snapshot(record)
     matches = 0

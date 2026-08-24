@@ -89,7 +89,7 @@ def test_required_obligation_refs_reads_work_policy_and_constraint_declarations(
             "required_obligations": ["independent-review", {"id": "scope-bound"}],
             "policy_obligations": [{"ref": "policy-proof"}],
             "obligations": [{"key": "audit-trail"}],
-            "revalidation_obligations": ["revalidate.subject-v2"],
+            "revalidation_obligations": ["revalidation-review"],
             "verification_policy": {
                 "verification_obligations": [{"name": "objective-proof"}],
                 "required_obligations": ["criteria-proof"],
@@ -108,7 +108,7 @@ def test_required_obligation_refs_reads_work_policy_and_constraint_declarations(
         "scope-bound",
         "policy-proof",
         "audit-trail",
-        "revalidate.subject-v2",
+        "revalidation-review",
         "objective-proof",
         "criteria-proof",
         "evidence-proof",
@@ -373,7 +373,7 @@ def test_revalidation_obligation_requires_revalidation_proof_class() -> None:
     work = Work(
         id="work_revalidation_class",
         title="revalidate",
-        metadata={"revalidation_obligations": ["revalidate.subject-v2"]},
+        metadata={"revalidation_obligations": ["fresh-source-check"]},
     )
     run = Run(id="run_revalidation_class", work_id=work.id, status="running")
     store.save_work(work)
@@ -383,7 +383,7 @@ def test_revalidation_obligation_requires_revalidation_proof_class() -> None:
             "id": "proof_revalidation_wrong_class",
             "metadata": {
                 **_proof(work, run).metadata,
-                "obligation_refs": ["revalidate.subject-v2"],
+                "obligation_refs": ["fresh-source-check"],
             },
         }
     )
@@ -401,6 +401,6 @@ def test_revalidation_obligation_requires_revalidation_proof_class() -> None:
         work=work, run=run, verification_refs=[revalidation.id]
     )
     assert result.status == "succeeded"
-    assert result.metadata["completion_required_obligations"] == ["revalidate.subject-v2"]
-    assert result.metadata["completion_covered_obligations"] == ["revalidate.subject-v2"]
+    assert result.metadata["completion_required_obligations"] == ["fresh-source-check"]
+    assert result.metadata["completion_covered_obligations"] == ["fresh-source-check"]
     assert result.metadata["completion_missing_obligations"] == []

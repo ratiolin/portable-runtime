@@ -45,8 +45,33 @@ def build_qualification_transition_event(
         raise ValueError("qualification transition must preserve Assertion identity")
     if before.record_type != "Assertion" or after.record_type != "Assertion":
         raise ValueError("qualification transition only applies to Assertion records")
-    if before.statement != after.statement:
-        raise ValueError("qualification transition cannot change the asserted proposition")
+    before_payload = before.model_dump(mode="json")
+    after_payload = after.model_dump(mode="json")
+    before_metadata_raw = before_payload.pop("metadata", {})
+    after_metadata_raw = after_payload.pop("metadata", {})
+    for payload in (before_payload, after_payload):
+        payload.pop("created_at", None)
+        payload.pop("epistemic_status", None)
+        payload.pop("version", None)
+    if before_payload != after_payload:
+        raise ValueError("qualification transition cannot bundle other semantic changes")
+    before_metadata = (
+        {str(key): value for key, value in before_metadata_raw.items()}
+        if isinstance(before_metadata_raw, dict)
+        else {}
+    )
+    after_metadata = (
+        {str(key): value for key, value in after_metadata_raw.items()}
+        if isinstance(after_metadata_raw, dict)
+        else {}
+    )
+    changed_metadata = {
+        key
+        for key in set(before_metadata) | set(after_metadata)
+        if before_metadata.get(key) != after_metadata.get(key)
+    }
+    if not changed_metadata.issubset({"authorization_use_ref", "revision_ref"}):
+        raise ValueError("qualification transition may only change authority metadata")
     if before.lifecycle_status != after.lifecycle_status:
         raise ValueError("qualification transition cannot bundle a lifecycle transition")
     if before.epistemic_status == after.epistemic_status:
