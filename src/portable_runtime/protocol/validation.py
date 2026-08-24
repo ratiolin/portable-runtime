@@ -1119,6 +1119,9 @@ def validate_state_graph(
                     "completion_verification_scope",
                     "completion_work_version",
                     "completion_acceptance_criteria",
+                    "completion_required_obligations",
+                    "completion_covered_obligations",
+                    "completion_missing_obligations",
                 ):
                     if work_metadata.get(field) != run_metadata.get(field):
                         errors.append(
@@ -1521,6 +1524,60 @@ def _assert_revision_mutation_integrity(
         )
 
 
+_QUALIFICATION_TRANSITION_EVENT_TYPE = "qualification.status.changed"
+_QUALIFICATION_TRANSITION_SCHEMA = "qualification-transition-v1"
+
+
+def _qualification_transition_snapshot(record: BaseRecord) -> dict[str, object]:
+    return {
+        "id": record.id,
+        "record_type": record.record_type,
+        "lifecycle_status": record.lifecycle_status,
+        "epistemic_status": record.epistemic_status,
+        "version": record.version,
+    }
+
+
+def _assert_qualification_transition_journaled(
+    record: BaseRecord,
+    existing: BaseRecord,
+    state: dict[str, list[dict[str, object]]],
+) -> None:
+    """Require an exact append-only audit event for Assertion status changes."""
+
+    if record.record_type != "Assertion" or existing.record_type != "Assertion":
+        return
+    if record.epistemic_status == existing.epistemic_status:
+        return
+    if record.version != existing.version + 1:
+        raise ValueError(
+            f"qualification transition for {record.id!r} must advance version by exactly one"
+        )
+    expected_before = _qualification_transition_snapshot(existing)
+    expected_after = _qualification_transition_snapshot(record)
+    matches = 0
+    for raw in state.get("event", []):
+        if not isinstance(raw, dict):
+            continue
+        if raw.get("type") != _QUALIFICATION_TRANSITION_EVENT_TYPE or raw.get("subject_ref") != record.id:
+            continue
+        payload = raw.get("payload")
+        if not isinstance(payload, dict) or payload.get("schema_version") != _QUALIFICATION_TRANSITION_SCHEMA:
+            continue
+        if payload.get("before") != expected_before or payload.get("after") != expected_after:
+            continue
+        reason_refs = payload.get("reason_refs")
+        if not isinstance(reason_refs, list) or not reason_refs or any(
+            not isinstance(ref, str) or not ref.strip() for ref in reason_refs
+        ):
+            continue
+        matches += 1
+    if matches != 1:
+        raise ValueError(
+            f"qualification transition for {record.id!r} requires exactly one matching append-only audit event"
+        )
+
+
 def assert_semantic_mutation_authorized(
     record: BaseRecord,
     existing: BaseRecord | None,
@@ -1536,6 +1593,7 @@ def assert_semantic_mutation_authorized(
     """
     if existing is None or not _semantic_payload_changed(record, existing):
         return
+    _assert_qualification_transition_journaled(record, existing, state)
     if record.record_type == "Revision":
         _assert_revision_mutation_integrity(record, existing, state)
         return
