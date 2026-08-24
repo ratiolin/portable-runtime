@@ -40,8 +40,16 @@ replace_once(
         payload.pop("version", None)
     if before_payload != after_payload:
         raise ValueError("qualification transition cannot bundle other semantic changes")
-    before_metadata: dict[str, Any] = before_metadata_raw if isinstance(before_metadata_raw, dict) else {}
-    after_metadata: dict[str, Any] = after_metadata_raw if isinstance(after_metadata_raw, dict) else {}
+    before_metadata: dict[str, Any] = (
+        {str(key): value for key, value in before_metadata_raw.items()}
+        if isinstance(before_metadata_raw, dict)
+        else {}
+    )
+    after_metadata: dict[str, Any] = (
+        {str(key): value for key, value in after_metadata_raw.items()}
+        if isinstance(after_metadata_raw, dict)
+        else {}
+    )
     changed_metadata = {
         key
         for key in set(before_metadata) | set(after_metadata)
@@ -83,8 +91,16 @@ replace_once(
         raise ValueError(
             f"qualification transition for {record.id!r} cannot bundle other semantic changes"
         )
-    old_metadata: dict[str, Any] = old_metadata_raw if isinstance(old_metadata_raw, dict) else {}
-    new_metadata: dict[str, Any] = new_metadata_raw if isinstance(new_metadata_raw, dict) else {}
+    old_metadata: dict[str, Any] = (
+        {str(key): value for key, value in old_metadata_raw.items()}
+        if isinstance(old_metadata_raw, dict)
+        else {}
+    )
+    new_metadata: dict[str, Any] = (
+        {str(key): value for key, value in new_metadata_raw.items()}
+        if isinstance(new_metadata_raw, dict)
+        else {}
+    )
     changed_metadata = {
         key
         for key in set(old_metadata) | set(new_metadata)
