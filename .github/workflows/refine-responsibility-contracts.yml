@@ -1,0 +1,65 @@
+name: Refine responsibility contracts
+
+on:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - tools/refine_responsibility_contracts.py
+      - .github/workflows/refine-responsibility-contracts.yml
+
+permissions:
+  contents: write
+
+jobs:
+  refine-and-verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          fetch-depth: 0
+          ref: codex/responsibility-contracts-p1-p4
+
+      - name: Apply refinements
+        run: |
+          python tools/refine_responsibility_contracts.py
+          cp tools/refine_responsibility_contracts.py /tmp/refine_responsibility_contracts.py
+          cp .github/workflows/refine-responsibility-contracts.yml /tmp/refine-responsibility-contracts.yml
+          rm tools/refine_responsibility_contracts.py
+          rm .github/workflows/refine-responsibility-contracts.yml
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@d31148d669074a8d0a63714ba94f3201e7020bc3 # v8.3.0
+        with:
+          enable-cache: true
+
+      - name: Sync locked dependencies
+        run: uv sync --locked --extra dev
+
+      - name: Ruff
+        run: uv run ruff check .
+
+      - name: Mypy
+        run: uv run mypy src
+
+      - name: Pytest
+        run: uv run pytest
+
+      - name: Restore temporary branch files
+        run: |
+          mkdir -p tools .github/workflows
+          cp /tmp/refine_responsibility_contracts.py tools/refine_responsibility_contracts.py
+          cp /tmp/refine-responsibility-contracts.yml .github/workflows/refine-responsibility-contracts.yml
+
+      - name: Commit verified refinements
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          if git diff --cached --name-only | grep -q '^\.github/workflows/'; then
+            echo "refusing to push workflow changes with the Actions token"
+            exit 1
+          fi
+          git commit -m "refactor: tighten responsibility contract invariants"
+          git push origin HEAD:codex/responsibility-contracts-p1-p4
