@@ -130,6 +130,37 @@ class CompletionAuthority:
         return list(dict.fromkeys(values))
 
     @staticmethod
+    def revalidation_obligation_refs(work: Work) -> list[str]:
+        values: list[str] = []
+
+        def add(raw: object) -> None:
+            if isinstance(raw, str) and raw.strip():
+                values.append(raw.strip())
+                return
+            if not isinstance(raw, list):
+                return
+            for item in raw:
+                if isinstance(item, str) and item.strip():
+                    values.append(item.strip())
+                elif isinstance(item, dict):
+                    for key in ("id", "ref", "key", "name", "description"):
+                        candidate = item.get(key)
+                        if isinstance(candidate, str) and candidate.strip():
+                            values.append(candidate.strip())
+                            break
+
+        metadata = work.metadata if isinstance(work.metadata, dict) else {}
+        constraints = work.constraints if isinstance(work.constraints, dict) else {}
+        for source in (metadata, constraints):
+            add(source.get("revalidation_obligations"))
+            add(source.get("required_revalidation_obligations"))
+            policy = source.get("verification_policy")
+            if isinstance(policy, dict):
+                add(policy.get("revalidation_obligations"))
+                add(policy.get("required_revalidation_obligations"))
+        return list(dict.fromkeys(values))
+
+    @staticmethod
     def _proof_metadata(record: object) -> dict[str, Any] | None:
         metadata = getattr(record, "metadata", None)
         return metadata if isinstance(metadata, dict) else None
@@ -198,6 +229,7 @@ class CompletionAuthority:
         expected_version = CompletionAuthority._expected_version(work)
         expected_criteria = list(work.acceptance_criteria)
         required_obligations = set(CompletionAuthority.required_obligation_refs(work))
+        revalidation_obligations = set(CompletionAuthority.revalidation_obligation_refs(work))
         covered_obligations: set[str] = set()
         for ref in normalized:
             record = record_lookup(ref)
@@ -239,7 +271,8 @@ class CompletionAuthority:
             covered_obligations.update(
                 obligation
                 for obligation in candidates
-                if CompletionAuthority._proof_can_cover(proof_class, obligation)
+                if (obligation not in revalidation_obligations or proof_class == "revalidation")
+                and CompletionAuthority._proof_can_cover(proof_class, obligation)
             )
         required = sorted(required_obligations)
         covered = sorted(covered_obligations)
