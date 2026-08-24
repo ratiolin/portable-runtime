@@ -462,6 +462,13 @@ def _assert_ref_valid(ref: QualificationRef, value: Any, *, now: datetime) -> No
         raise QualificationResolutionError(
             f"qualification reference {ref.ref_id!r} points to stale lifecycle {lifecycle!r}"
         )
+    if getattr(value, "record_type", None) == "Assertion":
+        epistemic = getattr(value, "epistemic_status", None)
+        if lifecycle != "current" or epistemic != "supported":
+            raise QualificationResolutionError(
+                f"qualification Assertion {ref.ref_id!r} must be current and currently supported; "
+                f"got lifecycle={lifecycle!r}, epistemic_status={epistemic!r}"
+            )
     expires_at = getattr(value, "expires_at", None) or _metadata(value).get("expires_at")
     if isinstance(expires_at, str):
         try:

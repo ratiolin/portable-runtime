@@ -94,11 +94,19 @@ class CompletionAuthority:
                 "required_obligations",
                 "policy_obligations",
                 "obligations",
+                "revalidation_obligations",
+                "required_revalidation_obligations",
             ):
                 add(source.get(field))
             policy = source.get("verification_policy")
             if isinstance(policy, dict):
-                for field in ("verification_obligations", "required_obligations", "obligations"):
+                for field in (
+                    "verification_obligations",
+                    "required_obligations",
+                    "obligations",
+                    "revalidation_obligations",
+                    "required_revalidation_obligations",
+                ):
                     add(policy.get(field))
 
         # Workflow-owned defaults are only applied when the Work did not
@@ -122,9 +130,78 @@ class CompletionAuthority:
         return list(dict.fromkeys(values))
 
     @staticmethod
+    def revalidation_obligation_refs(work: Work) -> list[str]:
+        values: list[str] = []
+
+        def add(raw: object) -> None:
+            if isinstance(raw, str) and raw.strip():
+                values.append(raw.strip())
+                return
+            if not isinstance(raw, list):
+                return
+            for item in raw:
+                if isinstance(item, str) and item.strip():
+                    values.append(item.strip())
+                elif isinstance(item, dict):
+                    for key in ("id", "ref", "key", "name", "description"):
+                        candidate = item.get(key)
+                        if isinstance(candidate, str) and candidate.strip():
+                            values.append(candidate.strip())
+                            break
+
+        metadata = work.metadata if isinstance(work.metadata, dict) else {}
+        constraints = work.constraints if isinstance(work.constraints, dict) else {}
+        for source in (metadata, constraints):
+            add(source.get("revalidation_obligations"))
+            add(source.get("required_revalidation_obligations"))
+            policy = source.get("verification_policy")
+            if isinstance(policy, dict):
+                add(policy.get("revalidation_obligations"))
+                add(policy.get("required_revalidation_obligations"))
+        return list(dict.fromkeys(values))
+
+    @staticmethod
     def _proof_metadata(record: object) -> dict[str, Any] | None:
         metadata = getattr(record, "metadata", None)
         return metadata if isinstance(metadata, dict) else None
+
+    @staticmethod
+    def _proof_class(record: object, metadata: dict[str, Any]) -> str:
+        explicit = metadata.get("proof_class")
+        allowed = {
+            "execution",
+            "observation",
+            "closed-verification",
+            "objective-verification",
+            "revalidation",
+        }
+        if explicit is not None:
+            value = str(explicit).strip().lower()
+            if value not in allowed:
+                raise ValueError(f"terminal completion proof has unknown proof_class {explicit!r}")
+            return value
+        kind = str(getattr(record, "kind", "")).strip().lower()
+        if kind == "task-objective-proof":
+            return "objective-verification"
+        return "closed-verification"
+
+    @staticmethod
+    def _proof_can_cover(proof_class: str, obligation: str) -> bool:
+        if proof_class == "execution":
+            return False
+        normalized = obligation.strip().lower()
+        if normalized.startswith("revalidate."):
+            return proof_class == "revalidation"
+        if normalized.startswith("verify."):
+            return proof_class in {"closed-verification", "objective-verification", "revalidation"}
+        if normalized.startswith("observe."):
+            return proof_class in {"observation", "closed-verification", "revalidation"}
+        return proof_class in {
+            "observation",
+            "closed-verification",
+            "objective-verification",
+            "revalidation",
+        }
 
     @staticmethod
     def validate_proof_invariant(
@@ -132,7 +209,7 @@ class CompletionAuthority:
         run: Run,
         refs: Iterable[str],
         record_lookup: Callable[[str], object | None],
-    ) -> None:
+    ) -> tuple[list[str], list[str], list[str]]:
         """Validate the complete terminal-proof contract for a Work/Run pair.
 
         This is deliberately usable by stores while they hold their commit
@@ -152,6 +229,7 @@ class CompletionAuthority:
         expected_version = CompletionAuthority._expected_version(work)
         expected_criteria = list(work.acceptance_criteria)
         required_obligations = set(CompletionAuthority.required_obligation_refs(work))
+        revalidation_obligations = set(CompletionAuthority.revalidation_obligation_refs(work))
         covered_obligations: set[str] = set()
         for ref in normalized:
             record = record_lookup(ref)
@@ -178,22 +256,46 @@ class CompletionAuthority:
             criteria = metadata.get("acceptance_criteria", metadata.get("criteria"))
             if not isinstance(criteria, list) or criteria != expected_criteria:
                 raise ValueError("terminal completion proof acceptance criteria do not match Work")
+            proof_class = CompletionAuthority._proof_class(record, metadata)
             raw_coverage = metadata.get(
                 "obligation_refs",
                 metadata.get("covered_obligations", metadata.get("verification_obligations", [])),
             )
-            if isinstance(raw_coverage, str):
-                covered_obligations.add(raw_coverage.strip())
+            candidates: list[str] = []
+            if isinstance(raw_coverage, str) and raw_coverage.strip():
+                candidates.append(raw_coverage.strip())
             elif isinstance(raw_coverage, list):
-                covered_obligations.update(
+                candidates.extend(
                     item.strip() for item in raw_coverage if isinstance(item, str) and item.strip()
                 )
+            covered_obligations.update(
+                obligation
+                for obligation in candidates
+                if (obligation not in revalidation_obligations or proof_class == "revalidation")
+                and CompletionAuthority._proof_can_cover(proof_class, obligation)
+            )
+        required = sorted(required_obligations)
+        covered = sorted(covered_obligations)
         missing = sorted(required_obligations - covered_obligations)
         if missing:
             raise ValueError(
                 "terminal completion proofs do not cover required verification obligations: "
                 + ", ".join(missing)
             )
+        terminal_pairs = ((work, "completed"), (run, "succeeded"))
+        for value, terminal_status in terminal_pairs:
+            if getattr(value, "status", None) != terminal_status:
+                continue
+            metadata_value = value.metadata if isinstance(value.metadata, dict) else {}
+            expected_audit = {
+                "completion_required_obligations": required,
+                "completion_covered_obligations": covered,
+                "completion_missing_obligations": [],
+            }
+            for key, expected in expected_audit.items():
+                if metadata_value.get(key) != expected:
+                    raise ValueError(f"terminal completion metadata {key!r} does not match proof coverage")
+        return required, covered, missing
 
     def _already_consumed(self, refs: set[str], run: Run) -> bool:
         metadata = run.metadata if isinstance(run.metadata, dict) else {}
@@ -240,12 +342,21 @@ class CompletionAuthority:
         work = current_work
         if self._already_consumed(set(refs), run):
             raise ValueError("terminal completion proof refs have already been consumed")
+        required_obligations, covered_obligations, missing_obligations = self.validate_proof_invariant(
+            work,
+            run,
+            refs,
+            self.store.get_record,
+        )
         validate_run_transition(run.status, "succeeded")
         metadata = dict(run.metadata) if isinstance(run.metadata, dict) else {}
         metadata["_completion_proof_refs"] = refs
         metadata["completion_verification_scope"] = self._expected_scope(work)
         metadata["completion_work_version"] = self._expected_version(work)
         metadata["completion_acceptance_criteria"] = list(work.acceptance_criteria)
+        metadata["completion_required_obligations"] = required_obligations
+        metadata["completion_covered_obligations"] = covered_obligations
+        metadata["completion_missing_obligations"] = missing_obligations
         from portable_runtime.core.models import utcnow
 
         updated = run.model_copy(update={"status": "succeeded", "ended_at": utcnow(), "metadata": metadata})
@@ -254,6 +365,9 @@ class CompletionAuthority:
         work_metadata["completion_verification_scope"] = self._expected_scope(work)
         work_metadata["completion_work_version"] = self._expected_version(work)
         work_metadata["completion_acceptance_criteria"] = list(work.acceptance_criteria)
+        work_metadata["completion_required_obligations"] = list(required_obligations)
+        work_metadata["completion_covered_obligations"] = list(covered_obligations)
+        work_metadata["completion_missing_obligations"] = list(missing_obligations)
         updated_work = work.model_copy(
             update={"status": "completed", "updated_at": utcnow(), "metadata": work_metadata}
         )

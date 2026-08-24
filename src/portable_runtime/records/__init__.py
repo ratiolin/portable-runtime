@@ -17,6 +17,11 @@ from .models import (
     PolicyRecord,
     RevisionRecord,
 )
+from .qualification_transition import (
+    QUALIFICATION_TRANSITION_EVENT_TYPE,
+    build_qualification_transition_event,
+    commit_qualification_transition,
+)
 
 __all__ = [
     "BaseRecord",
@@ -34,4 +39,7 @@ __all__ = [
     "RevisionRecord",
     "ChangeObjectRecord",
     "PolicyRecord",
+    "QUALIFICATION_TRANSITION_EVENT_TYPE",
+    "build_qualification_transition_event",
+    "commit_qualification_transition",
 ]

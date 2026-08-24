@@ -89,6 +89,7 @@ def test_required_obligation_refs_reads_work_policy_and_constraint_declarations(
             "required_obligations": ["independent-review", {"id": "scope-bound"}],
             "policy_obligations": [{"ref": "policy-proof"}],
             "obligations": [{"key": "audit-trail"}],
+            "revalidation_obligations": ["revalidation-review"],
             "verification_policy": {
                 "verification_obligations": [{"name": "objective-proof"}],
                 "required_obligations": ["criteria-proof"],
@@ -107,6 +108,7 @@ def test_required_obligation_refs_reads_work_policy_and_constraint_declarations(
         "scope-bound",
         "policy-proof",
         "audit-trail",
+        "revalidation-review",
         "objective-proof",
         "criteria-proof",
         "evidence-proof",
@@ -182,8 +184,15 @@ def test_store_terminal_primitive_requires_symmetric_pair_metadata(backend: str,
         with pytest.raises(ValueError, match="symmetric proof refs"):
             store.commit_terminal(terminal_work, terminal_run, [proof.id])
 
-        terminal_work = terminal_work.model_copy(update={"metadata": {"_completion_proof_refs": [proof.id]}})
-        terminal_run = terminal_run.model_copy(update={"metadata": {"_completion_proof_refs": [proof.id]}})
+        required = CompletionAuthority.required_obligation_refs(work)
+        audit = {
+            "_completion_proof_refs": [proof.id],
+            "completion_required_obligations": sorted(required),
+            "completion_covered_obligations": sorted(required),
+            "completion_missing_obligations": [],
+        }
+        terminal_work = terminal_work.model_copy(update={"metadata": dict(audit)})
+        terminal_run = terminal_run.model_copy(update={"metadata": dict(audit)})
         assert store.commit_terminal(terminal_work, terminal_run, [proof.id]).status == "succeeded"
     finally:
         if backend == "sqlite":
@@ -357,3 +366,41 @@ def test_import_state_rejects_terminal_pair_without_scope_bound_proof(backend: s
     finally:
         if backend == "sqlite":
             store.close()
+
+
+def test_revalidation_obligation_requires_revalidation_proof_class() -> None:
+    store = InMemoryStateStore()
+    work = Work(
+        id="work_revalidation_class",
+        title="revalidate",
+        metadata={"revalidation_obligations": ["fresh-source-check"]},
+    )
+    run = Run(id="run_revalidation_class", work_id=work.id, status="running")
+    store.save_work(work)
+    store.save_run(run)
+    ordinary = _proof(work, run).model_copy(
+        update={
+            "id": "proof_revalidation_wrong_class",
+            "metadata": {
+                **_proof(work, run).metadata,
+                "obligation_refs": ["fresh-source-check"],
+            },
+        }
+    )
+    store.save_record(ordinary)
+    with pytest.raises(ValueError, match="obligations"):
+        CompletionAuthority(store).authorize(work=work, run=run, verification_refs=[ordinary.id])
+    revalidation = ordinary.model_copy(
+        update={
+            "id": "proof_revalidation_right_class",
+            "metadata": {**ordinary.metadata, "proof_class": "revalidation"},
+        }
+    )
+    store.save_record(revalidation)
+    result = CompletionAuthority(store).authorize(
+        work=work, run=run, verification_refs=[revalidation.id]
+    )
+    assert result.status == "succeeded"
+    assert result.metadata["completion_required_obligations"] == ["fresh-source-check"]
+    assert result.metadata["completion_covered_obligations"] == ["fresh-source-check"]
+    assert result.metadata["completion_missing_obligations"] == []
