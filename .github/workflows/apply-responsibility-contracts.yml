@@ -7,6 +7,12 @@ on:
     paths:
       - tools/apply_responsibility_contracts_p1_p4.py
       - .github/workflows/apply-responsibility-contracts.yml
+  pull_request:
+    branches:
+      - main
+    paths:
+      - tools/apply_responsibility_contracts_p1_p4.py
+      - .github/workflows/apply-responsibility-contracts.yml
 
 permissions:
   contents: write
@@ -45,6 +51,7 @@ jobs:
         run: uv run pytest
 
       - name: Commit verified rollout
+        if: github.event_name == 'pull_request'
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
