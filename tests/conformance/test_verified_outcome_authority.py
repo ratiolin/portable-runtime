@@ -393,7 +393,6 @@ def test_fb2_012_confirmed_outcome_does_not_authorize_terminal_completion(tmp_pa
         assert store.get_run(run.id).status != "succeeded"  # type: ignore[union-attr]
 
 
-@_xfail("FB2-A01: direct confirmed Outcome writes are not denied yet")
 def test_fb2_a01_direct_confirmed_outcome_write_is_not_an_authority_escape_hatch(tmp_path: Path) -> None:
     with _store("memory", tmp_path) as store:
         _work, _run, _step, _attempt, action = _seed_execution(store)
