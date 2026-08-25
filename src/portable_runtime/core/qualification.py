@@ -171,6 +171,9 @@ class InvocationPermit:
             provider_id=provider_id,
             lease_generation=lease_generation,
             request_snapshot=snapshot,
+            governance_applicable=governance_applicable,
+            governance_requirement_digest=effective_governance_requirement_digest,
+            governance_snapshot_digest=effective_governance_snapshot_digest,
         )
 
     def snapshot_payload(self) -> dict[str, Any]:
