@@ -1,0 +1,36 @@
+name: B3 P3 Projection Patch
+on:
+  push:
+    branches: [feat/outcome-governance-impact-impl]
+permissions:
+  contents: write
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: true
+      - shell: python
+        run: |
+          from pathlib import Path
+          path = Path('src/portable_runtime/governance/revalidation.py')
+          text = path.read_text()
+          text = text.replace(
+              '    ImpactType,\n    assess_revalidation,\n',
+              '    ImpactType,\n    RevalidationDisposition,\n    assess_revalidation,\n',
+              1,
+          )
+          start = text.index('def project_review_obligation(\n')
+          end = text.index('\n\nclass RevalidationGovernanceLifecycle:', start)
+          replacement = '''def project_review_obligation_from_disposition(\n    *,\n    trigger_event_ref: str,\n    target: str,\n    context: str,\n    disposition: RevalidationDisposition,\n    basis_refs: tuple[str, ...],\n    persistence: DistinctionGovernancePersistence,\n) -> ReviewProjection:\n    \"\"\"Project one explicit disposition into the existing ReviewObligation lifecycle.\"\"\"\n\n    action = disposition.action\n    blocking = action in _BLOCKING_ACTIONS\n    normalized_basis = tuple(dict.fromkeys(ref for ref in basis_refs if ref))\n    if not normalized_basis:\n        raise GovernanceLifecycleError(\"review projection requires explicit basis refs\")\n    if action not in _REVIEW_ACTIONS:\n        return ReviewProjection(\n            status=\"not-required\",\n            action=action,\n            target=target,\n            blocking=False,\n        )\n    if persistence.get_state(target) is None:\n        return ReviewProjection(\n            status=\"projection-unavailable\",\n            action=action,\n            target=target,\n            blocking=blocking,\n        )\n    invalidates = frozenset(\n        decision.id\n        for decision in persistence.list_decisions().values()\n        if decision.target == target and decision.context == context\n    )\n    obligation = ReviewObligation(\n        id=_obligation_id(event_ref=trigger_event_ref, target=target, context=context),\n        target=target,\n        trigger_ref=trigger_event_ref,\n        basis_refs=normalized_basis,\n        context=context,\n        blocking=blocking,\n        blocking_condition=(\n            BlockingCondition(context_names=frozenset({context})) if blocking else None\n        ),\n        closure_requirements=_closure_requirements(action),\n        invalidates_decisions=invalidates,\n    )\n    return ReviewProjection(\n        status=\"ready\",\n        action=action,\n        target=target,\n        blocking=blocking,\n        obligation=obligation,\n    )\n\n\ndef project_review_obligation(\n    assessment: AffectedAssessment,\n    *,\n    event_ref: str,\n    context: str,\n    persistence: DistinctionGovernancePersistence,\n) -> ReviewProjection:\n    \"\"\"Compatibility adapter from change revalidation into shared review projection.\"\"\"\n\n    disposition = assessment.revalidation_disposition or RevalidationDisposition(\n        action=_disposition(assessment),\n        rationale_refs=list(assessment.reason_refs),\n    )\n    return project_review_obligation_from_disposition(\n        trigger_event_ref=event_ref,\n        target=assessment.affected_ref,\n        context=context,\n        disposition=disposition,\n        basis_refs=(assessment.change_ref,),\n        persistence=persistence,\n    )\n'''
+          text = text[:start] + replacement + text[end:]
+          path.write_text(text)
+      - shell: bash
+        run: |
+          rm .github/workflows/b3_p3_projection_patch.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add src/portable_runtime/governance/revalidation.py .github/workflows/b3_p3_projection_patch.yml
+          git commit -m "B3-P3: extract shared review projection primitive"
+          git push
