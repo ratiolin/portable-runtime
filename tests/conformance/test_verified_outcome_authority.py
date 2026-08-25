@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import ast
 import importlib
+import inspect
 from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
@@ -18,10 +20,6 @@ from portable_runtime.stores.sqlite import SQLiteStateStore
 
 _SCOPE = {"resource": "repo/app", "operation": "effect"}
 _VERSIONS = ["patch:v1"]
-
-
-def _xfail(reason: str) -> pytest.MarkDecorator:
-    return pytest.mark.xfail(strict=True, reason=reason)
 
 
 @contextmanager
@@ -207,7 +205,6 @@ def test_fb2_010_recorded_outcome_is_not_confirmed_authority(tmp_path: Path) -> 
         assert _confirmed(store) == []
 
 
-@_xfail("FB2-001: VerifiedOutcomeAuthority not implemented")
 @pytest.mark.parametrize("backend", ["memory", "sqlite"])
 def test_fb2_001_bound_persisted_pass_proof_confirms_one_outcome(
     backend: str,
@@ -229,7 +226,6 @@ def test_fb2_001_bound_persisted_pass_proof_confirms_one_outcome(
         assert [item.id for item in _confirmed(store)] == [outcome.id]
 
 
-@_xfail("FB2-002: verified fail Outcome authority not implemented")
 @pytest.mark.parametrize("backend", ["memory", "sqlite"])
 def test_fb2_002_bound_persisted_fail_proof_confirms_not_satisfied_outcome(
     backend: str,
@@ -250,7 +246,6 @@ def test_fb2_002_bound_persisted_fail_proof_confirms_not_satisfied_outcome(
         assert outcome.metadata["objective_result"] == "fail"
 
 
-@_xfail("FB2-004: durable identity binding validation not implemented")
 @pytest.mark.parametrize(
     "overrides",
     [
@@ -280,7 +275,6 @@ def test_fb2_004_wrong_identity_binding_fails_closed(
         assert _confirmed(store) == []
 
 
-@_xfail("FB2-005: scope/version binding validation not implemented")
 @pytest.mark.parametrize(
     ("scope", "versions"),
     [
@@ -309,7 +303,6 @@ def test_fb2_005_wrong_scope_or_version_fails_closed(
             _confirm(store, work=work, run=run, attempt=attempt, action=action, evidence_refs=[proof.id])
 
 
-@_xfail("FB2-006: typed durable proof lookup not implemented")
 def test_fb2_006_missing_or_unknown_proof_fails_closed(tmp_path: Path) -> None:
     with _store("memory", tmp_path) as store:
         work, run, _step, attempt, action = _seed_execution(store)
@@ -324,7 +317,6 @@ def test_fb2_006_missing_or_unknown_proof_fails_closed(tmp_path: Path) -> None:
             )
 
 
-@_xfail("FB2-007: deterministic verified Outcome identity not implemented")
 @pytest.mark.parametrize("backend", ["memory", "sqlite"])
 def test_fb2_007_same_verification_closure_replay_is_idempotent(
     backend: str,
@@ -340,7 +332,6 @@ def test_fb2_007_same_verification_closure_replay_is_idempotent(
         assert [item.id for item in _confirmed(store)] == [first.id]
 
 
-@_xfail("FB2-008: cross-action proof reuse rejection not implemented")
 def test_fb2_008_proof_from_another_action_or_run_cannot_be_reused(tmp_path: Path) -> None:
     with _store("memory", tmp_path) as store:
         work_a, run_a, _step_a, attempt_a, action_a = _seed_execution(store, "a")
@@ -357,7 +348,6 @@ def test_fb2_008_proof_from_another_action_or_run_cannot_be_reused(tmp_path: Pat
             )
 
 
-@_xfail("FB2-009: atomic Outcome + authority event commit not implemented")
 def test_fb2_009_outcome_and_authority_event_commit_is_atomic() -> None:
     class FailingAuthorityEventStore(InMemoryStateStore):
         def append_event(self, value: Any) -> None:
@@ -374,7 +364,6 @@ def test_fb2_009_outcome_and_authority_event_commit_is_atomic() -> None:
     assert not any(event.type == "ObjectiveVerificationAccepted" for event in store.list_events())
 
 
-@_xfail("FB2-011: confirmed Outcome architecture lock pending authority implementation")
 def test_fb2_011_confirmed_outcome_does_not_discharge_governance(tmp_path: Path) -> None:
     with _store("memory", tmp_path) as store:
         work, run, _step, attempt, action = _seed_execution(store)
@@ -383,7 +372,6 @@ def test_fb2_011_confirmed_outcome_does_not_discharge_governance(tmp_path: Path)
         assert not any("governance" in event.type.lower() for event in store.list_events())
 
 
-@_xfail("FB2-012: terminal non-substitution lock pending authority implementation")
 def test_fb2_012_confirmed_outcome_does_not_authorize_terminal_completion(tmp_path: Path) -> None:
     with _store("memory", tmp_path) as store:
         work, run, _step, attempt, action = _seed_execution(store)
@@ -407,7 +395,6 @@ def test_fb2_a01_direct_confirmed_outcome_write_is_not_an_authority_escape_hatch
         assert _confirmed(store) == []
 
 
-@_xfail("FB2-A02: inconsistent multi-proof closure rejection not implemented")
 def test_fb2_a02_mixed_pass_fail_closure_fails_closed(tmp_path: Path) -> None:
     with _store("memory", tmp_path) as store:
         work, run, _step, attempt, action = _seed_execution(store)
@@ -469,3 +456,83 @@ def test_fb2_a03_matching_looking_authority_events_with_wrong_binding_fail_impor
         with pytest.raises(ValueError, match="incompatible confirmed-outcome authority history"):
             target.import_state(state)
         assert target.get_record(outcome.id) is None
+
+def test_fb2_p6_verified_outcome_authority_is_thin_commit_only_facade() -> None:
+    from portable_runtime.records.verified_outcome_commit import VerifiedOutcomeCommitRequest
+
+    module = importlib.import_module("portable_runtime.records.verified_outcome")
+    source = inspect.getsource(module)
+    tree = ast.parse(source)
+    imported_modules = {
+        node.module
+        for node in ast.walk(tree)
+        if isinstance(node, ast.ImportFrom) and node.module is not None
+    }
+    assert imported_modules <= {
+        "__future__",
+        "typing",
+        "portable_runtime.records.models",
+        "portable_runtime.records.verified_outcome_commit",
+    }
+    attribute_calls = [
+        node.func.attr
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+    ]
+    assert attribute_calls == ["commit_verified_outcome"]
+    forbidden = {
+        "get_action",
+        "get_attempt",
+        "get_step",
+        "get_run",
+        "get_work",
+        "get_record",
+        "save_record",
+        "append_event",
+        "BoundVerificationEvidenceValidator",
+        "prepare_verified_outcome_commit",
+        "export_state",
+        "import_state",
+        "transaction",
+    }
+    referenced = {node.id for node in ast.walk(tree) if isinstance(node, ast.Name)} | {
+        node.attr for node in ast.walk(tree) if isinstance(node, ast.Attribute)
+    }
+    assert forbidden.isdisjoint(referenced)
+
+    sentinel = OutcomeRecord(
+        id="outcome_facade_sentinel",
+        action_ref="action_facade_sentinel",
+        lifecycle_status="recorded",
+    )
+
+    class CommitOnlyStore:
+        def __init__(self) -> None:
+            self.request: VerifiedOutcomeCommitRequest | None = None
+
+        def commit_verified_outcome(self, request: VerifiedOutcomeCommitRequest) -> OutcomeRecord:
+            self.request = request
+            return sentinel
+
+    store = CommitOnlyStore()
+    result = module.VerifiedOutcomeAuthority(store).confirm(
+        action_ref="action_facade_sentinel",
+        evidence_refs=["evidence:1"],
+        expected_work_id="work:1",
+        expected_run_id="run:1",
+        expected_request_id="request:1",
+        expected_attempt_ref="attempt:1",
+        verification_scope={"resource": "repo/app", "operation": "effect"},
+        subject_version_refs=["patch:v1"],
+    )
+    assert result is sentinel
+    assert store.request == VerifiedOutcomeCommitRequest(
+        action_ref="action_facade_sentinel",
+        evidence_refs=("evidence:1",),
+        expected_work_id="work:1",
+        expected_run_id="run:1",
+        expected_request_id="request:1",
+        expected_attempt_ref="attempt:1",
+        verification_scope={"resource": "repo/app", "operation": "effect"},
+        subject_version_refs=("patch:v1",),
+    )
