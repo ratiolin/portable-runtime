@@ -14,7 +14,7 @@ from dataclasses import dataclass
 from typing import Any, Literal, cast
 
 from portable_runtime.core.capabilities import CapabilityRequest, CapabilityResult
-from portable_runtime.core.models import Action, Outcome, Step, StepAttempt, new_id, utcnow
+from portable_runtime.core.models import Action, Step, StepAttempt, new_id, utcnow
 
 EffectSemantics = Literal["pure", "idempotent", "deduplicatable", "reconcilable", "irreversible-opaque"]
 Reversibility = Literal["reversible", "compensatable", "irreversible", "unknown"]
@@ -389,7 +389,7 @@ def commit_execution_projection(
     provider_id: str,
     records: ExecutionRecordIds,
 ) -> ProjectionDecision:
-    """Persist post-provider state; no provider capability is accepted."""
+    """Persist execution facts only; objective Outcome authority belongs to verification."""
 
     if store is None or records.step_id is None:
         return ProjectionDecision()
@@ -425,24 +425,15 @@ def commit_execution_projection(
             request_ref=request.id,
             status=projected_status,
         )
-        outcome = Outcome(
-            id=new_id("outcome"),
-            action_id=action.id,
-            artifact_refs=result.output_artifact_refs,
-            evidence_refs=result.evidence_refs,
-            status=projected_status,
-        )
         if hasattr(store, "transaction"):
             with store.transaction():
                 store.save_step(step_update)
                 store.save_attempt(attempt_update)
                 store.save_action(action)
-                store.save_outcome(outcome)
         else:
             store.save_step(step_update)
             store.save_attempt(attempt_update)
             store.save_action(action)
-            store.save_outcome(outcome)
-        return ProjectionDecision(projected_status, outcome.id)
+        return ProjectionDecision(projected_status, None)
     except Exception as exc:
         return ProjectionDecision(error=exc)
