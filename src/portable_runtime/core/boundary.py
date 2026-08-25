@@ -1098,7 +1098,13 @@ class RealityBoundary:
             store,
             "InvocationCompleted",
             request.id,
-            {"provider_id": provider_id, "status": result.status, "capability": request.capability},
+            {
+                "provider_id": provider_id,
+                "status": result.status,
+                "capability": request.capability,
+                "semantic_level": "execution",
+                "authoritative_outcome": False,
+            },
         )
 
         # Fencing is re-read after every run-bound provider call.  A changed
@@ -1121,8 +1127,8 @@ class RealityBoundary:
                 _append_event(store, CODE_POST_FENCING_REJECTED, request.id, {"reason": post_reason, "provider_id": provider_id})
                 return result
 
-        # Durable projection is part of the authoritative outcome.  A commit
-        # failure after provider success is recoverable/unknown, never success.
+        # Durable execution projection is separate from objective Outcome authority.
+        # A projection commit failure after provider execution is recoverable/unknown.
         projection = commit_execution_projection(
             store,
             request,
@@ -1135,17 +1141,29 @@ class RealityBoundary:
             _append_event(store, CODE_RESULT_COMMIT_FAILED, request.id, {"reason": reason, "provider_id": provider_id})
             return result.model_copy(update={"status": "unknown", "error": {"code": CODE_RESULT_COMMIT_FAILED, "reason": reason}})
         if projection.projected_status is not None:
+            execution_payload = {
+                "provider_id": provider_id,
+                "status": projection.projected_status,
+                "capability": request.capability,
+                "semantic_level": "execution",
+                "authoritative_outcome": False,
+            }
             _append_event(
                 store,
-                "CapabilitySucceeded" if projection.projected_status == "succeeded" else "CapabilityCompleted",
+                "ExecutionSucceeded"
+                if projection.projected_status == "succeeded"
+                else "ExecutionCompleted",
                 request.id,
-                {"provider_id": provider_id, "status": projection.projected_status, "capability": request.capability},
+                execution_payload,
             )
+            # Compatibility only: capability success is an execution fact, not an Outcome.
             _append_event(
                 store,
-                "OutcomeRecorded",
+                "CapabilitySucceeded"
+                if projection.projected_status == "succeeded"
+                else "CapabilityCompleted",
                 request.id,
-                {"outcome_id": projection.outcome_id, "status": projection.projected_status, "provider_id": provider_id},
+                {**execution_payload, "compatibility_event": True},
             )
         return result
 
