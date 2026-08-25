@@ -333,7 +333,7 @@ def test_fb2_007_same_verification_closure_replay_is_idempotent(
     with _store(backend, tmp_path) as store:
         work, run, _step, attempt, action = _seed_execution(store)
         proof = _proof(store, work=work, run=run, attempt=attempt, action=action, result="pass")
-        kwargs = dict(work=work, run=run, attempt=attempt, action=action, evidence_refs=[proof.id])
+        kwargs = {"work": work, "run": run, "attempt": attempt, "action": action, "evidence_refs": [proof.id]}
         first = _confirm(store, **kwargs)
         second = _confirm(store, **kwargs)
         assert second.id == first.id
@@ -443,6 +443,5 @@ def test_fb2_a03_matching_looking_authority_events_with_wrong_binding_fail_impor
             )
         )
         state = source.export_state()
-    with _store("memory", tmp_path) as target:
-        with pytest.raises(ValueError):
-            target.import_state(state)
+    with _store("memory", tmp_path) as target, pytest.raises(ValueError):
+        target.import_state(state)
