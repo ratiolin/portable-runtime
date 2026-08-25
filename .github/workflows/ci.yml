@@ -66,6 +66,7 @@ jobs:
           tests/conformance/test_verified_outcome_import_integration.py
           tests/conformance/test_bound_verification_evidence.py
           tests/conformance/test_action_read_seam.py
+          tests/conformance/test_outcome_governance_impact_design.py
           tests/conformance/test_responsibility_separation_contracts.py
           tests/conformance/test_distinction_governance.py
           tests/conformance/test_distinction_governance_persistence.py
