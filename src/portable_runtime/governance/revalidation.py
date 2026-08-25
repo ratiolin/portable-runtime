@@ -46,8 +46,12 @@ _BLOCKING_ACTIONS = frozenset(
 ProjectionStatus = Literal["not-required", "ready", "projection-unavailable"]
 
 
-class GovernanceLifecycleRejected(ValueError):
+class GovernanceLifecycleError(ValueError):
     """The current governance snapshot rejects the requested lifecycle step."""
+
+
+# Compatibility name retained for Phase D callers/tests.
+GovernanceLifecycleRejected = GovernanceLifecycleError
 
 
 @dataclass(frozen=True)
@@ -61,7 +65,7 @@ class ReviewProjection:
     obligation: ReviewObligation | None = None
 
 
-class GovernanceProjectionUnavailable(GovernanceLifecycleRejected):
+class GovernanceProjectionUnavailable(GovernanceLifecycleError):
     """A review responsibility cannot be represented by the governance projection."""
 
     def __init__(self, projection: ReviewProjection) -> None:
@@ -257,7 +261,7 @@ class RevalidationGovernanceLifecycle:
                 continue
             obligation = projection.obligation
             if obligation is None:
-                raise GovernanceLifecycleRejected("ready governance projection requires an obligation")
+                raise GovernanceLifecycleError("ready governance projection requires an obligation")
             if _obligation_already_processed(self.persistence, obligation.id):
                 processed.append(obligation.id)
                 continue
@@ -274,7 +278,7 @@ class RevalidationGovernanceLifecycle:
         config = self.snapshot()
         admitted = record_decision(config, decision, self.authority)
         if admitted is None:
-            raise GovernanceLifecycleRejected(
+            raise GovernanceLifecycleError(
                 "governance decision is not admissible under the current review snapshot"
             )
         self.persistence.record_decision(decision)
@@ -288,7 +292,7 @@ class RevalidationGovernanceLifecycle:
             self.freshness,
         )
         if admitted is None:
-            raise GovernanceLifecycleRejected(
+            raise GovernanceLifecycleError(
                 "governed state application is not admissible under the current snapshot"
             )
         receipt = admitted.runtime.applications[application.id]
@@ -315,13 +319,13 @@ class RevalidationGovernanceLifecycle:
             state_application,
         )
         if admitted is None:
-            raise GovernanceLifecycleRejected(
+            raise GovernanceLifecycleError(
                 "review discharge is not admissible under the current snapshot"
             )
         receipt = admitted.runtime.applications[application.id]
         obligation_id = application.review_obligation_id
         if obligation_id is None:
-            raise GovernanceLifecycleRejected(
+            raise GovernanceLifecycleError(
                 "review discharge requires an explicit obligation reference"
             )
         self.persistence.commit_review_discharge(obligation_id, receipt)
