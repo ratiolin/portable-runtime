@@ -39,6 +39,7 @@ from portable_runtime.core.qualification import (
 )
 from portable_runtime.core.reliability import CircuitBreaker, ReliabilityControls
 from portable_runtime.core.router import ConstraintRouter
+from portable_runtime.governance.dispatch import GovernanceDispatchCommitter
 from portable_runtime.governance.use_admission import (
     GovernanceUseAdmission,
     GovernanceUseRequirementResolver,
@@ -1038,6 +1039,21 @@ class RealityBoundary:
             code, reason = governance_failure
             return abort_before_reality_exit(code, reason)
 
+        dispatch_commit = GovernanceDispatchCommitter(store).commit(
+            request,
+            permit,
+            self.governance_requirement_resolver,
+            attempt_id=records.attempt_id,
+        )
+        if dispatch_commit.status not in {"committed", "not-applicable"}:
+            if dispatch_commit.status == "unavailable":
+                code = CODE_GOVERNANCE_UNAVAILABLE
+            elif dispatch_commit.status == "stale":
+                code = CODE_GOVERNANCE_STALE
+            else:
+                code = CODE_GOVERNANCE_CHANGED
+            return abort_before_reality_exit(code, dispatch_commit.reason)
+
         context = InvocationContext(runtime_id=self.runtime_id, work_id=execution_request.work_id, run_id=execution_request.run_id, lease_generation=permit.lease_generation, idempotency_key=execution_request.idempotency_key)
         context.metadata.update(execution_request.metadata or {})
         context.metadata.update(
@@ -1046,12 +1062,22 @@ class RealityBoundary:
                 "governance_applicable": permit.governance_applicable,
                 "governance_requirement_digest": permit.governance_requirement_digest,
                 "governance_snapshot_digest": permit.governance_snapshot_digest,
+                "dispatch_commit_ref": dispatch_commit.commit_ref,
                 "invocation_permit_provider": permit.provider_id,
                 "invocation_permit_request": permit.request_digest,
             }
         )
         breaker = _circuit_for(provider_id)
-        _append_event(store, "InvocationStarted", request.id, {"provider_id": provider_id, "capability": request.capability})
+        _append_event(
+            store,
+            "InvocationStarted",
+            request.id,
+            {
+                "provider_id": provider_id,
+                "capability": request.capability,
+                "dispatch_commit_ref": dispatch_commit.commit_ref,
+            },
+        )
         breaker_state_before = breaker.state
         try:
             result = await provider.invoke(execution_request, context)
