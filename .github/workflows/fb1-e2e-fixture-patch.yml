@@ -1,0 +1,38 @@
+name: F1-B1 E2E fixture patch
+
+on:
+  push:
+    branches: [feat/execution-outcome-separation]
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: feat/execution-outcome-separation
+          fetch-depth: 0
+      - name: Remove provider-to-Outcome E2E shortcut expectation
+        shell: python
+        run: |
+          from pathlib import Path
+
+          path = Path("tests/test_incident_repair_e2e.py")
+          text = path.read_text()
+          old = '''    # Outcome persisted via CapabilityService (at least one per invoke)\n    state = store.export_state()\n    assert len(state["outcome"]) >= 1\n    assert len(state["action"]) >= 1\n'''
+          new = '''    # CapabilityService persists execution facts only. Objective Outcome\n    # materialization belongs to an independent verification authority.\n    state = store.export_state()\n    assert state["outcome"] == []\n    assert len(state["action"]) >= 1\n'''
+          if old in text:
+              path.write_text(text.replace(old, new, 1))
+          elif new not in text:
+              raise SystemExit("incident E2E Outcome shortcut anchor missing")
+      - name: Commit patch when needed
+        run: |
+          if git diff --quiet; then exit 0; fi
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add tests/test_incident_repair_e2e.py
+          git commit -m 'test: remove provider outcome shortcut from incident E2E'
+          git push origin HEAD:feat/execution-outcome-separation
