@@ -101,6 +101,42 @@ VerifiedOutcomeAuthority(store).confirm(
 
 The operation must resolve durable execution state and durable typed evidence before materializing an Outcome.
 
+## Non-bypass store authority gate
+
+A caller-level authority object is insufficient by itself.
+
+Today, normal canonical `save_record()` treats creation of a new record as an ordinary write. `assert_semantic_mutation_authorized()` only guards changed existing records, so a fresh `OutcomeRecord(lifecycle_status="confirmed")` could otherwise be inserted directly and bypass `VerifiedOutcomeAuthority`.
+
+F1-B2 production must therefore add a store-owned confirmed-Outcome commit gate, analogous in responsibility to `commit_terminal()`:
+
+```text
+VerifiedOutcomeAuthority
+        ↓
+store-owned verified-outcome commit primitive
+        ↓
+revalidate durable Action + evidence while holding transaction
+        ↓
+confirmed OutcomeRecord + authority events atomically committed
+```
+
+Required consequences:
+
+```text
+direct save_record(OutcomeRecord(... confirmed ...))
+    -> fail closed unless inside the verified-outcome authority commit
+
+bundle/state import containing confirmed Outcome
+    -> graph validation requires valid bound EvidenceArtifact provenance
+       and matching objective-verification authority event(s)
+
+caller cannot manufacture authoritative_outcome=true event alone
+    -> no confirmed Outcome authority
+```
+
+The store primitive must validate from durable state; it must not trust a caller-supplied boolean saying that verification already passed.
+
+A narrow internal commit-depth/token mechanism is acceptable, but the externally observable rule is that normal `save_record()` is not an authority escape hatch.
+
 ## Durable Action read seam
 
 F1-B1 persists the execution `Action` in the core action namespace. The current `StateStore` protocol exposes `save_action()` but not `get_action()`.
@@ -327,6 +363,13 @@ FB2-011 confirmed Outcome alone
 
 FB2-012 confirmed Outcome alone
         -> no terminal completion; CompletionAuthority remains independent
+```
+
+Supplemental architecture lock:
+
+```text
+FB2-A01 direct/imported confirmed Outcome without the verified-outcome authority proof graph
+        -> fail closed
 ```
 
 ## Explicit non-goals
