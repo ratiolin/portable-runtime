@@ -341,6 +341,7 @@ class SQLiteStateStore:
     def save_decision(self, value: Decision) -> None: self._save_checked("decision", value)
     def get_decision(self, decision_id: str) -> Decision | None: return self._get("decision", Decision, decision_id)
     def save_action(self, value: Action) -> None: self._save_checked("action", value)
+    def get_action(self, action_id: str) -> Action | None: return self._get("action", Action, action_id)
     def save_outcome(self, value: Outcome) -> None: self._save_checked("outcome", value)
     def save_knowledge(self, value: KnowledgeItem) -> None: self._save_checked("knowledge", value)
     def get_knowledge(self, knowledge_id: str) -> KnowledgeItem | None:
