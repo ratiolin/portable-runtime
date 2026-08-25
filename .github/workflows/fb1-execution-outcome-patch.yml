@@ -22,44 +22,35 @@ jobs:
 
           stages = Path("src/portable_runtime/core/boundary_stages.py")
           text = stages.read_text()
-          text = text.replace(
-              "from portable_runtime.core.models import Action, Outcome, Step, StepAttempt, new_id, utcnow",
-              "from portable_runtime.core.models import Action, Step, StepAttempt, new_id, utcnow",
-              1,
-          )
-          start = text.index("        outcome = Outcome(\n")
-          end_marker = "        return ProjectionDecision(projected_status, outcome.id)\n"
-          end = text.index(end_marker, start) + len(end_marker)
-          replacement = '''        if hasattr(store, "transaction"):\n            with store.transaction():\n                store.save_step(step_update)\n                store.save_attempt(attempt_update)\n                store.save_action(action)\n        else:\n            store.save_step(step_update)\n            store.save_attempt(attempt_update)\n            store.save_action(action)\n        return ProjectionDecision(projected_status, None)\n'''
-          text = text[:start] + replacement + text[end:]
-          text = text.replace(
-              '    """Persist post-provider state; no provider capability is accepted."""',
-              '    """Persist execution facts only; objective Outcome authority belongs to verification."""',
-              1,
-          )
-          stages.write_text(text)
+          old_import = "from portable_runtime.core.models import Action, Outcome, Step, StepAttempt, new_id, utcnow"
+          new_import = "from portable_runtime.core.models import Action, Step, StepAttempt, new_id, utcnow"
+          if old_import in text:
+              text = text.replace(old_import, new_import, 1)
+              start = text.index("        outcome = Outcome(\n")
+              end_marker = "        return ProjectionDecision(projected_status, outcome.id)\n"
+              end = text.index(end_marker, start) + len(end_marker)
+              replacement = '''        if hasattr(store, "transaction"):\n            with store.transaction():\n                store.save_step(step_update)\n                store.save_attempt(attempt_update)\n                store.save_action(action)\n        else:\n            store.save_step(step_update)\n            store.save_attempt(attempt_update)\n            store.save_action(action)\n        return ProjectionDecision(projected_status, None)\n'''
+              text = text[:start] + replacement + text[end:]
+              text = text.replace(
+                  '    """Persist post-provider state; no provider capability is accepted."""',
+                  '    """Persist execution facts only; objective Outcome authority belongs to verification."""',
+                  1,
+              )
+              stages.write_text(text)
 
           boundary = Path("src/portable_runtime/core/boundary.py")
           text = boundary.read_text()
-          start = text.index("        if projection.projected_status is not None:\n")
-          end_marker = "        return result\n"
-          end = text.index(end_marker, start) + len(end_marker)
-          replacement = '''        if projection.projected_status is not None:\n            execution_payload = {\n                "provider_id": provider_id,\n                "status": projection.projected_status,\n                "capability": request.capability,\n                "semantic_level": "execution",\n                "authoritative_outcome": False,\n            }\n            _append_event(store, "InvocationCompleted", request.id, execution_payload)\n            _append_event(\n                store,\n                "ExecutionSucceeded"\n                if projection.projected_status == "succeeded"\n                else "ExecutionCompleted",\n                request.id,\n                execution_payload,\n            )\n            # Compatibility event: success here is provider/execution-level only.\n            _append_event(\n                store,\n                "CapabilitySucceeded"\n                if projection.projected_status == "succeeded"\n                else "CapabilityCompleted",\n                request.id,\n                {**execution_payload, "compatibility_event": True},\n            )\n            # F1-B1 deliberately creates no Outcome. Keep this conditional so a\n            # later verification authority can materialize one without making\n            # provider execution projection authoritative again.\n            if projection.outcome_id is not None:\n                _append_event(\n                    store,\n                    "OutcomeRecorded",\n                    request.id,\n                    {\n                        "outcome_id": projection.outcome_id,\n                        "status": projection.projected_status,\n                        "provider_id": provider_id,\n                    },\n                )\n        return result\n'''
-          text = text[:start] + replacement + text[end:]
-          boundary.write_text(text)
-
-          ci = Path(".github/workflows/ci.yml")
-          text = ci.read_text()
-          test_line = "          tests/conformance/test_execution_outcome_separation.py\n"
-          if test_line not in text:
-              anchor = "          tests/conformance/test_boundary_architecture.py\n"
-              text = text.replace(anchor, anchor + test_line, 1)
-          ci.write_text(text)
+          if '"InvocationCompleted"' not in text:
+              start = text.index("        if projection.projected_status is not None:\n")
+              end_marker = "        return result\n"
+              end = text.index(end_marker, start) + len(end_marker)
+              replacement = '''        if projection.projected_status is not None:\n            execution_payload = {\n                "provider_id": provider_id,\n                "status": projection.projected_status,\n                "capability": request.capability,\n                "semantic_level": "execution",\n                "authoritative_outcome": False,\n            }\n            _append_event(store, "InvocationCompleted", request.id, execution_payload)\n            _append_event(\n                store,\n                "ExecutionSucceeded"\n                if projection.projected_status == "succeeded"\n                else "ExecutionCompleted",\n                request.id,\n                execution_payload,\n            )\n            # Compatibility event: success here is provider/execution-level only.\n            _append_event(\n                store,\n                "CapabilitySucceeded"\n                if projection.projected_status == "succeeded"\n                else "CapabilityCompleted",\n                request.id,\n                {**execution_payload, "compatibility_event": True},\n            )\n            if projection.outcome_id is not None:\n                _append_event(\n                    store,\n                    "OutcomeRecorded",\n                    request.id,\n                    {\n                        "outcome_id": projection.outcome_id,\n                        "status": projection.projected_status,\n                        "provider_id": provider_id,\n                    },\n                )\n        return result\n'''
+              boundary.write_text(text[:start] + replacement + text[end:])
       - name: Commit patch when needed
         run: |
           if git diff --quiet; then exit 0; fi
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add src/portable_runtime/core/boundary_stages.py src/portable_runtime/core/boundary.py .github/workflows/ci.yml
+          git add src/portable_runtime/core/boundary_stages.py src/portable_runtime/core/boundary.py
           git commit -m 'feat: separate execution reports from authoritative outcomes'
           git push origin HEAD:feat/execution-outcome-separation
