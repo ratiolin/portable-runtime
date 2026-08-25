@@ -262,6 +262,7 @@ def resolve_outcome_applicability(
     requested_versions = tuple(sorted(set(subject_version_refs)))
     metadata = confirmed.metadata if isinstance(confirmed.metadata, dict) else {}
     outcome_versions = _strings(metadata.get("subject_version_refs"))
+    normalized_outcome_versions = tuple(sorted(outcome_versions)) if outcome_versions is not None else ()
     verification_scope = metadata.get("verification_scope")
     outcome_resource = verification_scope.get("resource") if isinstance(verification_scope, dict) else None
     declaration_complete = (
@@ -292,7 +293,7 @@ def resolve_outcome_applicability(
         or dependency.context != context
         or not requested_scope.issubset(dependency.scope)
         or outcome_resource not in dependency.scope
-        or tuple(sorted(outcome_versions)) != declared_versions
+        or normalized_outcome_versions != declared_versions
         or requested_versions != declared_versions
     )
     if mismatched:
