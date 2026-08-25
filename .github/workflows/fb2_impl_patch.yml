@@ -1,0 +1,51 @@
+name: FB2 P1 Patch
+on:
+  push:
+    branches: [feat/verified-outcome-authority-impl]
+permissions:
+  contents: write
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: true
+      - name: Apply P1 durable action read seam
+        shell: python
+        run: |
+          from pathlib import Path
+
+          edits = {
+              "src/portable_runtime/interfaces/store.py": (
+                  "    def save_action(self, value: Action) -> None: ...\n    def save_outcome(self, value: Outcome) -> None: ...",
+                  "    def save_action(self, value: Action) -> None: ...\n    def get_action(self, action_id: str) -> Action | None: ...\n    def save_outcome(self, value: Outcome) -> None: ...",
+              ),
+              "src/portable_runtime/stores/memory.py": (
+                  "    def save_action(self, value: Action) -> None: self._save_checked(\"action\", value)\n    def save_outcome(self, value: Outcome) -> None: self._save_checked(\"outcome\", value)",
+                  "    def save_action(self, value: Action) -> None: self._save_checked(\"action\", value)\n    def get_action(self, action_id: str) -> Action | None: return self._get(\"action\", Action, action_id)\n    def save_outcome(self, value: Outcome) -> None: self._save_checked(\"outcome\", value)",
+              ),
+              "src/portable_runtime/stores/sqlite.py": (
+                  "    def save_action(self, value: Action) -> None: self._save_checked(\"action\", value)\n    def save_outcome(self, value: Outcome) -> None: self._save_checked(\"outcome\", value)",
+                  "    def save_action(self, value: Action) -> None: self._save_checked(\"action\", value)\n    def get_action(self, action_id: str) -> Action | None: return self._get(\"action\", Action, action_id)\n    def save_outcome(self, value: Outcome) -> None: self._save_checked(\"outcome\", value)",
+              ),
+          }
+          for name, (old, new) in edits.items():
+              path = Path(name)
+              text = path.read_text()
+              if new in text:
+                  continue
+              if old not in text:
+                  raise SystemExit(f"anchor not found: {name}")
+              path.write_text(text.replace(old, new, 1))
+
+          test = Path("tests/conformance/test_action_read_seam.py")
+          test.write_text('''from __future__ import annotations\n\nimport inspect\nfrom collections.abc import Iterator\nfrom contextlib import contextmanager\nfrom pathlib import Path\n\nimport pytest\n\nfrom portable_runtime.core.models import Action\nfrom portable_runtime.stores.memory import InMemoryStateStore\nfrom portable_runtime.stores.sqlite import SQLiteStateStore\n\n\n@contextmanager\ndef _store(backend: str, tmp_path: Path) -> Iterator[InMemoryStateStore | SQLiteStateStore]:\n    if backend == "memory":\n        yield InMemoryStateStore()\n        return\n    store = SQLiteStateStore(tmp_path / "action-read.db")\n    try:\n        yield store\n    finally:\n        store.close()\n\n\n@pytest.mark.parametrize("backend", ["memory", "sqlite"])\ndef test_fb2_p1_get_action_returns_typed_durable_action(backend: str, tmp_path: Path) -> None:\n    with _store(backend, tmp_path) as store:\n        action = Action(\n            id="action_fb2_p1",\n            work_id="work:external",\n            run_id="run:external",\n            capability="code.edit",\n            provider_id="provider-executor",\n            request_ref="request_fb2_p1",\n            status="succeeded",\n        )\n        store.save_action(action)\n        loaded = store.get_action(action.id)\n        assert loaded == action\n        assert store.get_action("missing-action") is None\n\n\n@pytest.mark.parametrize("store_type", [InMemoryStateStore, SQLiteStateStore])\ndef test_fb2_p1_action_read_seam_does_not_scrape_export_or_private_storage(store_type: type[object]) -> None:\n    source = inspect.getsource(store_type.get_action)\n    assert "export_state" not in source\n    assert "_records" not in source\n    assert "runtime_records" not in source\n    assert "_get(" in source\n''')
+      - name: Commit P1
+        run: |
+          if git diff --quiet; then exit 0; fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add src/portable_runtime/interfaces/store.py src/portable_runtime/stores/memory.py src/portable_runtime/stores/sqlite.py tests/conformance/test_action_read_seam.py
+          git commit -m "feat: add durable action read seam"
+          git push
