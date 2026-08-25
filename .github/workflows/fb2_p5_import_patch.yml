@@ -14,14 +14,23 @@ jobs:
         run: |
           from pathlib import Path
 
-          for name in [
-              'src/portable_runtime/stores/memory.py',
-              'src/portable_runtime/stores/sqlite.py',
-          ]:
+          targets = [
+              ('src/portable_runtime/stores/memory.py', '            '),
+              ('src/portable_runtime/stores/sqlite.py', '                '),
+          ]
+          for name, indent in targets:
               p = Path(name)
               s = p.read_text()
-              anchor = '''            assert_valid_state_transition(current, candidate, prepared)\n            assert_valid_state_graph(candidate)\n'''
-              addition = anchor + '''            from portable_runtime.records.verified_outcome_replay import (\n                validate_verified_outcome_authority_graph,\n            )\n\n            validate_verified_outcome_authority_graph(candidate)\n'''
+              anchor = (
+                  f'{indent}assert_valid_state_transition(current, candidate, prepared)\n'
+                  f'{indent}assert_valid_state_graph(candidate)\n'
+              )
+              addition = anchor + (
+                  f'{indent}from portable_runtime.records.verified_outcome_replay import (\n'
+                  f'{indent}    validate_verified_outcome_authority_graph,\n'
+                  f'{indent})\n\n'
+                  f'{indent}validate_verified_outcome_authority_graph(candidate)\n'
+              )
               if 'validate_verified_outcome_authority_graph(candidate)' not in s:
                   if anchor not in s:
                       raise SystemExit(f'import validation anchor missing in {name}')
