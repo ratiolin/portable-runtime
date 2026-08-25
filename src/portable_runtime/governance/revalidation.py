@@ -65,7 +65,7 @@ class ReviewProjection:
     obligation: ReviewObligation | None = None
 
 
-class GovernanceProjectionUnavailable(GovernanceLifecycleError):
+class GovernanceProjectionUnavailableError(GovernanceLifecycleError):
     """A review responsibility cannot be represented by the governance projection."""
 
     def __init__(self, projection: ReviewProjection) -> None:
@@ -74,6 +74,10 @@ class GovernanceProjectionUnavailable(GovernanceLifecycleError):
             f"governance projection unavailable for {projection.target!r} "
             f"under {projection.action!r} disposition"
         )
+
+
+# Compatibility name used by the Phase D bridge surface.
+GovernanceProjectionUnavailable = GovernanceProjectionUnavailableError
 
 
 @dataclass(frozen=True)
@@ -257,7 +261,7 @@ class RevalidationGovernanceLifecycle:
             if projection.status == "projection-unavailable":
                 unavailable.append(projection)
                 if projection.blocking:
-                    raise GovernanceProjectionUnavailable(projection)
+                    raise GovernanceProjectionUnavailableError(projection)
                 continue
             obligation = projection.obligation
             if obligation is None:
