@@ -102,7 +102,7 @@ class InMemoryStateStore:
             self._save("run", run)
         return run
 
-    def commit_verified_outcome(self, request: Any) -> BaseRecord:
+    def commit_verified_outcome(self, request: Any) -> OutcomeRecord:
         """Atomically commit one verification-authorized confirmed Outcome."""
         from portable_runtime.records.verified_outcome_commit import (
             prepare_verified_outcome_commit,
@@ -119,6 +119,8 @@ class InMemoryStateStore:
                     persisted = self.get_event(event.id)
                     if persisted is None or not same_verified_outcome_semantics(persisted, event):
                         raise ValueError("verified-outcome authority event graph incomplete")
+                if not isinstance(existing, OutcomeRecord):
+                    raise ValueError("verified-outcome identity does not resolve to OutcomeRecord")
                 return existing
             self._save("record", prepared.outcome)
             for event in prepared.events:

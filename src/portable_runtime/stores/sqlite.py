@@ -244,28 +244,42 @@ class SQLiteStateStore:
                 raise
         return run
 
-    def commit_verified_outcome(self, request: Any) -> BaseRecord:
+    def commit_verified_outcome(self, request: Any) -> OutcomeRecord:
         """Atomically commit one verification-authorized confirmed Outcome."""
         from portable_runtime.records.verified_outcome_commit import (
             prepare_verified_outcome_commit,
             same_verified_outcome_semantics,
         )
 
-        with self.transaction():
-            prepared = prepare_verified_outcome_commit(self, request)
-            existing = self.get_record(prepared.outcome.id)
-            if existing is not None:
-                if not same_verified_outcome_semantics(existing, prepared.outcome):
-                    raise ValueError("verified-outcome deterministic identity rebound")
+        with self._lock:
+            owns_transaction = not self._connection.in_transaction
+            if owns_transaction:
+                self._connection.execute("BEGIN IMMEDIATE")
+            try:
+                prepared = prepare_verified_outcome_commit(self, request)
+                existing = self.get_record(prepared.outcome.id)
+                if existing is not None:
+                    if not same_verified_outcome_semantics(existing, prepared.outcome):
+                        raise ValueError("verified-outcome deterministic identity rebound")
+                    for event in prepared.events:
+                        persisted = self.get_event(event.id)
+                        if persisted is None or not same_verified_outcome_semantics(persisted, event):
+                            raise ValueError("verified-outcome authority event graph incomplete")
+                    if not isinstance(existing, OutcomeRecord):
+                        raise ValueError("verified-outcome identity does not resolve to OutcomeRecord")
+                    if owns_transaction:
+                        self._connection.execute("COMMIT")
+                    return existing
+                self._save("record", prepared.outcome)
                 for event in prepared.events:
-                    persisted = self.get_event(event.id)
-                    if persisted is None or not same_verified_outcome_semantics(persisted, event):
-                        raise ValueError("verified-outcome authority event graph incomplete")
-                return existing
-            self._save("record", prepared.outcome)
-            for event in prepared.events:
-                self.append_event(event)
-            return prepared.outcome
+                    self.append_event(event)
+                if owns_transaction:
+                    self._connection.execute("COMMIT")
+                return prepared.outcome
+            except Exception:
+                if owns_transaction:
+                    self._rollback(self._connection.cursor())
+                raise
 
     def _validate_candidate_write(self, kind: str, value: Any) -> None:
         """Validate semantic writes against the complete current graph."""
