@@ -3,9 +3,10 @@ from __future__ import annotations
 import hashlib
 import json
 import sqlite3
+from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
-from typing import Any, Iterator, Literal, cast
+from typing import Any, Literal, cast
 
 from portable_runtime.core.capabilities import CapabilityRequest
 from portable_runtime.core.models import Event
@@ -109,16 +110,16 @@ def dispatch_recovery_mode(step: Any, attempt: Any) -> DispatchRecoveryMode:
     """Classify recovery after a durable dispatch commitment.
 
     A committed attempt is never equivalent to a fresh, never-dispatched
-    invocation. Idempotent/deduplicatable work may be retried only under the
-    same idempotency identity; reconcilable work must reconcile; opaque work is
-    unknown and requires explicit recovery.
+    invocation. Pure/idempotent/deduplicatable work may be retried only under
+    the same idempotency identity; reconcilable work must reconcile; opaque
+    work is unknown and requires explicit recovery.
     """
 
     metadata = getattr(attempt, "metadata", {})
     if not isinstance(metadata, dict) or not metadata.get("dispatch_commit_ref"):
         return "uncommitted"
     semantics = str(getattr(step, "effect_semantics", ""))
-    if semantics in {"idempotent", "deduplicatable"}:
+    if semantics in {"pure", "idempotent", "deduplicatable"}:
         return "idempotent-retry"
     if semantics == "reconcilable":
         return "reconcile"
