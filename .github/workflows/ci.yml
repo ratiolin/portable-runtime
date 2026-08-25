@@ -65,6 +65,7 @@ jobs:
           tests/conformance/test_distinction_governance_revalidation.py
           tests/conformance/test_distinction_governance_revalidation_hardening.py
           tests/conformance/test_distinction_governance_canonical_hardening.py
+          tests/conformance/test_distinction_governance_bundle_portability.py
           tests/conformance/test_qualification_transition.py
           tests/conformance/test_terminal_authority.py
           tests/conformance/test_authoritative.py

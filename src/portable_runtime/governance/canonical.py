@@ -6,6 +6,7 @@ from typing import Any
 
 from portable_runtime.core.models import Event
 from portable_runtime.governance.distinction import (
+    DISTINCTION_GOVERNANCE_CONTRACT_VERSION,
     ApplicationReceipt,
     BlockingCondition,
     DistinctionState,
@@ -17,6 +18,8 @@ from portable_runtime.governance.distinction import (
     global_state_admissible,
     state_admissible_for,
 )
+
+GOVERNANCE_HISTORY_SCHEMA = "distinction-governance-history-v1"
 
 GOVERNANCE_STATE_SEEDED = "governance.distinction.state.seeded"
 GOVERNANCE_REVIEW_OPENED = "governance.distinction.review.opened"
@@ -35,6 +38,10 @@ GOVERNANCE_HISTORY_EVENT_TYPES = frozenset(
 )
 
 
+class GovernanceHistoryVersionError(ValueError):
+    """Canonical governance history uses an unsupported or missing epoch."""
+
+
 @dataclass(frozen=True)
 class CanonicalGovernanceHistory:
     configuration: GovernanceConfiguration
@@ -44,6 +51,35 @@ class CanonicalGovernanceHistory:
 def _event_id(prefix: str, identity: str) -> str:
     digest = hashlib.sha256(identity.encode()).hexdigest()[:24]
     return f"gov_{prefix}_{digest}"
+
+
+def _history_payload(values: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "schema_version": GOVERNANCE_HISTORY_SCHEMA,
+        "contract_version": DISTINCTION_GOVERNANCE_CONTRACT_VERSION,
+        **values,
+    }
+
+
+def validate_governance_history_event(event: Event) -> None:
+    """Reject unversioned, unknown, or incompatible governance history."""
+
+    if event.type not in GOVERNANCE_HISTORY_EVENT_TYPES:
+        return
+    payload = event.payload
+    if not isinstance(payload, dict):
+        raise GovernanceHistoryVersionError("canonical governance event payload must be an object")
+    schema = payload.get("schema_version")
+    contract = payload.get("contract_version")
+    if schema != GOVERNANCE_HISTORY_SCHEMA:
+        raise GovernanceHistoryVersionError(
+            f"unsupported governance history schema {schema!r}; expected {GOVERNANCE_HISTORY_SCHEMA!r}"
+        )
+    if contract != DISTINCTION_GOVERNANCE_CONTRACT_VERSION:
+        raise GovernanceHistoryVersionError(
+            "unsupported governance contract version "
+            f"{contract!r}; expected {DISTINCTION_GOVERNANCE_CONTRACT_VERSION!r}"
+        )
 
 
 def _blocking_payload(value: BlockingCondition | None) -> dict[str, Any] | None:
@@ -240,7 +276,7 @@ def state_seed_event(scheme_id: str, state: DistinctionState) -> Event:
         id=_event_id("state", scheme_id),
         type=GOVERNANCE_STATE_SEEDED,
         subject_ref=scheme_id,
-        payload={"state": state_payload(scheme_id, state)},
+        payload=_history_payload({"state": state_payload(scheme_id, state)}),
     )
 
 
@@ -249,7 +285,7 @@ def review_opened_event(obligation: ReviewObligation) -> Event:
         id=_event_id("review", obligation.id),
         type=GOVERNANCE_REVIEW_OPENED,
         subject_ref=obligation.target,
-        payload={"obligation": obligation_payload(obligation)},
+        payload=_history_payload({"obligation": obligation_payload(obligation)}),
     )
 
 
@@ -258,7 +294,7 @@ def decision_recorded_event(decision: GovernanceDecision) -> Event:
         id=_event_id("decision", decision.id),
         type=GOVERNANCE_DECISION_RECORDED,
         subject_ref=decision.target,
-        payload={"decision": decision_payload(decision)},
+        payload=_history_payload({"decision": decision_payload(decision)}),
     )
 
 
@@ -267,14 +303,14 @@ def application_committed_event(
     *,
     next_state: DistinctionState | None = None,
 ) -> Event:
-    payload: dict[str, Any] = {"receipt": application_payload(receipt)}
+    values: dict[str, Any] = {"receipt": application_payload(receipt)}
     if next_state is not None:
-        payload["next_state"] = state_payload(receipt.application.scheme_id, next_state)
+        values["next_state"] = state_payload(receipt.application.scheme_id, next_state)
     return Event(
         id=_event_id("application", receipt.application.id),
         type=GOVERNANCE_APPLICATION_COMMITTED,
         subject_ref=receipt.application.scheme_id,
-        payload=payload,
+        payload=_history_payload(values),
     )
 
 
@@ -286,10 +322,12 @@ def processed_event(
         id=_event_id("processed", event_ref),
         type=GOVERNANCE_EVENT_PROCESSED,
         subject_ref=event_ref,
-        payload={
-            "event_instance_key": event_ref,
-            "obligation_ids": list(obligation_ids),
-        },
+        payload=_history_payload(
+            {
+                "event_instance_key": event_ref,
+                "obligation_ids": list(obligation_ids),
+            }
+        ),
     )
 
 
@@ -306,7 +344,12 @@ def reconstruct_governance_history(events: list[Event]) -> CanonicalGovernanceHi
     processed: dict[str, tuple[str, ...]] = {}
 
     for event in events:
-        payload = event.payload if isinstance(event.payload, dict) else {}
+        if event.type not in GOVERNANCE_HISTORY_EVENT_TYPES:
+            continue
+        validate_governance_history_event(event)
+        payload = event.payload
+        if not isinstance(payload, dict):
+            raise GovernanceHistoryVersionError("canonical governance event payload must be an object")
         if event.type == GOVERNANCE_STATE_SEEDED:
             raw = payload.get("state")
             if isinstance(raw, dict):

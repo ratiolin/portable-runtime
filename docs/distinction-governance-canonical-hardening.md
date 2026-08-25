@@ -98,6 +98,15 @@ governance.distinction.application.committed
 governance.distinction.event.processed
 ```
 
+Every canonical governance event carries the executable compatibility header:
+
+```text
+schema_version   = distinction-governance-history-v1
+contract_version = distinction-governance-1.0
+```
+
+Reconstruction rejects missing, unknown, or future history/contract versions rather than interpreting them under the current semantics.
+
 The journal contains enough information to reconstruct:
 
 ```text
@@ -118,9 +127,44 @@ replay canonical Event history
 equivalent GovernanceConfiguration
 ```
 
-Because the canonical Event journal already participates in runtime export/import, portable state transfer does not require the private sidecar. A fresh runtime can import canonical state and rebuild the governance projection.
+Because the canonical Event journal already participates in runtime export/import and bundle `events.jsonl`, portable state transfer does not require the private sidecar. A fresh runtime can import canonical state and rebuild the governance projection.
 
 A governance mutation writes its sidecar projection and canonical history event in the same backend transaction. Failure to append the canonical event rolls the materialized projection back as well.
+
+## Governance history epoch detection
+
+Before a runtime may treat the sidecar as a trustworthy projection, it can classify the durable history state:
+
+```text
+EMPTY
+  no governance sidecar
+  no canonical governance history
+
+CANONICAL
+  supported-version canonical governance history exists
+  sidecar may be discarded and rebuilt
+
+LEGACY_PROVABLE
+  pre-D.5 sidecar exists
+  no canonical governance history
+  surviving provenance deterministically defines the current configuration
+
+LEGACY_INCOMPLETE
+  pre-D.5 sidecar exists
+  no canonical governance history
+  at least one responsibility edge cannot be recovered
+```
+
+`LEGACY_PROVABLE` is deliberately narrow: it means the current configuration can be canonicalized, not that the original historical event sequence can be reconstructed. A discharged legacy review, dangling review reference, missing decision linkage, or missing EventInstance provenance makes the state `LEGACY_INCOMPLETE`.
+
+```text
+LEGACY_INCOMPLETE
+→ do not invent EventInstanceKey
+→ do not claim complete canonical migration
+→ governed use must fail closed or require an explicit operator migration decision
+```
+
+If governance-looking canonical events exist but carry an unsupported schema/contract version, epoch detection and reconstruction reject them instead of reclassifying them as legacy.
 
 ## Freshness and commit-boundary TOCTOU
 
@@ -158,6 +202,8 @@ For the canonical freshness adapter, each basis anchor is derived from the curre
 | Freshness changes before durable commit fail closed | `D5-008` |
 | Canonical event + projection mutation are atomic | `D5-009` |
 | Policy output never grants authority | `D5-010` |
+| Bundle round-trip preserves canonical governance truth | `D5-011` |
+| History schema/epoch is machine-detectable; incomplete legacy never guesses provenance | `D5-012` |
 | Same event replay under changed policy opens no new Q | `RD-003` |
 
 Both Memory and SQLite are exercised for every persistence/security property where backend behavior matters.
@@ -165,3 +211,17 @@ Both Memory and SQLite are exercised for every persistence/security property whe
 ## Phase boundary
 
 Phase D.5 does not integrate governance into RealityBoundary. RealityBoundary remains responsible for crossing the execution boundary; governance remains responsible for admissible state/use. Phase E may consume the hardened governance result only after this coverage matrix, full pytest, Ruff, Mypy, and strict-conformance are green.
+
+Phase E must not treat `runtime_governance_records` itself as admission authority. The required direction is:
+
+```text
+canonical history
+      ↓
+validated / reconciled projection
+      ↓
+governance admission snapshot
+      ↓
+RealityBoundary
+```
+
+If canonical governance history exists while the materialized projection is absent or unhydrated, the runtime must rebuild/reconcile or fail closed. An empty sidecar must never be interpreted as proof that no blocker exists.

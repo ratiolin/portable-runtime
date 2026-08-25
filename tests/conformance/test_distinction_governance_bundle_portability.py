@@ -8,10 +8,20 @@ from typing import Any
 
 import pytest
 
+from portable_runtime.governance.canonical import (
+    GOVERNANCE_HISTORY_SCHEMA,
+    GovernanceHistoryVersionError,
+    reconstruct_governance_history,
+)
 from portable_runtime.governance.distinction import DistinctionState, grant_authority
+from portable_runtime.governance.history_epoch import detect_governance_history_epoch
 from portable_runtime.governance.persistence import (
+    GOVERNANCE_APPLICATION_KIND,
+    GOVERNANCE_STATE_KIND,
     DistinctionGovernancePersistence,
     InMemoryDistinctionGovernancePersistence,
+    PersistedDistinctionState,
+    PersistedGovernedApplication,
     SQLiteDistinctionGovernancePersistence,
 )
 from portable_runtime.governance.revalidation import RevalidationGovernanceLifecycle
@@ -48,6 +58,54 @@ def _backend(
         store.close()
 
 
+def _state() -> DistinctionState:
+    return DistinctionState(
+        qualification="qualified",
+        activation="active",
+        scope=frozenset({"a", "b"}),
+        partition=(frozenset({"a"}), frozenset({"b"})),
+        version=1,
+    )
+
+
+def _inject_legacy_state(
+    persistence: DistinctionGovernancePersistence,
+    *,
+    incomplete: bool,
+) -> None:
+    state = _state()
+    with persistence._transaction():
+        persistence._put_model(
+            GOVERNANCE_STATE_KIND,
+            PersistedDistinctionState(
+                id="d",
+                scheme_id="d",
+                qualification=state.qualification,
+                activation=state.activation,
+                scope=state.scope,
+                partition=state.partition,
+                version=state.version,
+            ),
+        )
+        if incomplete:
+            persistence._put_model(
+                GOVERNANCE_APPLICATION_KIND,
+                PersistedGovernedApplication(
+                    id="legacy-discharge",
+                    actor="closer",
+                    operation="apply_review_discharge",
+                    scheme_id="d",
+                    target="review_obligation:q-old",
+                    decision_ref="dec-old",
+                    context="ctx",
+                    review_obligation_id="q-old",
+                    effect_kind="review_discharge",
+                    pre_anchor="q-old",
+                    post_anchor="",
+                ),
+            )
+
+
 @pytest.mark.parametrize("backend", BACKENDS)
 def test_d5_011_bundle_carries_canonical_history_not_sidecar(
     backend: str,
@@ -55,13 +113,7 @@ def test_d5_011_bundle_carries_canonical_history_not_sidecar(
 ) -> None:
     bundle_path = tmp_path / f"governance-{backend}.tar"
     with _backend(backend, tmp_path, suffix="source") as (source, persistence):
-        state = DistinctionState(
-            qualification="qualified",
-            activation="active",
-            scope=frozenset({"a", "b"}),
-            partition=(frozenset({"a"}), frozenset({"b"})),
-            version=1,
-        )
+        state = _state()
         persistence.seed_state("d", state)
         lifecycle = RevalidationGovernanceLifecycle(
             persistence=persistence,
@@ -81,14 +133,54 @@ def test_d5_011_bundle_carries_canonical_history_not_sidecar(
     with _backend(backend, tmp_path, suffix="target") as (target, target_persistence):
         import_bundle(target, None, bundle_path)
 
-        # The private sidecar is not a bundle kind. Canonical events are.
         assert target_persistence.list_states() == {}
         assert target_persistence.list_obligations() == {}
-        assert any(
-            event.type.startswith("governance.distinction.")
+        governance_events = [
+            event
             for event in target.list_events()
+            if event.type.startswith("governance.distinction.")
+        ]
+        assert governance_events
+        assert all(
+            event.payload.get("schema_version") == GOVERNANCE_HISTORY_SCHEMA
+            for event in governance_events
         )
+        assert detect_governance_history_epoch(target_persistence).epoch == "CANONICAL"
 
         rebuilt = target_persistence.rebuild_projection_from_canonical_history()
         assert rebuilt == expected
         assert target_persistence.processed_event_obligation_ids("event-bundle") is not None
+
+
+@pytest.mark.parametrize("backend", BACKENDS)
+def test_d5_012_history_epoch_detection_never_guesses_missing_provenance(
+    backend: str,
+    tmp_path: Path,
+) -> None:
+    with _backend(backend, tmp_path, suffix="empty") as (_store, persistence):
+        assert detect_governance_history_epoch(persistence).epoch == "EMPTY"
+
+    with _backend(backend, tmp_path, suffix="provable") as (_store, persistence):
+        _inject_legacy_state(persistence, incomplete=False)
+        assert detect_governance_history_epoch(persistence).epoch == "LEGACY_PROVABLE"
+
+    with _backend(backend, tmp_path, suffix="incomplete") as (_store, persistence):
+        _inject_legacy_state(persistence, incomplete=True)
+        status = detect_governance_history_epoch(persistence)
+        assert status.epoch == "LEGACY_INCOMPLETE"
+        assert "provenance" in status.reason
+
+    with _backend(backend, tmp_path, suffix="canonical") as (store, persistence):
+        persistence.seed_state("d", _state())
+        status = detect_governance_history_epoch(persistence)
+        assert status.epoch == "CANONICAL"
+        event = next(
+            event
+            for event in store.list_events()
+            if event.type.startswith("governance.distinction.")
+        )
+        future_payload = dict(event.payload)
+        future_payload["schema_version"] = "distinction-governance-history-v999"
+        future = event.model_copy(update={"payload": future_payload})
+        with pytest.raises(GovernanceHistoryVersionError, match="unsupported governance history schema"):
+            reconstruct_governance_history([future])
