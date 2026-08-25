@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from typing import Any, Literal, cast
 
 from portable_runtime.core.models import Action, Run, Step, StepAttempt, Work
-from portable_runtime.records.models import EvidenceArtifact
+from portable_runtime.records.models import BaseRecord, EvidenceArtifact
 
 ObjectiveResult = Literal["pass", "fail"]
 
@@ -123,12 +123,13 @@ class BoundVerificationEvidenceValidator:
             if getattr(record, "record_type", None) != "EvidenceArtifact":
                 raise ValueError("verification requires typed EvidenceArtifact proofs")
             try:
-                artifact = (
-                    record
-                    if isinstance(record, EvidenceArtifact)
-                    else EvidenceArtifact.model_validate(record.model_dump(mode="python"))
-                )
-            except (AttributeError, ValueError, TypeError) as exc:
+                if isinstance(record, EvidenceArtifact):
+                    artifact = record
+                elif isinstance(record, BaseRecord):
+                    artifact = EvidenceArtifact.model_validate(record.model_dump(mode="python"))
+                else:
+                    raise ValueError("verification requires typed EvidenceArtifact proofs")
+            except (ValueError, TypeError) as exc:
                 raise ValueError("verification requires typed EvidenceArtifact proofs") from exc
             if artifact.kind not in cls._KINDS:
                 raise ValueError("verification requires typed closed verification proof kinds")
