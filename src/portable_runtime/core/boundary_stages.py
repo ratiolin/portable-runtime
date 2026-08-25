@@ -77,6 +77,7 @@ class BoundaryStagePlan:
 
     names: tuple[str, ...] = (
         "qualification",
+        "governance-use",
         "policy",
         "authorization",
         "procedure",

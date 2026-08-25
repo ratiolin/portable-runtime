@@ -76,7 +76,7 @@ def test_boundary_stage_seam_has_explicit_order_and_no_provider_capability() -> 
     )
 
     plan = BoundaryStagePlan()
-    assert plan.names[:4] == ("qualification", "policy", "authorization", "procedure")
+    assert plan.names[:5] == ("qualification", "governance-use", "policy", "authorization", "procedure")
     assert plan.names[-3:] == ("invocation", "postcondition", "projection")
     assert plan.provider_invocation_owner == "RealityBoundary"
     assert callable(evaluate_reliability_stage)
