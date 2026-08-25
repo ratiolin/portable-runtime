@@ -136,7 +136,7 @@ _MODEL_BY_KIND: dict[str, type[_GovernanceEnvelope]] = {
 def _semantic_dump(value: _GovernanceEnvelope) -> dict[str, object]:
     return cast(
         dict[str, object],
-        value.model_dump(mode="json", exclude={"created_at", "committed_at"}),
+        value.model_dump(mode="python", exclude={"created_at", "committed_at"}),
     )
 
 
