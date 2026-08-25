@@ -140,10 +140,6 @@ def test_rd002_nonblocking_projection_missing_is_explicit(
 
 
 @pytest.mark.parametrize("backend", BACKENDS)
-@pytest.mark.xfail(
-    strict=True,
-    reason="Phase D.5 must deduplicate by durable EventInstanceKey, independent of policy disposition",
-)
 def test_rd003_same_event_replay_with_policy_change_cannot_open_new_review(
     backend: str,
     tmp_path: Path,
@@ -221,4 +217,4 @@ def test_rd003_same_event_replay_with_policy_change_cannot_open_new_review(
         )
 
         assert replay.opened_obligations == ()
-        assert len(replay.already_processed_obligation_ids) == 1
+        assert replay.already_processed_obligation_ids == (qid,)
