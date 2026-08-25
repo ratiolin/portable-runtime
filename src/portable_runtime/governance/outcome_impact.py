@@ -3,6 +3,10 @@
 P1a resolves an ``OutcomeConfirmed`` journal event only when the complete
 F1-B2 verified-outcome authority graph deterministically replays.  Event type
 or payload claims alone never create B3 trigger authority.
+
+P1b resolves explicit Outcome-to-governance applicability.  Missing,
+incomplete, or mismatched dependency binding is never reinterpreted as
+``no-governance-impact``.
 """
 
 from __future__ import annotations
@@ -20,6 +24,7 @@ from portable_runtime.records.verified_outcome_commit import (
 )
 
 TriggerResolutionStatus = Literal["ready", "unavailable"]
+ApplicabilityStatus = Literal["applicable", "unavailable", "mismatch", "not-declared"]
 
 
 class OutcomeConfirmedTriggerStore(Protocol):
@@ -45,6 +50,36 @@ class OutcomeConfirmedTriggerResolution:
     @property
     def authoritative(self) -> bool:
         return self.status == "ready"
+
+
+@dataclass(frozen=True)
+class OutcomeGovernanceDependency:
+    """Explicit declaration that one verified Outcome may affect one scheme."""
+
+    outcome_ref: str
+    action_ref: str
+    scheme_id: str
+    context: str
+    scope: frozenset[str]
+    subject_version_refs: tuple[str, ...]
+    basis_refs: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class OutcomeGovernanceApplicability:
+    status: ApplicabilityStatus
+    outcome_ref: str
+    action_ref: str
+    scheme_id: str | None
+    context: str
+    governed_scope: frozenset[str]
+    subject_version_refs: tuple[str, ...]
+    basis_refs: tuple[str, ...]
+    reason: str
+
+    @property
+    def applicable(self) -> bool:
+        return self.status == "applicable"
 
 
 def _as_confirmed_outcome(value: object | None) -> OutcomeRecord | None:
@@ -168,9 +203,127 @@ def resolve_outcome_confirmed_trigger(
     )
 
 
+def _applicability_result(
+    status: ApplicabilityStatus,
+    *,
+    outcome: OutcomeRecord,
+    dependency: OutcomeGovernanceDependency | None,
+    context: str,
+    scope: frozenset[str],
+    versions: tuple[str, ...],
+    reason: str,
+) -> OutcomeGovernanceApplicability:
+    return OutcomeGovernanceApplicability(
+        status=status,
+        outcome_ref=outcome.id,
+        action_ref=outcome.action_ref,
+        scheme_id=dependency.scheme_id if dependency is not None else None,
+        context=context,
+        governed_scope=scope,
+        subject_version_refs=versions,
+        basis_refs=dependency.basis_refs if dependency is not None else (),
+        reason=reason,
+    )
+
+
+def resolve_outcome_applicability(
+    *,
+    outcome: OutcomeRecord,
+    dependency: OutcomeGovernanceDependency | None,
+    context: str,
+    requested_scope: frozenset[str],
+    subject_version_refs: tuple[str, ...],
+) -> OutcomeGovernanceApplicability:
+    """Resolve explicit Outcome applicability without making an impact judgment."""
+
+    confirmed = _as_confirmed_outcome(outcome)
+    if confirmed is None:
+        return _applicability_result(
+            "unavailable",
+            outcome=outcome,
+            dependency=dependency,
+            context=context,
+            scope=requested_scope,
+            versions=subject_version_refs,
+            reason="outcome-not-confirmed",
+        )
+    if dependency is None:
+        return _applicability_result(
+            "not-declared",
+            outcome=confirmed,
+            dependency=None,
+            context=context,
+            scope=requested_scope,
+            versions=subject_version_refs,
+            reason="explicit-dependency-absent",
+        )
+
+    declared_versions = tuple(sorted(set(dependency.subject_version_refs)))
+    requested_versions = tuple(sorted(set(subject_version_refs)))
+    metadata = confirmed.metadata if isinstance(confirmed.metadata, dict) else {}
+    outcome_versions = _strings(metadata.get("subject_version_refs"))
+    verification_scope = metadata.get("verification_scope")
+    outcome_resource = verification_scope.get("resource") if isinstance(verification_scope, dict) else None
+    declaration_complete = (
+        bool(dependency.scheme_id.strip())
+        and bool(dependency.context.strip())
+        and bool(dependency.scope)
+        and bool(declared_versions)
+        and bool(dependency.basis_refs)
+        and all(ref.strip() for ref in dependency.basis_refs)
+        and isinstance(outcome_resource, str)
+        and bool(outcome_resource.strip())
+        and outcome_versions is not None
+    )
+    if not declaration_complete:
+        return _applicability_result(
+            "unavailable",
+            outcome=confirmed,
+            dependency=dependency,
+            context=context,
+            scope=requested_scope,
+            versions=requested_versions,
+            reason="dependency-or-outcome-binding-incomplete",
+        )
+
+    mismatched = (
+        dependency.outcome_ref != confirmed.id
+        or dependency.action_ref != confirmed.action_ref
+        or dependency.context != context
+        or not requested_scope.issubset(dependency.scope)
+        or outcome_resource not in dependency.scope
+        or tuple(sorted(outcome_versions)) != declared_versions
+        or requested_versions != declared_versions
+    )
+    if mismatched:
+        return _applicability_result(
+            "mismatch",
+            outcome=confirmed,
+            dependency=dependency,
+            context=context,
+            scope=requested_scope,
+            versions=requested_versions,
+            reason="explicit-dependency-binding-mismatch",
+        )
+
+    return _applicability_result(
+        "applicable",
+        outcome=confirmed,
+        dependency=dependency,
+        context=context,
+        scope=requested_scope,
+        versions=requested_versions,
+        reason="explicit-dependency-matched",
+    )
+
+
 __all__ = [
+    "ApplicabilityStatus",
     "OutcomeConfirmedTriggerResolution",
     "OutcomeConfirmedTriggerStore",
+    "OutcomeGovernanceApplicability",
+    "OutcomeGovernanceDependency",
     "TriggerResolutionStatus",
+    "resolve_outcome_applicability",
     "resolve_outcome_confirmed_trigger",
 ]
