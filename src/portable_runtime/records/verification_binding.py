@@ -120,11 +120,19 @@ class BoundVerificationEvidenceValidator:
         results: set[ObjectiveResult] = set()
         for ref in normalized:
             record = record_lookup(ref)
-            if not isinstance(record, EvidenceArtifact) or record.record_type != "EvidenceArtifact":
+            if getattr(record, "record_type", None) != "EvidenceArtifact":
                 raise ValueError("verification requires typed EvidenceArtifact proofs")
-            if record.kind not in cls._KINDS:
+            try:
+                artifact = (
+                    record
+                    if isinstance(record, EvidenceArtifact)
+                    else EvidenceArtifact.model_validate(record.model_dump(mode="python"))
+                )
+            except (AttributeError, ValueError, TypeError) as exc:
+                raise ValueError("verification requires typed EvidenceArtifact proofs") from exc
+            if artifact.kind not in cls._KINDS:
                 raise ValueError("verification requires typed closed verification proof kinds")
-            metadata = cls.proof_metadata(record)
+            metadata = cls.proof_metadata(artifact)
             if metadata is None:
                 raise ValueError("verification proof metadata required")
             closed = metadata.get("verification_result")
@@ -160,7 +168,7 @@ class BoundVerificationEvidenceValidator:
             if require_execution_binding:
                 if action is None or attempt is None:
                     raise ValueError("verification requires complete durable execution graph")
-                if metadata.get("action_ref") != action.id or action.id not in record.source_refs:
+                if metadata.get("action_ref") != action.id or action.id not in artifact.source_refs:
                     raise ValueError("verification proof is not bound to exact Action")
                 if metadata.get("request_id") != action.request_ref:
                     raise ValueError("verification proof request binding mismatch")
@@ -176,8 +184,8 @@ class BoundVerificationEvidenceValidator:
                     raise ValueError("verification proof requires verifier identity")
                 if not isinstance(method, str) or not method.strip():
                     raise ValueError("verification proof requires verifier method provenance")
-            records.append(record)
-            proof_classes.append(cls.proof_class(record, metadata))
+            records.append(artifact)
+            proof_classes.append(cls.proof_class(artifact, metadata))
 
         if len(results) != 1:
             raise ValueError("inconsistent verification closure: pass/fail conflict")
