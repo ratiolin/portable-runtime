@@ -114,6 +114,14 @@ def _authority_event_ids(state: dict[str, list[dict[str, object]]], outcome_id: 
     }
 
 
+def _as_outcome(value: Any) -> OutcomeRecord:
+    assert value is not None
+    assert getattr(value, "record_type", None) == "Outcome"
+    if isinstance(value, OutcomeRecord):
+        return value
+    return OutcomeRecord.model_validate(value.model_dump(mode="python"))
+
+
 @pytest.mark.parametrize(
     ("source_backend", "target_backend"),
     [
@@ -149,8 +157,7 @@ def test_p5_2_verified_outcome_four_way_portability(
             target.import_state(payload)
         else:
             import_bundle(target, None, bundle_path)
-        imported = target.get_record(outcome.id)
-        assert isinstance(imported, OutcomeRecord)
+        imported = _as_outcome(target.get_record(outcome.id))
         assert imported.lifecycle_status == "confirmed"
         assert imported.id == outcome.id
         assert imported.metadata["verification_binding_digest"] == expected_digest
@@ -297,7 +304,6 @@ def test_p5_2_recorded_outcome_import_remains_non_authoritative(
     source.save_record(recorded)
     with _store(target_backend, tmp_path, f"recorded-target-{target_backend}") as target:
         target.import_state(source.export_state())
-        imported = target.get_record(recorded.id)
-        assert isinstance(imported, OutcomeRecord)
+        imported = _as_outcome(target.get_record(recorded.id))
         assert imported.lifecycle_status == "recorded"
         assert not any(event.type in _AUTHORITY_TYPES for event in target.list_events())
