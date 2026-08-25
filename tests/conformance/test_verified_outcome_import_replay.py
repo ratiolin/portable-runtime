@@ -134,10 +134,24 @@ def test_p5_1_candidate_replay_rejects_orphan_authority_event_under_wrong_id() -
 
 def test_p5_1_recorded_outcome_has_no_objective_authority_requirement() -> None:
     store = InMemoryStateStore()
+    work = Work(id="work_recorded_only", title="recorded outcome")
+    run = Run(id="run_recorded_only", work_id=work.id, status="running")
+    action = Action(
+        id="action_recorded_only",
+        work_id=work.id,
+        run_id=run.id,
+        capability="code.edit",
+        provider_id="executor",
+        request_ref="request_recorded_only",
+        status="succeeded",
+    )
+    store.save_work(work)
+    store.save_run(run)
+    store.save_action(action)
     store.save_record(
         OutcomeRecord(
             id="outcome_recorded_only",
-            action_ref="action_not_required_for_recorded_fact",
+            action_ref=action.id,
             lifecycle_status="recorded",
             metadata={"note": "non-authoritative observation"},
         )
