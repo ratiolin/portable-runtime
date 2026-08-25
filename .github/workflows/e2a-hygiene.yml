@@ -1,0 +1,46 @@
+name: E2a hygiene fixes
+
+on:
+  push:
+    branches:
+      - feat/governance-permit-binding
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: feat/governance-permit-binding
+          persist-credentials: true
+      - name: Patch hygiene and permit contract expectation
+        shell: python
+        run: |
+          from pathlib import Path
+
+          path = Path("src/portable_runtime/governance/use_admission.py")
+          s = path.read_text()
+          old = '''from collections.abc import Callable\nfrom dataclasses import dataclass\nimport hashlib\nimport json\nimport sqlite3\n'''
+          new = '''import hashlib\nimport json\nimport sqlite3\nfrom collections.abc import Callable\nfrom dataclasses import dataclass\n'''
+          if old not in s:
+              raise SystemExit("use-admission import anchor missing")
+          path.write_text(s.replace(old, new, 1).rstrip() + "\n")
+
+          path = Path("tests/conformance/test_p1_semantic.py")
+          s = path.read_text()
+          anchor = '''        "effect_class": "deploy",\n        "idempotency_key": "idem-snapshot",\n'''
+          replacement = '''        "effect_class": "deploy",\n        "governance": {\n            "applicable": False,\n            "requirement_digest": permit.governance_requirement_digest,\n            "snapshot_digest": permit.governance_snapshot_digest,\n        },\n        "idempotency_key": "idem-snapshot",\n'''
+          if anchor not in s:
+              raise SystemExit("permit authority expectation anchor missing")
+          path.write_text(s.replace(anchor, replacement, 1))
+      - name: Commit hygiene fixes
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add src/portable_runtime/governance/use_admission.py tests/conformance/test_p1_semantic.py
+          git commit -m "fix: align permit contract and governance digest hygiene"
+          git push origin HEAD:feat/governance-permit-binding
