@@ -38,6 +38,10 @@ from portable_runtime.core.qualification import (
 )
 from portable_runtime.core.reliability import CircuitBreaker, ReliabilityControls
 from portable_runtime.core.router import ConstraintRouter
+from portable_runtime.governance.use_admission import (
+    GovernanceUseAdmission,
+    GovernanceUseRequirementResolver,
+)
 from portable_runtime.records.authorization import CanonicalAuthorizationRequest
 from portable_runtime.records.authorization import EffectClass as AuthorizationEffectClass
 
@@ -67,6 +71,9 @@ CODE_RESULT_COMMIT_FAILED = "ResultCommitFailed"
 CODE_STALE_RESULT = "StaleResult"
 CODE_QUALIFICATION_UNAVAILABLE = "QualificationUnavailable"
 CODE_QUALIFICATION_CHANGED = "QualificationChanged"
+CODE_GOVERNANCE_BLOCKED = "GovernanceBlocked"
+CODE_GOVERNANCE_UNAVAILABLE = "GovernanceUnavailable"
+CODE_GOVERNANCE_STALE = "GovernanceStale"
 BOUNDARY_ERROR_CODES = {
     CODE_FENCING_REJECTED,
     CODE_FENCING_UNAVAILABLE,
@@ -94,6 +101,9 @@ BOUNDARY_ERROR_CODES = {
     CODE_STALE_RESULT,
     CODE_QUALIFICATION_UNAVAILABLE,
     CODE_QUALIFICATION_CHANGED,
+    CODE_GOVERNANCE_BLOCKED,
+    CODE_GOVERNANCE_UNAVAILABLE,
+    CODE_GOVERNANCE_STALE,
 }
 
 _EffectClass = Literal["pure", "idempotent", "deduplicatable", "reconcilable", "irreversible-opaque"]
@@ -157,7 +167,7 @@ def _int_or_none(value: Any) -> int | None:
     return parsed if parsed >= 1 else None
 
 class RealityBoundary:
-    def __init__(self, store: Any | None = None, registry: Any | None = None, *, routing: Any | None = None, policy_engine: Any | None = None, reliability: ReliabilityControls | None = None, runtime_id: str = "runtime", contract_registry: CapabilityContractRegistry | None = None, effect_registry: CapabilityEffectRegistry | None = None) -> None:
+    def __init__(self, store: Any | None = None, registry: Any | None = None, *, routing: Any | None = None, policy_engine: Any | None = None, reliability: ReliabilityControls | None = None, runtime_id: str = "runtime", contract_registry: CapabilityContractRegistry | None = None, effect_registry: CapabilityEffectRegistry | None = None, governance_requirement_resolver: GovernanceUseRequirementResolver | None = None) -> None:
         self.store = store
         self.registry = registry
         self.routing = routing or ConstraintRouter()
@@ -166,6 +176,7 @@ class RealityBoundary:
         self.runtime_id = runtime_id
         self.contract_registry = contract_registry or CapabilityContractRegistry(effect_registry=effect_registry)
         self.effect_registry = effect_registry or getattr(self.contract_registry, "effect_registry", CapabilityEffectRegistry())
+        self.governance_requirement_resolver = governance_requirement_resolver
         self.stage_plan = BoundaryStagePlan()
 
     def validate_fencing(self, request: CapabilityRequest) -> tuple[bool, str]:
@@ -555,6 +566,46 @@ class RealityBoundary:
             except Exception as exc:  # noqa: BLE001
                 _append_event(store, CODE_QUALIFICATION_UNAVAILABLE, request.id, {"reason": str(exc)})
                 return self._error_result(request, CODE_QUALIFICATION_UNAVAILABLE, f"qualification resolution failed: {exc}")
+
+        # Governance-use is a read-only admission seam. The runtime-owned
+        # requirement resolver is independent from the governance projection;
+        # canonical Event history is reconstructed in memory so an empty or
+        # stale sidecar can never be interpreted as "no blocker".
+        governance = GovernanceUseAdmission(store).evaluate(
+            request,
+            self.governance_requirement_resolver,
+        )
+        if governance.status in {"blocked", "unavailable", "stale"}:
+            code = {
+                "blocked": CODE_GOVERNANCE_BLOCKED,
+                "unavailable": CODE_GOVERNANCE_UNAVAILABLE,
+                "stale": CODE_GOVERNANCE_STALE,
+            }[governance.status]
+            details: dict[str, Any] = {
+                "reason": governance.reason,
+                "scheme_id": governance.scheme_id,
+                "use_context": (
+                    governance.use_context.name
+                    if governance.use_context is not None
+                    else None
+                ),
+            }
+            if governance.snapshot_digest is not None:
+                details["snapshot_digest"] = governance.snapshot_digest
+            _append_event(store, code, request.id, details)
+            _append_event(
+                store,
+                "InvocationBlocked",
+                request.id,
+                {"code": code, **details},
+            )
+            return self._error_result(
+                request,
+                code,
+                governance.reason,
+                scheme_id=governance.scheme_id,
+                governance_snapshot_digest=governance.snapshot_digest,
+            )
 
         # Policy failures and exceptions are always STOP.  ``require`` is not
         # a log-only decision: every mandatory obligation needs explicit proof.
