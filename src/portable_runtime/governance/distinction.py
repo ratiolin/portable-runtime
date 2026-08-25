@@ -1,7 +1,7 @@
 from __future__ import annotations
 
+from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass, field, replace
-from typing import Callable, FrozenSet, Iterable, Mapping, Optional, Tuple
 
 DISTINCTION_GOVERNANCE_CONTRACT_VERSION = "distinction-governance-1.0"
 DISTINCTION_GOVERNANCE_SOURCE_COMMIT = "ef9e490987ed47ebef3ac455851109304f24a97c"
@@ -20,15 +20,15 @@ STATE_APPLY_OPERATIONS = frozenset({APPLY_QUALIFICATION, APPLY_ACTIVATION})
 
 BasisAnchors = Mapping[str, str]
 AuthorityCheck = Callable[[str, str, str, str], bool]
-FreshnessAnchorLookup = Callable[[str], Optional[str]]
+FreshnessAnchorLookup = Callable[[str], str | None]
 
 
 @dataclass(frozen=True)
 class DistinctionState:
     qualification: str
     activation: str
-    scope: FrozenSet[str]
-    partition: Tuple[FrozenSet[str], ...]
+    scope: frozenset[str]
+    partition: tuple[frozenset[str], ...]
     version: int = 0
 
 
@@ -45,11 +45,11 @@ class ReviewObligation:
     id: str
     target: str
     trigger_ref: str
-    basis_refs: Tuple[str, ...]
+    basis_refs: tuple[str, ...]
     context: str
     blocking: bool = True
-    closure_requirements: FrozenSet[str] = frozenset()
-    invalidates_decisions: FrozenSet[str] = frozenset()
+    closure_requirements: frozenset[str] = frozenset()
+    invalidates_decisions: frozenset[str] = frozenset()
 
 
 @dataclass(frozen=True)
@@ -59,15 +59,15 @@ class GovernanceDecision:
     operation: str
     target: str
     context: str
-    review_refs: Tuple[str, ...]
+    review_refs: tuple[str, ...]
     disposition: str
     expected_state_anchor: str
-    basis_anchors: Tuple[Tuple[str, str], ...]
-    scope_snapshot: FrozenSet[str]
-    partition_snapshot: Tuple[FrozenSet[str], ...]
-    closure_facts: FrozenSet[str] = frozenset()
-    required_qualification: Optional[str] = None
-    required_activation: Optional[str] = None
+    basis_anchors: tuple[tuple[str, str], ...]
+    scope_snapshot: frozenset[str]
+    partition_snapshot: tuple[frozenset[str], ...]
+    closure_facts: frozenset[str] = frozenset()
+    required_qualification: str | None = None
+    required_activation: str | None = None
     superseded: bool = False
 
 
@@ -80,9 +80,9 @@ class GovernedApplication:
     target: str
     decision_ref: str
     context: str
-    new_qualification: Optional[str] = None
-    new_activation: Optional[str] = None
-    review_obligation_id: Optional[str] = None
+    new_qualification: str | None = None
+    new_activation: str | None = None
+    review_obligation_id: str | None = None
 
 
 @dataclass(frozen=True)
@@ -128,21 +128,29 @@ def mapping_freshness(anchors: BasisAnchors) -> FreshnessAnchorLookup:
     return anchors.get
 
 
-def canonical_partition(partition: Tuple[FrozenSet[str], ...]) -> Tuple[Tuple[str, ...], ...]:
+def canonical_partition(
+    partition: tuple[frozenset[str], ...],
+) -> tuple[tuple[str, ...], ...]:
     return tuple(sorted(tuple(sorted(cell)) for cell in partition))
 
 
 def state_anchor(state: DistinctionState) -> str:
     scope = ",".join(sorted(state.scope))
     partition = repr(canonical_partition(state.partition))
-    return f"v={state.version}|q={state.qualification}|a={state.activation}|scope={scope}|partition={partition}"
+    return (
+        f"v={state.version}|q={state.qualification}|a={state.activation}"
+        f"|scope={scope}|partition={partition}"
+    )
 
 
 def obligations_anchor(obligations: Mapping[str, ReviewObligation]) -> str:
     return "|".join(sorted(obligations))
 
 
-def partition_matches_scope(partition: Tuple[FrozenSet[str], ...], scope: FrozenSet[str]) -> bool:
+def partition_matches_scope(
+    partition: tuple[frozenset[str], ...],
+    scope: frozenset[str],
+) -> bool:
     if not scope:
         return not partition
     if not partition:
@@ -160,7 +168,9 @@ def state_admissible(state: DistinctionState) -> bool:
         return False
     if not partition_matches_scope(state.partition, state.scope):
         return False
-    if state.activation == "active" and (state.qualification != "qualified" or not state.scope):
+    if state.activation == "active" and (
+        state.qualification != "qualified" or not state.scope
+    ):
         return False
     if state.qualification == "disqualified" and state.activation != "suspended":
         return False
@@ -172,14 +182,21 @@ def state_admissible_for(scheme_id: str, state: DistinctionState) -> bool:
 
 
 def global_state_admissible(config: GovernanceConfiguration) -> bool:
-    return all(state_admissible_for(scheme_id, state) for scheme_id, state in config.states.items())
+    return all(
+        state_admissible_for(scheme_id, state)
+        for scheme_id, state in config.states.items()
+    )
 
 
-def qualification_context(state: DistinctionState) -> tuple[FrozenSet[str], Tuple[Tuple[str, ...], ...]]:
+def qualification_context(
+    state: DistinctionState,
+) -> tuple[frozenset[str], tuple[tuple[str, ...], ...]]:
     return state.scope, canonical_partition(state.partition)
 
 
-def obligation_key(obligation: ReviewObligation) -> tuple[str, str, Tuple[str, ...], str]:
+def obligation_key(
+    obligation: ReviewObligation,
+) -> tuple[str, str, tuple[str, ...], str]:
     return (
         obligation.target,
         obligation.trigger_ref,
@@ -188,9 +205,15 @@ def obligation_key(obligation: ReviewObligation) -> tuple[str, str, Tuple[str, .
     )
 
 
-def open_obligation(runtime: GovernanceRuntime, obligation: ReviewObligation) -> Optional[GovernanceRuntime]:
+def open_obligation(
+    runtime: GovernanceRuntime,
+    obligation: ReviewObligation,
+) -> GovernanceRuntime | None:
     key = obligation_key(obligation)
-    if any(obligation_key(existing) == key for existing in runtime.obligations.values()):
+    if any(
+        obligation_key(existing) == key
+        for existing in runtime.obligations.values()
+    ):
         return None
     obligations = dict(runtime.obligations)
     obligations[obligation.id] = obligation
@@ -201,8 +224,8 @@ def commit_event_opening(
     config: GovernanceConfiguration,
     obligations: Iterable[ReviewObligation],
     event_key: str,
-    processed_event_keys: FrozenSet[str],
-) -> Optional[tuple[GovernanceConfiguration, FrozenSet[str]]]:
+    processed_event_keys: frozenset[str],
+) -> tuple[GovernanceConfiguration, frozenset[str]] | None:
     """Open review obligations without adding event history to Gamma=(Q,Dec,App)."""
     if event_key in processed_event_keys:
         return None
@@ -217,7 +240,11 @@ def commit_event_opening(
     return replace(config, runtime=runtime), processed_event_keys | frozenset({event_key})
 
 
-def direct_review_targets(dependencies: Iterable[Dependency], changed_basis: str, context: str) -> set[str]:
+def direct_review_targets(
+    dependencies: Iterable[Dependency],
+    changed_basis: str,
+    context: str,
+) -> set[str]:
     return {
         dependency.dependent
         for dependency in dependencies
@@ -225,9 +252,15 @@ def direct_review_targets(dependencies: Iterable[Dependency], changed_basis: str
     }
 
 
-def blocking_review_open(config: GovernanceConfiguration, scheme_id: str, context: str) -> bool:
+def blocking_review_open(
+    config: GovernanceConfiguration,
+    scheme_id: str,
+    context: str,
+) -> bool:
     return any(
-        obligation.blocking and obligation.target == scheme_id and obligation.context == context
+        obligation.blocking
+        and obligation.target == scheme_id
+        and obligation.context == context
         for obligation in config.runtime.obligations.values()
     )
 
@@ -243,22 +276,35 @@ def usable(config: GovernanceConfiguration, scheme_id: str, context: str) -> boo
     )
 
 
-def decision_recorded(decision: GovernanceDecision, config: GovernanceConfiguration) -> bool:
+def decision_recorded(
+    decision: GovernanceDecision,
+    config: GovernanceConfiguration,
+) -> bool:
     return config.runtime.decisions.get(decision.id) == decision
 
 
-def application_committed(application: GovernedApplication, config: GovernanceConfiguration) -> bool:
+def application_committed(
+    application: GovernedApplication,
+    config: GovernanceConfiguration,
+) -> bool:
     receipt = config.runtime.applications.get(application.id)
     return receipt is not None and receipt.application == application
 
 
-def relevant_basis_unchanged(decision: GovernanceDecision, freshness: FreshnessAnchorLookup) -> bool:
+def relevant_basis_unchanged(
+    decision: GovernanceDecision,
+    freshness: FreshnessAnchorLookup,
+) -> bool:
     return all(freshness(basis) == anchor for basis, anchor in decision.basis_anchors)
 
 
-def no_invalidating_review(decision: GovernanceDecision, config: GovernanceConfiguration) -> bool:
+def no_invalidating_review(
+    decision: GovernanceDecision,
+    config: GovernanceConfiguration,
+) -> bool:
     return not any(
-        decision.id in obligation.invalidates_decisions for obligation in config.runtime.obligations.values()
+        decision.id in obligation.invalidates_decisions
+        for obligation in config.runtime.obligations.values()
     )
 
 
@@ -287,19 +333,37 @@ def decision_fresh_for_application(
         common_decision_freshness(decision, config, freshness)
         and state_anchor(state) == decision.expected_state_anchor
         and state.scope == decision.scope_snapshot
-        and canonical_partition(state.partition) == canonical_partition(decision.partition_snapshot)
+        and canonical_partition(state.partition)
+        == canonical_partition(decision.partition_snapshot)
     )
 
 
-def precondition(application: GovernedApplication, config: GovernanceConfiguration) -> bool:
-    if not application.id or not application.operation or not application.target or not application.scheme_id:
+def precondition(
+    application: GovernedApplication,
+    config: GovernanceConfiguration,
+) -> bool:
+    if (
+        not application.id
+        or not application.operation
+        or not application.target
+        or not application.scheme_id
+    ):
         return False
-    if application.id in config.runtime.applications or application.scheme_id not in config.states:
+    if (
+        application.id in config.runtime.applications
+        or application.scheme_id not in config.states
+    ):
         return False
-    return application.operation != APPLY_REVIEW_DISCHARGE or bool(application.review_obligation_id)
+    return (
+        application.operation != APPLY_REVIEW_DISCHARGE
+        or bool(application.review_obligation_id)
+    )
 
 
-def candidate_state_effect(application: GovernedApplication, state: DistinctionState) -> DistinctionState:
+def candidate_state_effect(
+    application: GovernedApplication,
+    state: DistinctionState,
+) -> DistinctionState:
     return replace(
         state,
         qualification=(
@@ -307,7 +371,11 @@ def candidate_state_effect(application: GovernedApplication, state: DistinctionS
             if application.new_qualification is not None
             else state.qualification
         ),
-        activation=(application.new_activation if application.new_activation is not None else state.activation),
+        activation=(
+            application.new_activation
+            if application.new_activation is not None
+            else state.activation
+        ),
         version=state.version + 1,
     )
 
@@ -321,8 +389,14 @@ def candidate_discharge_effect(
     return candidate
 
 
-def linked(application: GovernedApplication, decision: GovernanceDecision) -> bool:
-    if application.decision_ref != decision.id or application.scheme_id != decision.target:
+def linked(
+    application: GovernedApplication,
+    decision: GovernanceDecision,
+) -> bool:
+    if (
+        application.decision_ref != decision.id
+        or application.scheme_id != decision.target
+    ):
         return False
     if application.operation == APPLY_REVIEW_DISCHARGE:
         return decision.disposition in {"no_change", "transition_required"}
@@ -333,15 +407,25 @@ def linked(application: GovernedApplication, decision: GovernanceDecision) -> bo
     return compatibility.get(decision.operation) == application.operation
 
 
-def effect_matches_decision(decision: GovernanceDecision, state: DistinctionState) -> bool:
-    if decision.required_qualification is not None and state.qualification != decision.required_qualification:
-        return False
-    if decision.required_activation is not None and state.activation != decision.required_activation:
-        return False
-    return True
+def effect_matches_decision(
+    decision: GovernanceDecision,
+    state: DistinctionState,
+) -> bool:
+    qualification_matches = (
+        decision.required_qualification is None
+        or state.qualification == decision.required_qualification
+    )
+    activation_matches = (
+        decision.required_activation is None
+        or state.activation == decision.required_activation
+    )
+    return qualification_matches and activation_matches
 
 
-def review_decision_input_matches(decision: GovernanceDecision, config: GovernanceConfiguration) -> bool:
+def review_decision_input_matches(
+    decision: GovernanceDecision,
+    config: GovernanceConfiguration,
+) -> bool:
     if not decision.review_refs:
         return False
     decision_basis_keys = set(dict(decision.basis_anchors))
@@ -366,7 +450,12 @@ def decision_record_admissible(
         return existing == decision
     return (
         decision.target in config.states
-        and authority(decision.actor, decision.operation, decision.target, decision.context)
+        and authority(
+            decision.actor,
+            decision.operation,
+            decision.target,
+            decision.context,
+        )
         and review_decision_input_matches(decision, config)
     )
 
@@ -375,7 +464,7 @@ def record_decision(
     config: GovernanceConfiguration,
     decision: GovernanceDecision,
     authority: AuthorityCheck,
-) -> Optional[GovernanceConfiguration]:
+) -> GovernanceConfiguration | None:
     if not decision_record_admissible(config, decision, authority):
         return None
     existing = config.runtime.decisions.get(decision.id)
@@ -395,7 +484,11 @@ def closure_admissible(
     if not decision_recorded(decision, config):
         return False
     current = config.runtime.obligations.get(obligation.id)
-    if current is None or current != obligation or obligation.id not in decision.review_refs:
+    if (
+        current is None
+        or current != obligation
+        or obligation.id not in decision.review_refs
+    ):
         return False
     if decision.target != obligation.target or decision.context != obligation.context:
         return False
@@ -406,7 +499,8 @@ def closure_admissible(
         return False
     return (
         state.scope == decision.scope_snapshot
-        and canonical_partition(state.partition) == canonical_partition(decision.partition_snapshot)
+        and canonical_partition(state.partition)
+        == canonical_partition(decision.partition_snapshot)
         and relevant_basis_unchanged(decision, freshness)
         and obligation.closure_requirements.issubset(decision.closure_facts)
     )
@@ -418,14 +512,26 @@ def application_admissible(
     authority: AuthorityCheck,
     freshness: FreshnessAnchorLookup,
 ) -> bool:
-    if application.operation not in STATE_APPLY_OPERATIONS or application.target != application.scheme_id:
+    if (
+        application.operation not in STATE_APPLY_OPERATIONS
+        or application.target != application.scheme_id
+    ):
         return False
     decision = config.runtime.decisions.get(application.decision_ref)
     if decision is None:
         return False
-    if not authority(application.actor, application.operation, application.target, application.context):
+    if not authority(
+        application.actor,
+        application.operation,
+        application.target,
+        application.context,
+    ):
         return False
-    if not linked(application, decision) or not decision_fresh_for_application(decision, config, freshness):
+    if not linked(application, decision) or not decision_fresh_for_application(
+        decision,
+        config,
+        freshness,
+    ):
         return False
     if not precondition(application, config):
         return False
@@ -445,7 +551,7 @@ def apply_state_transition(
     application: GovernedApplication,
     authority: AuthorityCheck,
     freshness: FreshnessAnchorLookup,
-) -> Optional[GovernanceConfiguration]:
+) -> GovernanceConfiguration | None:
     if not application_admissible(config, application, authority, freshness):
         return None
     current = config.states[application.scheme_id]
@@ -460,7 +566,11 @@ def apply_state_transition(
     states[application.scheme_id] = candidate
     applications = dict(config.runtime.applications)
     applications[application.id] = receipt
-    return replace(config, states=states, runtime=replace(config.runtime, applications=applications))
+    return replace(
+        config,
+        states=states,
+        runtime=replace(config.runtime, applications=applications),
+    )
 
 
 def required_transition_realized(
@@ -489,7 +599,7 @@ def decision_fresh_for_discharge(
     decision: GovernanceDecision,
     config: GovernanceConfiguration,
     freshness: FreshnessAnchorLookup,
-    state_application: Optional[GovernedApplication] = None,
+    state_application: GovernedApplication | None = None,
 ) -> bool:
     state = config.states.get(decision.target)
     if state is None or not common_decision_freshness(decision, config, freshness):
@@ -498,7 +608,8 @@ def decision_fresh_for_discharge(
         return (
             state_anchor(state) == decision.expected_state_anchor
             and state.scope == decision.scope_snapshot
-            and canonical_partition(state.partition) == canonical_partition(decision.partition_snapshot)
+            and canonical_partition(state.partition)
+            == canonical_partition(decision.partition_snapshot)
         )
     if decision.disposition != "transition_required" or state_application is None:
         return False
@@ -510,7 +621,7 @@ def discharge_admissible(
     application: GovernedApplication,
     authority: AuthorityCheck,
     freshness: FreshnessAnchorLookup,
-    state_application: Optional[GovernedApplication] = None,
+    state_application: GovernedApplication | None = None,
 ) -> bool:
     if application.operation != APPLY_REVIEW_DISCHARGE:
         return False
@@ -518,15 +629,28 @@ def discharge_admissible(
     if decision is None or application.review_obligation_id is None:
         return False
     obligation = config.runtime.obligations.get(application.review_obligation_id)
-    if obligation is None or application.target != f"review_obligation:{obligation.id}":
+    if (
+        obligation is None
+        or application.target != f"review_obligation:{obligation.id}"
+    ):
         return False
-    if not authority(application.actor, application.operation, application.target, application.context):
+    if not authority(
+        application.actor,
+        application.operation,
+        application.target,
+        application.context,
+    ):
         return False
     if not precondition(application, config) or not linked(application, decision):
         return False
     if not closure_admissible(decision, obligation, config, freshness):
         return False
-    if not decision_fresh_for_discharge(decision, config, freshness, state_application):
+    if not decision_fresh_for_discharge(
+        decision,
+        config,
+        freshness,
+        state_application,
+    ):
         return False
     if decision.disposition == "no_change":
         return state_application is None
@@ -538,13 +662,21 @@ def apply_review_discharge(
     application: GovernedApplication,
     authority: AuthorityCheck,
     freshness: FreshnessAnchorLookup,
-    state_application: Optional[GovernedApplication] = None,
-) -> Optional[GovernanceConfiguration]:
-    if not discharge_admissible(config, application, authority, freshness, state_application):
+    state_application: GovernedApplication | None = None,
+) -> GovernanceConfiguration | None:
+    if not discharge_admissible(
+        config,
+        application,
+        authority,
+        freshness,
+        state_application,
+    ):
         return None
-    assert application.review_obligation_id is not None
+    obligation_id = application.review_obligation_id
+    if obligation_id is None:
+        return None
     pre_anchor = obligations_anchor(config.runtime.obligations)
-    obligations = candidate_discharge_effect(application.review_obligation_id, config.runtime)
+    obligations = candidate_discharge_effect(obligation_id, config.runtime)
     receipt = ApplicationReceipt(
         application=application,
         effect_kind="review_discharge",
@@ -553,7 +685,11 @@ def apply_review_discharge(
     )
     applications = dict(config.runtime.applications)
     applications[application.id] = receipt
-    runtime = replace(config.runtime, obligations=obligations, applications=applications)
+    runtime = replace(
+        config.runtime,
+        obligations=obligations,
+        applications=applications,
+    )
     return replace(config, runtime=runtime)
 
 
@@ -562,10 +698,16 @@ def transition_admissible(
     application: GovernedApplication,
     authority: AuthorityCheck,
     freshness: FreshnessAnchorLookup,
-    state_application: Optional[GovernedApplication] = None,
+    state_application: GovernedApplication | None = None,
 ) -> bool:
     if application.operation == APPLY_REVIEW_DISCHARGE:
-        return discharge_admissible(config, application, authority, freshness, state_application)
+        return discharge_admissible(
+            config,
+            application,
+            authority,
+            freshness,
+            state_application,
+        )
     return application_admissible(config, application, authority, freshness)
 
 
@@ -575,7 +717,7 @@ def resolve_allowed(
     actor: str,
     scheme_id: str,
     item: str,
-    cell: FrozenSet[str],
+    cell: frozenset[str],
     assignment_mode: str,
     context: str,
 ) -> bool:
