@@ -68,6 +68,7 @@ jobs:
           tests/conformance/test_distinction_governance_bundle_portability.py
           tests/conformance/test_governance_use_admission.py
           tests/conformance/test_governance_permit_binding.py
+          tests/conformance/test_governance_dispatch_linearization.py
           tests/conformance/test_qualification_transition.py
           tests/conformance/test_terminal_authority.py
           tests/conformance/test_authoritative.py
