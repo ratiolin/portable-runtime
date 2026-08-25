@@ -3,7 +3,7 @@ document_type: relationship-contract
 document_status: stable
 framework_version: 1.0.0
 knowledge_scope: cross-repository-boundary
-updated: 2026-08-24
+updated: 2026-08-25
 semantic_contract:
   role: relationship-governance
   defines: []
@@ -16,11 +16,12 @@ semantic_contract:
 
 # Relationship to the `responsibility_topology` Formal Kernel
 
-This document governs the relationship between this repository and `xiongweilin/responsibility_topology`.
+This document governs the relationship among `xiongweilin/ratio` (directory `责任拓扑/`), this repository, and `xiongweilin/responsibility_topology`.
 
 The repositories belong to the same research program but retain distinct responsibility ownership:
 
-- `portable-runtime` owns Framework V1.0 documentation, record semantics, runtime mechanisms, implementation behavior, executable adapters, fixtures, and runtime-side observation certificates;
+- `ratio/责任拓扑` owns canonical Framework V1 definitions, semantic governance, handoff rules, and the responsibility-record interface;
+- `portable-runtime` owns provider-neutral runtime mechanisms, product contracts, implementation behavior, executable adapters, persistence/protocol surfaces, fixtures, and runtime-side observation artifacts;
 - `responsibility_topology` owns Lean specializations, theorem statements, proof artifacts, paper-specific formal claim surfaces, cross-domain minimal calculi, and the verified observational checker.
 
 The relationship remains **not** a verified implementation/refinement relation.
@@ -44,14 +45,14 @@ The governing rule remains:
 call != redefinition
 ```
 
-Definition ownership, specialization ownership, evidence ownership, and operational-fact ownership remain distinct.
+Definition ownership, specialization ownership, evidence ownership, operational-fact ownership, and implementation ownership remain distinct.
 
 ## 2. Current direction of calls
 
 ### Framework/theory -> Lean specialization
 
 ```text
-portable-runtime framework/theory documents
+ratio/责任拓扑 canonical Framework definitions
     --reference / boundary-reference / specialize-->
 responsibility_topology formal kernel
 ```
@@ -61,8 +62,8 @@ A Lean theorem proves a property of its explicit formal specialization. It does 
 ### Framework/practice -> runtime mechanisms
 
 ```text
-portable-runtime theory/practice
-    --operationalize / represent-->
+ratio/责任拓扑 theory / practice / record interface
+    --reference / operationalize / represent-->
 portable-runtime records, authorization, revision,
 revalidation, reopen, recovery, execution, O0 adapters
 ```
