@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass, field, replace
+from typing import Literal
 
 DISTINCTION_GOVERNANCE_CONTRACT_VERSION = "distinction-governance-1.0"
 DISTINCTION_GOVERNANCE_SOURCE_COMMIT = "ef9e490987ed47ebef3ac455851109304f24a97c"
@@ -19,17 +20,77 @@ RESOLVE_ASSIGNMENT = "resolve_assignment"
 STATE_APPLY_OPERATIONS = frozenset({APPLY_QUALIFICATION, APPLY_ACTIVATION})
 
 BasisAnchors = Mapping[str, str]
-AuthorityCheck = Callable[[str, str, str, str], bool]
 FreshnessAnchorLookup = Callable[[str], str | None]
+AuthorityResourceKind = Literal["distinction_projection", "review_obligation", "assignment"]
 
 
 @dataclass(frozen=True)
 class DistinctionState:
+    """Implementation name for the runtime projection of distinction state.
+
+    The semantic axes represented here are qualification, activation, scope,
+    and partition. ``version`` is operational sequencing metadata used by the
+    runtime anchor; it is not a distinction-semantic axis.
+    """
+
     qualification: str
     activation: str
     scope: frozenset[str]
     partition: tuple[frozenset[str], ...]
     version: int = 0
+
+    @property
+    def operational_anchor(self) -> str:
+        return state_anchor(self)
+
+
+# Formal D.5 name. Keep DistinctionState as the implementation/compatibility name.
+RuntimeDistinctionProjection = DistinctionState
+
+
+@dataclass(frozen=True)
+class UseContext:
+    """Deterministic use context for scope-aware usability checks."""
+
+    name: str
+    requested_scope: frozenset[str] = frozenset()
+
+
+@dataclass(frozen=True)
+class BlockingCondition:
+    """Serializable, deterministic predicate controlling when an open Q blocks use."""
+
+    context_names: frozenset[str] = frozenset()
+    scope_any: frozenset[str] = frozenset()
+    scope_all: frozenset[str] = frozenset()
+
+
+@dataclass(frozen=True)
+class GovernanceAuthorityTarget:
+    """Structured resource target for governance authorization.
+
+    Projection-bound targets distinguish authority over the same scheme under
+    different scope/partition/operational anchors. ``None`` dimensions are
+    explicit wildcards used only for deliberately broad grants.
+    """
+
+    kind: AuthorityResourceKind
+    scheme_id: str
+    resource_ref: str
+    scope: frozenset[str] | None = None
+    partition: tuple[frozenset[str], ...] | None = None
+    operational_anchor: str | None = None
+
+
+@dataclass(frozen=True)
+class AuthorityRequest:
+    actor: str
+    operation: str
+    target: GovernanceAuthorityTarget
+    context: str
+
+
+AuthorityCheck = Callable[[AuthorityRequest], bool]
 
 
 @dataclass(frozen=True)
@@ -48,6 +109,7 @@ class ReviewObligation:
     basis_refs: tuple[str, ...]
     context: str
     blocking: bool = True
+    blocking_condition: BlockingCondition | None = None
     closure_requirements: frozenset[str] = frozenset()
     invalidates_decisions: frozenset[str] = frozenset()
 
@@ -97,7 +159,7 @@ class ApplicationReceipt:
 class AuthorityGrant:
     actor: str
     operation: str
-    target: str
+    target: GovernanceAuthorityTarget | str
     context: str
 
 
@@ -110,22 +172,9 @@ class GovernanceRuntime:
 
 @dataclass(frozen=True)
 class GovernanceConfiguration:
-    # Scheme identity is a runtime-store key, not another DistinctionState axis.
+    # Scheme identity is a runtime-store key, not another projection axis.
     states: Mapping[str, DistinctionState]
     runtime: GovernanceRuntime = field(default_factory=GovernanceRuntime)
-
-
-def grant_authority(grants: Iterable[AuthorityGrant]) -> AuthorityCheck:
-    frozen = frozenset(grants)
-
-    def allows(actor: str, operation: str, target: str, context: str) -> bool:
-        return AuthorityGrant(actor, operation, target, context) in frozen
-
-    return allows
-
-
-def mapping_freshness(anchors: BasisAnchors) -> FreshnessAnchorLookup:
-    return anchors.get
 
 
 def canonical_partition(
@@ -141,6 +190,154 @@ def state_anchor(state: DistinctionState) -> str:
         f"v={state.version}|q={state.qualification}|a={state.activation}"
         f"|scope={scope}|partition={partition}"
     )
+
+
+def projection_authority_target(
+    scheme_id: str,
+    scope: frozenset[str],
+    partition: tuple[frozenset[str], ...],
+    operational_anchor: str,
+) -> GovernanceAuthorityTarget:
+    return GovernanceAuthorityTarget(
+        kind="distinction_projection",
+        scheme_id=scheme_id,
+        resource_ref=f"distinction:{scheme_id}",
+        scope=scope,
+        partition=partition,
+        operational_anchor=operational_anchor,
+    )
+
+
+def decision_authority_request(decision: GovernanceDecision) -> AuthorityRequest:
+    return AuthorityRequest(
+        actor=decision.actor,
+        operation=decision.operation,
+        target=projection_authority_target(
+            decision.target,
+            decision.scope_snapshot,
+            decision.partition_snapshot,
+            decision.expected_state_anchor,
+        ),
+        context=decision.context,
+    )
+
+
+def application_authority_request(
+    application: GovernedApplication,
+    decision: GovernanceDecision,
+) -> AuthorityRequest:
+    return AuthorityRequest(
+        actor=application.actor,
+        operation=application.operation,
+        target=projection_authority_target(
+            decision.target,
+            decision.scope_snapshot,
+            decision.partition_snapshot,
+            decision.expected_state_anchor,
+        ),
+        context=application.context,
+    )
+
+
+def review_discharge_authority_request(
+    application: GovernedApplication,
+    obligation: ReviewObligation,
+    state: DistinctionState,
+) -> AuthorityRequest:
+    return AuthorityRequest(
+        actor=application.actor,
+        operation=application.operation,
+        target=GovernanceAuthorityTarget(
+            kind="review_obligation",
+            scheme_id=obligation.target,
+            resource_ref=f"review_obligation:{obligation.id}",
+            scope=state.scope,
+            partition=state.partition,
+            operational_anchor=state_anchor(state),
+        ),
+        context=application.context,
+    )
+
+
+def assignment_authority_request(
+    *,
+    actor: str,
+    operation: str,
+    scheme_id: str,
+    item: str,
+    assignment_mode: str,
+    context: str,
+    state: DistinctionState,
+) -> AuthorityRequest:
+    return AuthorityRequest(
+        actor=actor,
+        operation=operation,
+        target=GovernanceAuthorityTarget(
+            kind="assignment",
+            scheme_id=scheme_id,
+            resource_ref=f"assignment:{scheme_id}:{item}:{assignment_mode}",
+            scope=state.scope,
+            partition=state.partition,
+            operational_anchor=state_anchor(state),
+        ),
+        context=context,
+    )
+
+
+def authority_target_covers(
+    granted: GovernanceAuthorityTarget,
+    requested: GovernanceAuthorityTarget,
+) -> bool:
+    if (
+        granted.kind != requested.kind
+        or granted.scheme_id != requested.scheme_id
+        or granted.resource_ref != requested.resource_ref
+    ):
+        return False
+    if granted.scope is not None and granted.scope != requested.scope:
+        return False
+    if (
+        granted.partition is not None
+        and canonical_partition(granted.partition)
+        != canonical_partition(requested.partition or ())
+    ):
+        return False
+    return (
+        granted.operational_anchor is None
+        or granted.operational_anchor == requested.operational_anchor
+    )
+
+
+def _legacy_target_covers(granted: str, requested: GovernanceAuthorityTarget) -> bool:
+    # Compatibility grants are deliberately broad scheme grants. New adapters
+    # must emit structured targets; this branch exists only for the Phase B-D
+    # pure conformance fixtures and pre-D.5 internal callers.
+    return granted in {requested.scheme_id, requested.resource_ref}
+
+
+def grant_authority(grants: Iterable[AuthorityGrant]) -> AuthorityCheck:
+    frozen = tuple(grants)
+
+    def allows(request: AuthorityRequest) -> bool:
+        for grant in frozen:
+            if (
+                grant.actor != request.actor
+                or grant.operation != request.operation
+                or grant.context != request.context
+            ):
+                continue
+            if isinstance(grant.target, GovernanceAuthorityTarget):
+                if authority_target_covers(grant.target, request.target):
+                    return True
+            elif _legacy_target_covers(grant.target, request.target):
+                return True
+        return False
+
+    return allows
+
+
+def mapping_freshness(anchors: BasisAnchors) -> FreshnessAnchorLookup:
+    return anchors.get
 
 
 def obligations_anchor(obligations: Mapping[str, ReviewObligation]) -> str:
@@ -192,6 +389,34 @@ def qualification_context(
     state: DistinctionState,
 ) -> tuple[frozenset[str], tuple[tuple[str, ...], ...]]:
     return state.scope, canonical_partition(state.partition)
+
+
+def normalize_use_context(context: str | UseContext) -> UseContext:
+    return context if isinstance(context, UseContext) else UseContext(name=context)
+
+
+def scope_matches(scope: frozenset[str], context: str | UseContext) -> bool:
+    use = normalize_use_context(context)
+    return bool(scope) and (
+        not use.requested_scope or use.requested_scope.issubset(scope)
+    )
+
+
+def blocking_condition_matches(
+    condition: BlockingCondition,
+    context: str | UseContext,
+    state_scope: frozenset[str],
+) -> bool:
+    use = normalize_use_context(context)
+    if condition.context_names and use.name not in condition.context_names:
+        return False
+    effective_scope = use.requested_scope or state_scope
+    if condition.scope_any and not condition.scope_any.intersection(effective_scope):
+        return False
+    return not (
+        condition.scope_all
+        and not condition.scope_all.issubset(effective_scope)
+    )
 
 
 def obligation_key(
@@ -252,26 +477,45 @@ def direct_review_targets(
     }
 
 
+def obligation_blocks(
+    obligation: ReviewObligation,
+    context: str | UseContext,
+    state_scope: frozenset[str],
+) -> bool:
+    if not obligation.blocking:
+        return False
+    if obligation.blocking_condition is not None:
+        return blocking_condition_matches(obligation.blocking_condition, context, state_scope)
+    use = normalize_use_context(context)
+    return obligation.context == use.name
+
+
 def blocking_review_open(
     config: GovernanceConfiguration,
     scheme_id: str,
-    context: str,
+    context: str | UseContext,
 ) -> bool:
+    state = config.states.get(scheme_id)
+    if state is None:
+        return False
     return any(
-        obligation.blocking
-        and obligation.target == scheme_id
-        and obligation.context == context
+        obligation.target == scheme_id
+        and obligation_blocks(obligation, context, state.scope)
         for obligation in config.runtime.obligations.values()
     )
 
 
-def usable(config: GovernanceConfiguration, scheme_id: str, context: str) -> bool:
+def usable(
+    config: GovernanceConfiguration,
+    scheme_id: str,
+    context: str | UseContext,
+) -> bool:
     state = config.states.get(scheme_id)
     return bool(
         state
         and state.qualification == "qualified"
         and state.activation == "active"
-        and state.scope
+        and scope_matches(state.scope, context)
         and not blocking_review_open(config, scheme_id, context)
     )
 
@@ -450,12 +694,7 @@ def decision_record_admissible(
         return existing == decision
     return (
         decision.target in config.states
-        and authority(
-            decision.actor,
-            decision.operation,
-            decision.target,
-            decision.context,
-        )
+        and authority(decision_authority_request(decision))
         and review_decision_input_matches(decision, config)
     )
 
@@ -520,12 +759,7 @@ def application_admissible(
     decision = config.runtime.decisions.get(application.decision_ref)
     if decision is None:
         return False
-    if not authority(
-        application.actor,
-        application.operation,
-        application.target,
-        application.context,
-    ):
+    if not authority(application_authority_request(application, decision)):
         return False
     if not linked(application, decision) or not decision_fresh_for_application(
         decision,
@@ -634,11 +868,9 @@ def discharge_admissible(
         or application.target != f"review_obligation:{obligation.id}"
     ):
         return False
-    if not authority(
-        application.actor,
-        application.operation,
-        application.target,
-        application.context,
+    state = config.states.get(decision.target)
+    if state is None or not authority(
+        review_discharge_authority_request(application, obligation, state)
     ):
         return False
     if not precondition(application, config) or not linked(application, decision):
@@ -719,16 +951,25 @@ def resolve_allowed(
     item: str,
     cell: frozenset[str],
     assignment_mode: str,
-    context: str,
+    context: str | UseContext,
 ) -> bool:
     state = config.states.get(scheme_id)
     if state is None:
         return False
-    target = f"assignment:{scheme_id}:{item}:{assignment_mode}"
+    use = normalize_use_context(context)
+    request = assignment_authority_request(
+        actor=actor,
+        operation=RESOLVE_ASSIGNMENT,
+        scheme_id=scheme_id,
+        item=item,
+        assignment_mode=assignment_mode,
+        context=use.name,
+        state=state,
+    )
     return (
-        usable(config, scheme_id, context)
+        usable(config, scheme_id, use)
         and item in state.scope
         and cell in state.partition
         and item in cell
-        and authority(actor, RESOLVE_ASSIGNMENT, target, context)
+        and authority(request)
     )
