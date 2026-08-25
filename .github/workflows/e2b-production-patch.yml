@@ -2,158 +2,159 @@ name: E2b production patch
 
 on:
   push:
-    branches: [feat/governance-dispatch-linearization]
+    branches:
+      - feat/governance-dispatch-linearization
 
 permissions:
   contents: write
 
 jobs:
   patch:
-    if: "${{ github.event.head_commit.message == 'chore: fix E2b production patch workflow' }}"
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           ref: feat/governance-dispatch-linearization
           fetch-depth: 0
-      - name: Apply E2b production patch
-        shell: python
+      - name: Apply source patch
         run: |
+          python - <<'PY'
           from pathlib import Path
 
-          boundary_path = Path('src/portable_runtime/core/boundary.py')
+          boundary_path = Path("src/portable_runtime/core/boundary.py")
           boundary = boundary_path.read_text()
-          old_import = '''from portable_runtime.core.router import ConstraintRouter
-from portable_runtime.governance.use_admission import (
-'''
-          new_import = '''from portable_runtime.core.router import ConstraintRouter
-from portable_runtime.governance.dispatch import GovernanceDispatchCommitter
-from portable_runtime.governance.use_admission import (
-'''
+          old_import = """from portable_runtime.core.router import ConstraintRouter
+          from portable_runtime.governance.use_admission import (
+          """
+          new_import = """from portable_runtime.core.router import ConstraintRouter
+          from portable_runtime.governance.dispatch import GovernanceDispatchCommitter
+          from portable_runtime.governance.use_admission import (
+          """
           if old_import not in boundary:
-              raise SystemExit('boundary governance import anchor missing')
+              raise SystemExit("boundary governance import anchor missing")
           boundary = boundary.replace(old_import, new_import, 1)
 
-          old_final = '''        final_governance = GovernanceUseAdmission(store).evaluate(
-            request,
-            self.governance_requirement_resolver,
-        )
-        governance_failure = _governance_permit_failure(permit, final_governance)
-        if governance_failure is not None:
-            code, reason = governance_failure
-            return abort_before_reality_exit(code, reason)
+          old_final = """        final_governance = GovernanceUseAdmission(store).evaluate(
+                      request,
+                      self.governance_requirement_resolver,
+                  )
+                  governance_failure = _governance_permit_failure(permit, final_governance)
+                  if governance_failure is not None:
+                      code, reason = governance_failure
+                      return abort_before_reality_exit(code, reason)
 
-        context = InvocationContext(runtime_id=self.runtime_id, work_id=execution_request.work_id, run_id=execution_request.run_id, lease_generation=permit.lease_generation, idempotency_key=execution_request.idempotency_key)
-'''
-          new_final = '''        final_governance = GovernanceUseAdmission(store).evaluate(
-            request,
-            self.governance_requirement_resolver,
-        )
-        governance_failure = _governance_permit_failure(permit, final_governance)
-        if governance_failure is not None:
-            code, reason = governance_failure
-            return abort_before_reality_exit(code, reason)
+                  context = InvocationContext(runtime_id=self.runtime_id, work_id=execution_request.work_id, run_id=execution_request.run_id, lease_generation=permit.lease_generation, idempotency_key=execution_request.idempotency_key)
+          """
+          new_final = """        final_governance = GovernanceUseAdmission(store).evaluate(
+                      request,
+                      self.governance_requirement_resolver,
+                  )
+                  governance_failure = _governance_permit_failure(permit, final_governance)
+                  if governance_failure is not None:
+                      code, reason = governance_failure
+                      return abort_before_reality_exit(code, reason)
 
-        dispatch_commit = GovernanceDispatchCommitter(store).commit(
-            request,
-            permit,
-            self.governance_requirement_resolver,
-            attempt_id=records.attempt_id,
-        )
-        if dispatch_commit.status not in {"committed", "not-applicable"}:
-            if dispatch_commit.status == "unavailable":
-                code = CODE_GOVERNANCE_UNAVAILABLE
-            elif dispatch_commit.status == "stale":
-                code = CODE_GOVERNANCE_STALE
-            else:
-                code = CODE_GOVERNANCE_CHANGED
-            return abort_before_reality_exit(code, dispatch_commit.reason)
+                  dispatch_commit = GovernanceDispatchCommitter(store).commit(
+                      request,
+                      permit,
+                      self.governance_requirement_resolver,
+                      attempt_id=records.attempt_id,
+                  )
+                  if dispatch_commit.status not in {"committed", "not-applicable"}:
+                      if dispatch_commit.status == "unavailable":
+                          code = CODE_GOVERNANCE_UNAVAILABLE
+                      elif dispatch_commit.status == "stale":
+                          code = CODE_GOVERNANCE_STALE
+                      else:
+                          code = CODE_GOVERNANCE_CHANGED
+                      return abort_before_reality_exit(code, dispatch_commit.reason)
 
-        context = InvocationContext(runtime_id=self.runtime_id, work_id=execution_request.work_id, run_id=execution_request.run_id, lease_generation=permit.lease_generation, idempotency_key=execution_request.idempotency_key)
-'''
+                  context = InvocationContext(runtime_id=self.runtime_id, work_id=execution_request.work_id, run_id=execution_request.run_id, lease_generation=permit.lease_generation, idempotency_key=execution_request.idempotency_key)
+          """
           if old_final not in boundary:
-              raise SystemExit('boundary final governance anchor missing')
+              raise SystemExit("boundary final governance anchor missing")
           boundary = boundary.replace(old_final, new_final, 1)
 
-          old_metadata = '''                "governance_snapshot_digest": permit.governance_snapshot_digest,
-                "invocation_permit_provider": permit.provider_id,
-'''
-          new_metadata = '''                "governance_snapshot_digest": permit.governance_snapshot_digest,
-                "dispatch_commit_ref": dispatch_commit.commit_ref,
-                "invocation_permit_provider": permit.provider_id,
-'''
+          old_metadata = """                "governance_snapshot_digest": permit.governance_snapshot_digest,
+                          "invocation_permit_provider": permit.provider_id,
+          """
+          new_metadata = """                "governance_snapshot_digest": permit.governance_snapshot_digest,
+                          "dispatch_commit_ref": dispatch_commit.commit_ref,
+                          "invocation_permit_provider": permit.provider_id,
+          """
           if old_metadata not in boundary:
-              raise SystemExit('boundary context metadata anchor missing')
+              raise SystemExit("boundary context metadata anchor missing")
           boundary = boundary.replace(old_metadata, new_metadata, 1)
 
-          old_started = '''        _append_event(store, "InvocationStarted", request.id, {"provider_id": provider_id, "capability": request.capability})
-'''
-          new_started = '''        _append_event(
-            store,
-            "InvocationStarted",
-            request.id,
-            {
-                "provider_id": provider_id,
-                "capability": request.capability,
-                "dispatch_commit_ref": dispatch_commit.commit_ref,
-            },
-        )
-'''
+          old_started = '        _append_event(store, "InvocationStarted", request.id, {"provider_id": provider_id, "capability": request.capability})\n'
+          new_started = """        _append_event(
+                      store,
+                      "InvocationStarted",
+                      request.id,
+                      {
+                          "provider_id": provider_id,
+                          "capability": request.capability,
+                          "dispatch_commit_ref": dispatch_commit.commit_ref,
+                      },
+                  )
+          """
           if old_started not in boundary:
-              raise SystemExit('InvocationStarted anchor missing')
+              raise SystemExit("InvocationStarted anchor missing")
           boundary = boundary.replace(old_started, new_started, 1)
           boundary_path.write_text(boundary)
 
-          runtime_path = Path('src/portable_runtime/core/runtime.py')
+          runtime_path = Path("src/portable_runtime/core/runtime.py")
           runtime = runtime_path.read_text()
-          old_runtime_import = '''from portable_runtime.core.registry import ProviderRegistry
-from portable_runtime.core.router import CapabilityService
-'''
-          new_runtime_import = '''from portable_runtime.core.registry import ProviderRegistry
-from portable_runtime.core.router import CapabilityService
-from portable_runtime.governance.dispatch import dispatch_recovery_mode
-'''
+          old_runtime_import = """from portable_runtime.core.registry import ProviderRegistry
+          from portable_runtime.core.router import CapabilityService
+          """
+          new_runtime_import = """from portable_runtime.core.registry import ProviderRegistry
+          from portable_runtime.core.router import CapabilityService
+          from portable_runtime.governance.dispatch import dispatch_recovery_mode
+          """
           if old_runtime_import not in runtime:
-              raise SystemExit('runtime import anchor missing')
+              raise SystemExit("runtime import anchor missing")
           runtime = runtime.replace(old_runtime_import, new_runtime_import, 1)
 
-          old_reconcile = '''        if not last.request_ref or not last.provider_id:
-            return None
-        result = await self.capabilities.reconcile(last.request_ref, last.provider_id)
-        if result:
-'''
-          new_reconcile = '''        if not last.request_ref or not last.provider_id:
-            return None
-        recovery_mode = dispatch_recovery_mode(step, last)
-        if recovery_mode == "unknown":
-            step.status = "unknown"
-            self.store.save_step(step)  # type: ignore
-            return CapabilityResult(
-                request_id=last.request_ref,
-                provider_id=last.provider_id,
-                status="unknown",
-                message="dispatch was durably committed; external effect is unknown and requires explicit recovery",
-            )
-        if recovery_mode == "idempotent-retry":
-            step.status = "unknown"
-            self.store.save_step(step)  # type: ignore
-            return CapabilityResult(
-                request_id=last.request_ref,
-                provider_id=last.provider_id,
-                status="unknown",
-                message="dispatch was durably committed; retry only with the same idempotency identity",
-            )
-        result = await self.capabilities.reconcile(last.request_ref, last.provider_id)
-        if result:
-'''
+          old_reconcile = """        if not last.request_ref or not last.provider_id:
+                      return None
+                  result = await self.capabilities.reconcile(last.request_ref, last.provider_id)
+                  if result:
+          """
+          new_reconcile = """        if not last.request_ref or not last.provider_id:
+                      return None
+                  recovery_mode = dispatch_recovery_mode(step, last)
+                  if recovery_mode == "unknown":
+                      step.status = "unknown"
+                      self.store.save_step(step)  # type: ignore
+                      return CapabilityResult(
+                          request_id=last.request_ref,
+                          provider_id=last.provider_id,
+                          status="unknown",
+                          message="dispatch was durably committed; external effect is unknown and requires explicit recovery",
+                      )
+                  if recovery_mode == "idempotent-retry":
+                      step.status = "unknown"
+                      self.store.save_step(step)  # type: ignore
+                      return CapabilityResult(
+                          request_id=last.request_ref,
+                          provider_id=last.provider_id,
+                          status="unknown",
+                          message="dispatch was durably committed; retry only with the same idempotency identity",
+                      )
+                  result = await self.capabilities.reconcile(last.request_ref, last.provider_id)
+                  if result:
+          """
           if old_reconcile not in runtime:
-              raise SystemExit('runtime reconcile anchor missing')
+              raise SystemExit("runtime reconcile anchor missing")
           runtime = runtime.replace(old_reconcile, new_reconcile, 1)
           runtime_path.write_text(runtime)
-      - name: Commit production patch
+          PY
+      - name: Commit source patch
         run: |
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add src/portable_runtime/core/boundary.py src/portable_runtime/core/runtime.py
+          git diff --cached --quiet && exit 0
           git commit -m 'feat: linearize governed dispatch commitment'
           git push origin HEAD:feat/governance-dispatch-linearization
