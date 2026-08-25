@@ -5,7 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 from dataclasses import dataclass
-from typing import Any, Literal, Protocol
+from typing import Any, Protocol
 
 from portable_runtime.core.models import Event
 from portable_runtime.governance.outcome_impact import (
@@ -16,12 +16,11 @@ from portable_runtime.governance.outcome_impact import (
     resolve_outcome_confirmed_trigger,
 )
 from portable_runtime.governance.outcome_impact_judgment import (
-    OutcomeImpact,
     OutcomeImpactJudgment,
     OutcomeImpactPolicy,
     evaluate_outcome_impact,
 )
-from portable_runtime.records.revalidation import ImpactType, RevalidationDisposition
+from portable_runtime.records.revalidation import RevalidationDisposition
 
 OUTCOME_IMPACT_JUDGMENT_EVENT = "OutcomeImpactJudgmentRecorded"
 OUTCOME_DISPOSITION_EVENT = "OutcomeRevalidationDispositionRecorded"
@@ -168,7 +167,11 @@ def _replay_existing(
     disposition_rationale = _nonempty_strings(dp.get("rationale_refs"))
     if action not in _VALID_ACTIONS:
         raise ValueError("outcome impact durable disposition action invalid")
-    if not isinstance(disposition_policy_ref, str) or not disposition_policy_ref.strip() or disposition_rationale is None:
+    if (
+        not isinstance(disposition_policy_ref, str)
+        or not disposition_policy_ref.strip()
+        or disposition_rationale is None
+    ):
         raise ValueError("outcome impact durable disposition provenance incomplete")
 
     scheme_id = binding["scheme_id"]
