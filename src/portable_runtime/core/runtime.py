@@ -8,6 +8,7 @@ from portable_runtime.core.capabilities import CapabilityRequest, CapabilityResu
 from portable_runtime.core.models import Run, Step, Work, new_id, utcnow
 from portable_runtime.core.registry import ProviderRegistry
 from portable_runtime.core.router import CapabilityService
+from portable_runtime.governance.dispatch import dispatch_recovery_mode
 from portable_runtime.interfaces.artifact_store import ArtifactStore
 from portable_runtime.interfaces.store import StateStore
 from portable_runtime.stores.memory import InMemoryStateStore
@@ -179,6 +180,25 @@ class Runtime:
         last = sorted(attempts, key=lambda a: a.attempt_no)[-1]
         if not last.request_ref or not last.provider_id:
             return None
+        recovery_mode = dispatch_recovery_mode(step, last)
+        if recovery_mode == "unknown":
+            step.status = "unknown"
+            self.store.save_step(step)  # type: ignore
+            return CapabilityResult(
+                request_id=last.request_ref,
+                provider_id=last.provider_id,
+                status="unknown",
+                message="dispatch was durably committed; external effect is unknown and requires explicit recovery",
+            )
+        if recovery_mode == "idempotent-retry":
+            step.status = "unknown"
+            self.store.save_step(step)  # type: ignore
+            return CapabilityResult(
+                request_id=last.request_ref,
+                provider_id=last.provider_id,
+                status="unknown",
+                message="dispatch was durably committed; retry only with the same idempotency identity",
+            )
         result = await self.capabilities.reconcile(last.request_ref, last.provider_id)
         if result:
             if result.status == "unknown":
