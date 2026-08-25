@@ -148,6 +148,7 @@ class SQLiteStateStore:
         self.path = _safe_db_path(path)
         self._lock = threading.RLock()
         self._terminal_commit_depth = 0
+        self._outcome_impact_commit_depth = 0
         self._connection = sqlite3.connect(_safe_db_path(path), check_same_thread=False, isolation_level=None)  # NOSONAR  # noqa: E501
         self._connection.row_factory = sqlite3.Row
         with self._lock:
@@ -276,6 +277,34 @@ class SQLiteStateStore:
                 if owns_transaction:
                     self._connection.execute("COMMIT")
                 return prepared.outcome
+            except Exception:
+                if owns_transaction:
+                    self._rollback(self._connection.cursor())
+                raise
+
+    def commit_outcome_impact_judgment(self, request: Any, impact_policy: Any, disposition_policy: Any) -> Any:
+        """Writer-serialized commit/replay of one durable Outcome governance judgment."""
+        from portable_runtime.governance.outcome_impact_commit import (
+            committed_outcome_impact,
+            prepare_outcome_impact_commit,
+        )
+
+        with self._lock:
+            owns_transaction = not self._connection.in_transaction
+            if owns_transaction:
+                self._connection.execute("BEGIN IMMEDIATE")
+            try:
+                prepared = prepare_outcome_impact_commit(self, request, impact_policy, disposition_policy)
+                if not prepared.replayed:
+                    self._outcome_impact_commit_depth += 1
+                    try:
+                        for event in prepared.events:
+                            self.append_event(event)
+                    finally:
+                        self._outcome_impact_commit_depth -= 1
+                if owns_transaction:
+                    self._connection.execute("COMMIT")
+                return committed_outcome_impact(prepared)
             except Exception:
                 if owns_transaction:
                     self._rollback(self._connection.cursor())
@@ -419,6 +448,10 @@ class SQLiteStateStore:
             if status is None or value.lifecycle_status == status
         ]
     def append_event(self, value: Event) -> None:
+        from portable_runtime.governance.outcome_impact_commit import OUTCOME_IMPACT_AUTHORITY_EVENT_TYPES
+
+        if value.type in OUTCOME_IMPACT_AUTHORITY_EVENT_TYPES and self._outcome_impact_commit_depth <= 0:
+            raise ValueError("Outcome impact authority events require commit_outcome_impact_judgment")
         existing = self._get("event", Event, value.id)
         if existing is not None:
             try:

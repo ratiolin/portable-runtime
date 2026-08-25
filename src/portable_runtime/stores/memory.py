@@ -54,6 +54,7 @@ class InMemoryStateStore:
         self._leases: dict[str, dict[str, Any]] = {}
         self._lock = threading.RLock()
         self._terminal_commit_depth = 0
+        self._outcome_impact_commit_depth = 0
 
     _SEMANTIC_KINDS = frozenset({"record", "relation", "authorization", "authorization_use", "knowledge_projection"})
 
@@ -126,6 +127,25 @@ class InMemoryStateStore:
             for event in prepared.events:
                 self.append_event(event)
             return prepared.outcome
+
+    def commit_outcome_impact_judgment(self, request: Any, impact_policy: Any, disposition_policy: Any) -> Any:
+        """Atomically commit or replay one durable Outcome governance judgment."""
+        from portable_runtime.governance.outcome_impact_commit import (
+            committed_outcome_impact,
+            prepare_outcome_impact_commit,
+        )
+
+        with self.transaction():
+            prepared = prepare_outcome_impact_commit(self, request, impact_policy, disposition_policy)
+            if prepared.replayed:
+                return committed_outcome_impact(prepared)
+            self._outcome_impact_commit_depth += 1
+            try:
+                for event in prepared.events:
+                    self.append_event(event)
+            finally:
+                self._outcome_impact_commit_depth -= 1
+            return committed_outcome_impact(prepared)
 
     def _validate_candidate_write(self, kind: str, value: BaseModel) -> None:
         """Validate semantic writes against the full current graph."""
@@ -238,6 +258,10 @@ class InMemoryStateStore:
     def save_event(self, value: Event) -> None: self.append_event(value)
 
     def append_event(self, value: Event) -> None:
+        from portable_runtime.governance.outcome_impact_commit import OUTCOME_IMPACT_AUTHORITY_EVENT_TYPES
+
+        if value.type in OUTCOME_IMPACT_AUTHORITY_EVENT_TYPES and self._outcome_impact_commit_depth <= 0:
+            raise ValueError("Outcome impact authority events require commit_outcome_impact_judgment")
         with self._lock:
             existing = self._records.get("event", {}).get(value.id)
             if existing is not None:
