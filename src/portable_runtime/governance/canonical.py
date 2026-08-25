@@ -14,6 +14,7 @@ from portable_runtime.governance.distinction import (
     GovernanceRuntime,
     GovernedApplication,
     ReviewObligation,
+    global_state_admissible,
     state_admissible_for,
 )
 
@@ -310,23 +311,23 @@ def reconstruct_governance_history(events: list[Event]) -> CanonicalGovernanceHi
             raw = payload.get("state")
             if isinstance(raw, dict):
                 scheme_id, state = restore_state(raw)
-                current = states.get(scheme_id)
-                if current is None or state.version > current.version:
+                current_state = states.get(scheme_id)
+                if current_state is None or state.version > current_state.version:
                     states[scheme_id] = state
         elif event.type == GOVERNANCE_REVIEW_OPENED:
             raw = payload.get("obligation")
             if isinstance(raw, dict):
                 obligation = restore_obligation(raw)
-                existing = obligations.get(obligation.id)
-                if existing is not None and existing != obligation:
+                existing_obligation = obligations.get(obligation.id)
+                if existing_obligation is not None and existing_obligation != obligation:
                     raise ValueError("canonical history rebinds review obligation identity")
                 obligations[obligation.id] = obligation
         elif event.type == GOVERNANCE_DECISION_RECORDED:
             raw = payload.get("decision")
             if isinstance(raw, dict):
                 decision = restore_decision(raw)
-                existing = decisions.get(decision.id)
-                if existing is not None and existing != decision:
+                existing_decision = decisions.get(decision.id)
+                if existing_decision is not None and existing_decision != decision:
                     raise ValueError("canonical history rebinds governance decision identity")
                 decisions[decision.id] = decision
         elif event.type == GOVERNANCE_APPLICATION_COMMITTED:
@@ -334,8 +335,8 @@ def reconstruct_governance_history(events: list[Event]) -> CanonicalGovernanceHi
             if not isinstance(raw, dict):
                 continue
             receipt = restore_application(raw)
-            existing = applications.get(receipt.application.id)
-            if existing is not None and existing != receipt:
+            existing_application = applications.get(receipt.application.id)
+            if existing_application is not None and existing_application != receipt:
                 raise ValueError("canonical history rebinds governed application identity")
             applications[receipt.application.id] = receipt
             if receipt.effect_kind == "review_discharge" and receipt.application.review_obligation_id:
@@ -343,28 +344,31 @@ def reconstruct_governance_history(events: list[Event]) -> CanonicalGovernanceHi
             next_state = payload.get("next_state")
             if isinstance(next_state, dict):
                 scheme_id, state = restore_state(next_state)
-                current = states.get(scheme_id)
-                if current is None or state.version > current.version:
+                current_state = states.get(scheme_id)
+                if current_state is None or state.version > current_state.version:
                     states[scheme_id] = state
         elif event.type == GOVERNANCE_EVENT_PROCESSED:
             key = str(payload.get("event_instance_key") or event.subject_ref)
             ids = tuple(str(item) for item in payload.get("obligation_ids", []))
-            existing = processed.get(key)
-            if existing is not None and existing != ids:
+            existing_processed = processed.get(key)
+            if existing_processed is not None and existing_processed != ids:
                 raise ValueError("canonical history rebinds processed event identity")
             processed[key] = ids
 
     for obligation_id in discharged:
         obligations.pop(obligation_id, None)
 
-    return CanonicalGovernanceHistory(
-        configuration=GovernanceConfiguration(
-            states=states,
-            runtime=GovernanceRuntime(
-                obligations=obligations,
-                decisions=decisions,
-                applications=applications,
-            ),
+    configuration = GovernanceConfiguration(
+        states=states,
+        runtime=GovernanceRuntime(
+            obligations=obligations,
+            decisions=decisions,
+            applications=applications,
         ),
+    )
+    if not global_state_admissible(configuration):
+        raise ValueError("canonical governance history reconstructs inadmissible state")
+    return CanonicalGovernanceHistory(
+        configuration=configuration,
         processed_event_obligations=processed,
     )
