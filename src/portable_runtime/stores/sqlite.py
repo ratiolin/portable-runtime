@@ -919,6 +919,11 @@ class SQLiteStateStore:
 
                 assert_valid_state_transition(current, candidate, prepared)
                 assert_valid_state_graph(candidate)
+                from portable_runtime.records.verified_outcome_replay import (
+                    validate_verified_outcome_authority_graph,
+                )
+
+                validate_verified_outcome_authority_graph(candidate)
                 for kind, prepared_values in prepared.items():
                     for value in prepared_values:
                         self._connection.execute(
