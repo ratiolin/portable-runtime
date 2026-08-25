@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
-from typing import Any, Literal
+from typing import Any, Literal, cast
 
 from portable_runtime.core.models import Action, Run, Step, StepAttempt, Work
 from portable_runtime.records.models import EvidenceArtifact
@@ -133,7 +133,7 @@ class BoundVerificationEvidenceValidator:
             result = str(closed.get("result", "")).strip().lower()
             if result not in {"pass", "fail"}:
                 raise ValueError("verification result must be explicit pass or fail")
-            typed_result: ObjectiveResult = result  # type: ignore[assignment]
+            typed_result = cast(ObjectiveResult, result)
             if typed_result not in allowed_results:
                 raise ValueError("verification result is not allowed for this authority")
             results.add(typed_result)
@@ -158,7 +158,8 @@ class BoundVerificationEvidenceValidator:
                 if not isinstance(criteria, list) or criteria != expected_acceptance_criteria:
                     raise ValueError("verification proof acceptance criteria mismatch")
             if require_execution_binding:
-                assert action is not None and attempt is not None
+                if action is None or attempt is None:
+                    raise ValueError("verification requires complete durable execution graph")
                 if metadata.get("action_ref") != action.id or action.id not in record.source_refs:
                     raise ValueError("verification proof is not bound to exact Action")
                 if metadata.get("request_id") != action.request_ref:
