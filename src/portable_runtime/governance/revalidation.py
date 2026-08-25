@@ -26,6 +26,7 @@ from portable_runtime.records.revalidation import (
     AffectedAssessment,
     DefaultRevalidationPolicyProfile,
     ImpactType,
+    RevalidationDisposition,
     assess_revalidation,
 )
 
@@ -118,18 +119,22 @@ def _snapshot(persistence: DistinctionGovernancePersistence) -> GovernanceConfig
     )
 
 
-def project_review_obligation(
-    assessment: AffectedAssessment,
+def project_review_obligation_from_disposition(
     *,
-    event_ref: str,
+    trigger_event_ref: str,
+    target: str,
     context: str,
+    disposition: RevalidationDisposition,
+    basis_refs: tuple[str, ...],
     persistence: DistinctionGovernancePersistence,
 ) -> ReviewProjection:
-    """Project policy output without redefining revalidation interpretation."""
+    """Project one explicit disposition into the existing ReviewObligation lifecycle."""
 
-    action = _disposition(assessment)
-    target = assessment.affected_ref
+    action = disposition.action
     blocking = action in _BLOCKING_ACTIONS
+    normalized_basis = tuple(dict.fromkeys(ref for ref in basis_refs if ref))
+    if not normalized_basis:
+        raise GovernanceLifecycleError("review projection requires explicit basis refs")
     if action not in _REVIEW_ACTIONS:
         return ReviewProjection(
             status="not-required",
@@ -150,10 +155,10 @@ def project_review_obligation(
         if decision.target == target and decision.context == context
     )
     obligation = ReviewObligation(
-        id=_obligation_id(event_ref=event_ref, target=target, context=context),
+        id=_obligation_id(event_ref=trigger_event_ref, target=target, context=context),
         target=target,
-        trigger_ref=event_ref,
-        basis_refs=(assessment.change_ref,),
+        trigger_ref=trigger_event_ref,
+        basis_refs=normalized_basis,
         context=context,
         blocking=blocking,
         blocking_condition=(
@@ -168,6 +173,29 @@ def project_review_obligation(
         target=target,
         blocking=blocking,
         obligation=obligation,
+    )
+
+
+def project_review_obligation(
+    assessment: AffectedAssessment,
+    *,
+    event_ref: str,
+    context: str,
+    persistence: DistinctionGovernancePersistence,
+) -> ReviewProjection:
+    """Compatibility adapter from change revalidation into shared review projection."""
+
+    disposition = assessment.revalidation_disposition or RevalidationDisposition(
+        action=_disposition(assessment),
+        rationale_refs=list(assessment.reason_refs),
+    )
+    return project_review_obligation_from_disposition(
+        trigger_event_ref=event_ref,
+        target=assessment.affected_ref,
+        context=context,
+        disposition=disposition,
+        basis_refs=(assessment.change_ref,),
+        persistence=persistence,
     )
 
 
