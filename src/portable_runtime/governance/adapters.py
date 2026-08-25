@@ -9,6 +9,7 @@ from portable_runtime.records.authorization import (
     AuthorizationGrant,
     AuthorizationUse,
     CanonicalAuthorizationRequest,
+    EffectClass,
     create_authorization_use,
     is_authorized_for,
 )
@@ -18,8 +19,12 @@ def governance_capability(operation: str) -> str:
     return f"governance.{operation}"
 
 
-def governance_effect_class(operation: str) -> str:
-    if operation in {"apply_qualification_transition", "apply_activation_transition", "apply_review_discharge"}:
+def governance_effect_class(operation: str) -> EffectClass:
+    if operation in {
+        "apply_qualification_transition",
+        "apply_activation_transition",
+        "apply_review_discharge",
+    }:
         return "write-local"
     return "read"
 
@@ -35,7 +40,7 @@ def canonical_authorization_request(request: AuthorityRequest) -> CanonicalAutho
         actor_ref=request.actor,
         resource_ref=request.target.resource_ref,
         subject_version_refs=versions,
-        effect_class=governance_effect_class(request.operation),  # type: ignore[arg-type]
+        effect_class=governance_effect_class(request.operation),
     )
 
 
@@ -80,7 +85,8 @@ class CanonicalFreshnessAdapter:
     The adapter intentionally reads the store on every call. When invoked from
     a SQLite governance commit it reads through the same connection while the
     governance transaction is held, closing the semantic-check/commit gap for
-    canonical runtime basis records.
+    canonical runtime basis records. Ambiguous IDs fail closed rather than
+    selecting a store bucket by iteration order.
     """
 
     def __init__(self, store: Any) -> None:
@@ -88,11 +94,15 @@ class CanonicalFreshnessAdapter:
 
     def __call__(self, basis_ref: str) -> str | None:
         state = self.store.export_state()
-        for values in state.values():
-            for value in values:
-                if isinstance(value, dict) and str(value.get("id", "")) == basis_ref:
-                    return _canonical_payload_anchor(value)
-        return None
+        matches = [
+            value
+            for values in state.values()
+            for value in values
+            if isinstance(value, dict) and str(value.get("id", "")) == basis_ref
+        ]
+        if len(matches) != 1:
+            return None
+        return _canonical_payload_anchor(matches[0])
 
     def capture(self, basis_refs: list[str] | tuple[str, ...]) -> tuple[tuple[str, str], ...] | None:
         captured: list[tuple[str, str]] = []
