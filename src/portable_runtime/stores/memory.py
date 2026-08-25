@@ -102,6 +102,29 @@ class InMemoryStateStore:
             self._save("run", run)
         return run
 
+    def commit_verified_outcome(self, request: Any) -> BaseRecord:
+        """Atomically commit one verification-authorized confirmed Outcome."""
+        from portable_runtime.records.verified_outcome_commit import (
+            prepare_verified_outcome_commit,
+            same_verified_outcome_semantics,
+        )
+
+        with self.transaction():
+            prepared = prepare_verified_outcome_commit(self, request)
+            existing = self.get_record(prepared.outcome.id)
+            if existing is not None:
+                if not same_verified_outcome_semantics(existing, prepared.outcome):
+                    raise ValueError("verified-outcome deterministic identity rebound")
+                for event in prepared.events:
+                    persisted = self.get_event(event.id)
+                    if persisted is None or not same_verified_outcome_semantics(persisted, event):
+                        raise ValueError("verified-outcome authority event graph incomplete")
+                return existing
+            self._save("record", prepared.outcome)
+            for event in prepared.events:
+                self.append_event(event)
+            return prepared.outcome
+
     def _validate_candidate_write(self, kind: str, value: BaseModel) -> None:
         """Validate semantic writes against the full current graph."""
         from portable_runtime.protocol.validation import assert_valid_candidate_write
