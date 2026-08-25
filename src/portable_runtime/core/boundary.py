@@ -11,6 +11,7 @@ from portable_runtime.core.boundary_stages import (
     BoundaryStagePlan,
     InvocationStagePlan,
     ReliabilityStageInput,
+    abort_preinvocation_records,
     commit_execution_projection,
     evaluate_reliability_stage,
     precommit_execution_records,
@@ -74,6 +75,7 @@ CODE_QUALIFICATION_CHANGED = "QualificationChanged"
 CODE_GOVERNANCE_BLOCKED = "GovernanceBlocked"
 CODE_GOVERNANCE_UNAVAILABLE = "GovernanceUnavailable"
 CODE_GOVERNANCE_STALE = "GovernanceStale"
+CODE_GOVERNANCE_CHANGED = "GovernanceChanged"
 BOUNDARY_ERROR_CODES = {
     CODE_FENCING_REJECTED,
     CODE_FENCING_UNAVAILABLE,
@@ -104,6 +106,7 @@ BOUNDARY_ERROR_CODES = {
     CODE_GOVERNANCE_BLOCKED,
     CODE_GOVERNANCE_UNAVAILABLE,
     CODE_GOVERNANCE_STALE,
+    CODE_GOVERNANCE_CHANGED,
 }
 
 _EffectClass = Literal["pure", "idempotent", "deduplicatable", "reconcilable", "irreversible-opaque"]
@@ -165,6 +168,54 @@ def _int_or_none(value: Any) -> int | None:
     except (TypeError, ValueError):
         return None
     return parsed if parsed >= 1 else None
+
+
+def _governance_recheck_failure(reference: Any, current: Any) -> tuple[str, str] | None:
+    if current.status == "unavailable":
+        return CODE_GOVERNANCE_UNAVAILABLE, current.reason
+    if current.status == "stale":
+        return CODE_GOVERNANCE_STALE, current.reason
+    if current.status not in {"allowed", "not-applicable"}:
+        return (
+            CODE_GOVERNANCE_CHANGED,
+            f"governance use judgment changed after admission: {current.reason}",
+        )
+    if (
+        current.status != reference.status
+        or current.requirement_digest != reference.requirement_digest
+        or current.snapshot_digest != reference.snapshot_digest
+    ):
+        return (
+            CODE_GOVERNANCE_CHANGED,
+            "governance use judgment no longer matches the admitted snapshot",
+        )
+    return None
+
+
+def _governance_permit_failure(permit: InvocationPermit, current: Any) -> tuple[str, str] | None:
+    if current.status == "unavailable":
+        return CODE_GOVERNANCE_UNAVAILABLE, current.reason
+    if current.status == "stale":
+        return CODE_GOVERNANCE_STALE, current.reason
+    if current.status not in {"allowed", "not-applicable"}:
+        return (
+            CODE_GOVERNANCE_CHANGED,
+            f"governance use judgment changed before reality exit: {current.reason}",
+        )
+    applicable = current.status == "allowed"
+    if (
+        permit.governance_applicable != applicable
+        or not permit.governance_requirement_digest
+        or not permit.governance_snapshot_digest
+        or permit.governance_requirement_digest != current.requirement_digest
+        or permit.governance_snapshot_digest != current.snapshot_digest
+    ):
+        return (
+            CODE_GOVERNANCE_CHANGED,
+            "invocation permit governance binding does not match current admission",
+        )
+    return None
+
 
 class RealityBoundary:
     def __init__(self, store: Any | None = None, registry: Any | None = None, *, routing: Any | None = None, policy_engine: Any | None = None, reliability: ReliabilityControls | None = None, runtime_id: str = "runtime", contract_registry: CapabilityContractRegistry | None = None, effect_registry: CapabilityEffectRegistry | None = None, governance_requirement_resolver: GovernanceUseRequirementResolver | None = None) -> None:
@@ -826,11 +877,41 @@ class RealityBoundary:
             except Exception as exc:  # noqa: BLE001
                 _append_event(store, CODE_QUALIFICATION_CHANGED, request.id, {"reason": str(exc), "provider_id": provider_id})
                 return self._error_result(request, CODE_QUALIFICATION_CHANGED, f"qualification revalidation failed: {exc}", provider_id=provider_id)
+        refreshed_governance = GovernanceUseAdmission(store).evaluate(
+            request,
+            self.governance_requirement_resolver,
+        )
+        governance_failure = _governance_recheck_failure(governance, refreshed_governance)
+        if governance_failure is not None:
+            code, reason = governance_failure
+            _append_event(
+                store,
+                code,
+                request.id,
+                {"reason": reason, "provider_id": provider_id, "phase": "post-routing"},
+            )
+            _append_event(
+                store,
+                "InvocationBlocked",
+                request.id,
+                {"code": code, "reason": reason, "phase": "post-routing"},
+            )
+            return self._error_result(
+                request,
+                code,
+                reason,
+                provider_id=provider_id,
+                governance_snapshot_digest=refreshed_governance.snapshot_digest,
+            )
+        governance = refreshed_governance
         permit = InvocationPermit.issue(
             request,
             provider_id=provider_id,
             qualification_digest=assessment.digest if assessment is not None else "",
             lease_generation=_extract_lease_generation(request) or 0,
+            governance_applicable=governance.status == "allowed",
+            governance_requirement_digest=governance.requirement_digest,
+            governance_snapshot_digest=governance.snapshot_digest,
         )
         # From this point onward all precommit, fencing and provider-facing
         # work consumes the permit's reconstructed snapshot, never the
@@ -884,11 +965,87 @@ class RealityBoundary:
             if reliability_started and hasattr(self.reliability, "complete_action"):
                 _call_supported(self.reliability.complete_action, side_effect=True)
             return self._error_result(request, CODE_ROUTING_UNAVAILABLE, f"provider lookup failed: {exc}", provider_id=provider_id)
+        def abort_before_reality_exit(code: str, reason: str) -> CapabilityResult:
+            nonlocal reliability_started
+            if reliability_started and hasattr(self.reliability, "complete_action"):
+                try:
+                    _call_supported(self.reliability.complete_action, side_effect=True)
+                except Exception:
+                    pass
+                reliability_started = False
+            abort = abort_preinvocation_records(
+                store,
+                request,
+                provider_id=provider_id,
+                records=records,
+                code=code,
+                reason=reason,
+            )
+            if abort.error is not None:
+                abort_reason = (
+                    f"pre-invocation abort projection failed after {code}: {abort.error}"
+                )
+                _append_event(
+                    store,
+                    CODE_PRECOMMIT_FAILED,
+                    request.id,
+                    {"reason": abort_reason, "provider_id": provider_id},
+                )
+                return self._error_result(
+                    request,
+                    CODE_PRECOMMIT_FAILED,
+                    abort_reason,
+                    provider_id=provider_id,
+                )
+            details = {
+                "code": code,
+                "reason": reason,
+                "provider_id": provider_id,
+                "phase": "before-reality-exit",
+            }
+            _append_event(store, code, request.id, details)
+            _append_event(store, "InvocationAbortedBeforeRealityExit", request.id, details)
+            _append_event(store, "InvocationBlocked", request.id, details)
+            return self._error_result(
+                request,
+                code,
+                reason,
+                provider_id=provider_id,
+                governance_snapshot_digest=permit.governance_snapshot_digest,
+            )
+
+        if assessment is not None and store is not None:
+            try:
+                if not assessment.refresh_matches(store, request):
+                    return abort_before_reality_exit(
+                        CODE_QUALIFICATION_CHANGED,
+                        "authoritative qualification facts changed before reality exit",
+                    )
+            except QualificationResolutionError as exc:
+                return abort_before_reality_exit(CODE_QUALIFICATION_CHANGED, str(exc))
+            except Exception as exc:  # noqa: BLE001
+                return abort_before_reality_exit(
+                    CODE_QUALIFICATION_CHANGED,
+                    f"qualification final revalidation failed: {exc}",
+                )
+
+        final_governance = GovernanceUseAdmission(store).evaluate(
+            request,
+            self.governance_requirement_resolver,
+        )
+        governance_failure = _governance_permit_failure(permit, final_governance)
+        if governance_failure is not None:
+            code, reason = governance_failure
+            return abort_before_reality_exit(code, reason)
+
         context = InvocationContext(runtime_id=self.runtime_id, work_id=execution_request.work_id, run_id=execution_request.run_id, lease_generation=permit.lease_generation, idempotency_key=execution_request.idempotency_key)
         context.metadata.update(execution_request.metadata or {})
         context.metadata.update(
             {
                 "qualification_digest": permit.qualification_digest,
+                "governance_applicable": permit.governance_applicable,
+                "governance_requirement_digest": permit.governance_requirement_digest,
+                "governance_snapshot_digest": permit.governance_snapshot_digest,
                 "invocation_permit_provider": permit.provider_id,
                 "invocation_permit_request": permit.request_digest,
             }

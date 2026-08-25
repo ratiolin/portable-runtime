@@ -79,6 +79,15 @@ class QualificationRef(BaseModel):
         )
 
 
+GOVERNANCE_NOT_APPLICABLE_DIGEST = hashlib.sha256(
+    json.dumps(
+        {"schema": "governance-use-requirement-v1", "applicable": False},
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode()
+).hexdigest()
+
+
 @dataclass(frozen=True)
 class InvocationPermit:
     """Internally scoped permit bound to an immutable request snapshot.
@@ -95,6 +104,9 @@ class InvocationPermit:
     provider_id: str
     lease_generation: int
     request_snapshot: str
+    governance_applicable: bool = False
+    governance_requirement_digest: str = GOVERNANCE_NOT_APPLICABLE_DIGEST
+    governance_snapshot_digest: str = GOVERNANCE_NOT_APPLICABLE_DIGEST
     issued_at: datetime = field(default_factory=lambda: datetime.now(UTC))
 
     @classmethod
@@ -105,12 +117,30 @@ class InvocationPermit:
         provider_id: str,
         qualification_digest: str,
         lease_generation: int,
+        governance_applicable: bool = False,
+        governance_requirement_digest: str | None = None,
+        governance_snapshot_digest: str | None = None,
     ) -> InvocationPermit:
         request_payload = (
             request.model_dump(mode="json")
             if hasattr(request, "model_dump")
             else dict(request)
         )
+        if governance_applicable:
+            if not governance_requirement_digest or not governance_snapshot_digest:
+                raise QualificationResolutionError(
+                    "governed invocation permit requires governance requirement and snapshot digests"
+                )
+            effective_governance_requirement_digest = governance_requirement_digest
+            effective_governance_snapshot_digest = governance_snapshot_digest
+        else:
+            effective_governance_requirement_digest = (
+                governance_requirement_digest or GOVERNANCE_NOT_APPLICABLE_DIGEST
+            )
+            effective_governance_snapshot_digest = (
+                governance_snapshot_digest or GOVERNANCE_NOT_APPLICABLE_DIGEST
+            )
+
         authority_payload = {
             "request_id": request_payload.get("id"),
             "capability": request_payload.get("capability"),
@@ -123,6 +153,11 @@ class InvocationPermit:
             "lease_generation": lease_generation,
             "idempotency_key": request_payload.get("idempotency_key"),
             "qualification_digest": qualification_digest,
+            "governance": {
+                "applicable": governance_applicable,
+                "requirement_digest": effective_governance_requirement_digest,
+                "snapshot_digest": effective_governance_snapshot_digest,
+            },
         }
         snapshot_payload = {
             "request": request_payload,
