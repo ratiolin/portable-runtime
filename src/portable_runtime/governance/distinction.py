@@ -296,9 +296,16 @@ def authority_target_covers(
         return False
     if granted.scope is not None and granted.scope != requested.scope:
         return False
-    if granted.partition is not None and canonical_partition(granted.partition) != canonical_partition(requested.partition or ()): 
+    if (
+        granted.partition is not None
+        and canonical_partition(granted.partition)
+        != canonical_partition(requested.partition or ())
+    ):
         return False
-    return granted.operational_anchor is None or granted.operational_anchor == requested.operational_anchor
+    return (
+        granted.operational_anchor is None
+        or granted.operational_anchor == requested.operational_anchor
+    )
 
 
 def _legacy_target_covers(granted: str, requested: GovernanceAuthorityTarget) -> bool:
@@ -406,9 +413,10 @@ def blocking_condition_matches(
     effective_scope = use.requested_scope or state_scope
     if condition.scope_any and not condition.scope_any.intersection(effective_scope):
         return False
-    if condition.scope_all and not condition.scope_all.issubset(effective_scope):
-        return False
-    return True
+    return not (
+        condition.scope_all
+        and not condition.scope_all.issubset(effective_scope)
+    )
 
 
 def obligation_key(
