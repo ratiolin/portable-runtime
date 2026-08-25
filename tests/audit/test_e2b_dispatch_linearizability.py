@@ -311,7 +311,7 @@ finally:
     if store is not None:
         store.close()
 '''
-        process = subprocess.Popen(
+        process = subprocess.Popen(  # noqa: S603 - controlled audit child, no user input
             [
                 sys.executable,
                 "-c",
