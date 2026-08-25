@@ -70,6 +70,7 @@ jobs:
           tests/conformance/test_outcome_confirmed_trigger_resolution.py
           tests/conformance/test_outcome_governance_applicability.py
           tests/conformance/test_outcome_impact_judgment.py
+          tests/conformance/test_outcome_impact_commit.py
           tests/conformance/test_responsibility_separation_contracts.py
           tests/conformance/test_distinction_governance.py
           tests/conformance/test_distinction_governance_persistence.py
