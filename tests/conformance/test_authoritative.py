@@ -114,8 +114,10 @@ class FailingPrecommitStore(InMemoryStateStore):
 
 
 class FailingResultCommitStore(InMemoryStateStore):
-    def save_outcome(self, value: Any) -> None:
-        raise RuntimeError("result journal unavailable")
+    def save_action(self, value: Any) -> None:
+        if getattr(value, "status", "") != "running":
+            raise RuntimeError("execution projection unavailable")
+        super().save_action(value)
 
 
 class ExplodingPolicy:
