@@ -10,14 +10,14 @@ from typing import Any, Literal
 from portable_runtime.core.capabilities import CapabilityRequest
 from portable_runtime.governance.canonical import (
     GOVERNANCE_HISTORY_EVENT_TYPES,
-    obligation_payload,
     reconstruct_governance_history,
-    state_payload,
 )
 from portable_runtime.governance.distinction import (
     GovernanceConfiguration,
+    ReviewObligation,
     UseContext,
     blocking_review_open,
+    obligation_blocks,
     scope_matches,
 )
 
@@ -28,6 +28,23 @@ GovernanceUseAdmissionStatus = Literal[
     "unavailable",
     "stale",
 ]
+
+_GOVERNANCE_USE_REQUIREMENT_SCHEMA = "governance-use-requirement-v1"
+_GOVERNANCE_USE_SNAPSHOT_SCHEMA = "governance-use-snapshot-v1"
+
+
+def _digest_payload(payload: dict[str, Any]) -> str:
+    raw = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+    return hashlib.sha256(raw.encode()).hexdigest()
+
+
+def governance_not_applicable_digest() -> str:
+    return _digest_payload(
+        {
+            "schema": _GOVERNANCE_USE_REQUIREMENT_SCHEMA,
+            "applicable": False,
+        }
+    )
 
 
 @dataclass(frozen=True)
@@ -53,8 +70,13 @@ class GovernanceUseAdmissionDecision:
     status: GovernanceUseAdmissionStatus
     scheme_id: str | None = None
     use_context: UseContext | None = None
+    requirement_digest: str | None = None
     snapshot_digest: str | None = None
     reason: str = ""
+
+    @property
+    def applicable(self) -> bool:
+        return self.status != "not-applicable"
 
 
 class GovernanceUseAdmission:
@@ -127,37 +149,84 @@ class GovernanceUseAdmission:
         return False
 
     @staticmethod
+    def _requirement_digest(requirement: GovernanceUseRequirement) -> str:
+        return _digest_payload(
+            {
+                "schema": _GOVERNANCE_USE_REQUIREMENT_SCHEMA,
+                "applicable": True,
+                "scheme_id": requirement.scheme_id,
+                "use_context": {
+                    "name": requirement.use_context.name,
+                    "requested_scope": sorted(requirement.use_context.requested_scope),
+                },
+            }
+        )
+
+    @staticmethod
+    def _blocking_predicate_payload(obligation: ReviewObligation) -> dict[str, Any]:
+        condition = obligation.blocking_condition
+        if condition is None:
+            return {
+                "mode": "context",
+                "context": obligation.context,
+            }
+        return {
+            "mode": "condition",
+            "context_names": sorted(condition.context_names),
+            "scope_any": sorted(condition.scope_any),
+            "scope_all": sorted(condition.scope_all),
+        }
+
+    @classmethod
     def _snapshot_digest(
+        cls,
         config: GovernanceConfiguration,
         requirement: GovernanceUseRequirement,
     ) -> str:
+        """Digest only facts that can change this exact use-admission judgment."""
+
         state = config.states[requirement.scheme_id]
-        obligations = [
-            obligation_payload(obligation)
+        relevant_blockers = [
+            cls._blocking_predicate_payload(obligation)
             for obligation in config.runtime.obligations.values()
             if obligation.target == requirement.scheme_id
+            and obligation_blocks(
+                obligation,
+                requirement.use_context,
+                state.scope,
+            )
         ]
-        obligations.sort(key=lambda item: str(item.get("id", "")))
-        payload = {
-            "scheme_id": requirement.scheme_id,
-            "use_context": {
-                "name": requirement.use_context.name,
-                "requested_scope": sorted(requirement.use_context.requested_scope),
-            },
-            "state": state_payload(requirement.scheme_id, state),
-            "open_obligations": obligations,
-        }
-        raw = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
-        return hashlib.sha256(raw.encode()).hexdigest()
+        relevant_blockers.sort(
+            key=lambda item: json.dumps(item, sort_keys=True, separators=(",", ":"))
+        )
+        return _digest_payload(
+            {
+                "schema": _GOVERNANCE_USE_SNAPSHOT_SCHEMA,
+                "scheme_id": requirement.scheme_id,
+                "use_context": {
+                    "name": requirement.use_context.name,
+                    "requested_scope": sorted(requirement.use_context.requested_scope),
+                },
+                "projection": {
+                    "qualification": state.qualification,
+                    "activation": state.activation,
+                    "scope": sorted(state.scope),
+                },
+                "relevant_blockers": relevant_blockers,
+            }
+        )
 
     def evaluate(
         self,
         request: CapabilityRequest,
         resolver: GovernanceUseRequirementResolver | None,
     ) -> GovernanceUseAdmissionDecision:
+        not_applicable_digest = governance_not_applicable_digest()
         if resolver is None:
             return GovernanceUseAdmissionDecision(
                 status="not-applicable",
+                requirement_digest=not_applicable_digest,
+                snapshot_digest=not_applicable_digest,
                 reason="no runtime governance-use requirement",
             )
         try:
@@ -170,12 +239,17 @@ class GovernanceUseAdmission:
         if requirement is None:
             return GovernanceUseAdmissionDecision(
                 status="not-applicable",
+                requirement_digest=not_applicable_digest,
+                snapshot_digest=not_applicable_digest,
                 reason="capability use is not governance-bound",
             )
+
+        requirement_digest = self._requirement_digest(requirement)
         if not requirement.scheme_id:
             return GovernanceUseAdmissionDecision(
                 status="unavailable",
                 use_context=requirement.use_context,
+                requirement_digest=requirement_digest,
                 reason="governance-use requirement has no scheme identity",
             )
 
@@ -186,6 +260,7 @@ class GovernanceUseAdmission:
                 status="unavailable",
                 scheme_id=requirement.scheme_id,
                 use_context=requirement.use_context,
+                requirement_digest=requirement_digest,
                 reason=f"canonical governance history unavailable: {exc}",
             )
 
@@ -195,6 +270,7 @@ class GovernanceUseAdmission:
                 status="unavailable",
                 scheme_id=requirement.scheme_id,
                 use_context=requirement.use_context,
+                requirement_digest=requirement_digest,
                 reason=(
                     "legacy governance projection requires explicit migration"
                     if legacy
@@ -210,6 +286,7 @@ class GovernanceUseAdmission:
                 status="unavailable",
                 scheme_id=requirement.scheme_id,
                 use_context=requirement.use_context,
+                requirement_digest=requirement_digest,
                 reason=f"canonical governance history is not usable: {exc}",
             )
 
@@ -220,6 +297,7 @@ class GovernanceUseAdmission:
                 status="unavailable",
                 scheme_id=requirement.scheme_id,
                 use_context=requirement.use_context,
+                requirement_digest=requirement_digest,
                 reason=f"canonical governance history recheck failed: {exc}",
             )
         if self._event_fingerprint(after) != before_digest:
@@ -227,6 +305,7 @@ class GovernanceUseAdmission:
                 status="stale",
                 scheme_id=requirement.scheme_id,
                 use_context=requirement.use_context,
+                requirement_digest=requirement_digest,
                 reason="canonical governance history changed during admission",
             )
 
@@ -237,6 +316,7 @@ class GovernanceUseAdmission:
                 status="unavailable",
                 scheme_id=requirement.scheme_id,
                 use_context=requirement.use_context,
+                requirement_digest=requirement_digest,
                 reason="canonical governance history has no required distinction projection",
             )
 
@@ -246,6 +326,7 @@ class GovernanceUseAdmission:
                 status="blocked",
                 scheme_id=requirement.scheme_id,
                 use_context=requirement.use_context,
+                requirement_digest=requirement_digest,
                 snapshot_digest=digest,
                 reason=f"distinction qualification is {state.qualification!r}",
             )
@@ -254,6 +335,7 @@ class GovernanceUseAdmission:
                 status="blocked",
                 scheme_id=requirement.scheme_id,
                 use_context=requirement.use_context,
+                requirement_digest=requirement_digest,
                 snapshot_digest=digest,
                 reason=f"distinction activation is {state.activation!r}",
             )
@@ -262,6 +344,7 @@ class GovernanceUseAdmission:
                 status="blocked",
                 scheme_id=requirement.scheme_id,
                 use_context=requirement.use_context,
+                requirement_digest=requirement_digest,
                 snapshot_digest=digest,
                 reason="requested use scope is outside the governed distinction scope",
             )
@@ -274,6 +357,7 @@ class GovernanceUseAdmission:
                 status="blocked",
                 scheme_id=requirement.scheme_id,
                 use_context=requirement.use_context,
+                requirement_digest=requirement_digest,
                 snapshot_digest=digest,
                 reason="blocking governance review is open for this use context",
             )
@@ -281,6 +365,7 @@ class GovernanceUseAdmission:
             status="allowed",
             scheme_id=requirement.scheme_id,
             use_context=requirement.use_context,
+            requirement_digest=requirement_digest,
             snapshot_digest=digest,
             reason="canonical governance snapshot permits this use",
         )
