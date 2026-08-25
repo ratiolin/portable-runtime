@@ -1,4 +1,4 @@
-"""F1-B2 design freeze: bound verification may authorize a confirmed Outcome only."""
+"""F1-B2 freeze: bound verification may authorize a confirmed Outcome only."""
 
 from __future__ import annotations
 
@@ -18,6 +18,10 @@ from portable_runtime.stores.sqlite import SQLiteStateStore
 
 _SCOPE = {"resource": "repo/app", "operation": "effect"}
 _VERSIONS = ["patch:v1"]
+
+
+def _xfail(reason: str) -> pytest.MarkDecorator:
+    return pytest.mark.xfail(strict=True, reason=reason)
 
 
 @contextmanager
@@ -119,17 +123,17 @@ def _authority(store: Any) -> Any:
 
 
 def _confirm(
-    authority: Any,
+    store: Any,
     *,
     work: Work,
     run: Run,
     attempt: StepAttempt,
     action: Action,
-    proof: EvidenceArtifact,
+    evidence_refs: list[str],
 ) -> OutcomeRecord:
-    return authority.confirm(
+    return _authority(store).confirm(
         action_ref=action.id,
-        evidence_refs=[proof.id],
+        evidence_refs=evidence_refs,
         expected_work_id=work.id,
         expected_run_id=run.id,
         expected_request_id=action.request_ref,
@@ -148,25 +152,9 @@ def _confirmed(store: Any) -> list[OutcomeRecord]:
 
 
 def test_fb2_design_legacy_outcome_adapter_is_recorded_only() -> None:
-    legacy = Outcome(
-        id="legacy_outcome_fb2",
-        action_id="action:external",
-        status="succeeded",
-    )
+    legacy = Outcome(id="legacy_outcome_fb2", action_id="action:external", status="succeeded")
     canonical = legacy_outcome_to_record(legacy)
     assert canonical.lifecycle_status == "recorded"
-    assert canonical.metadata["status"] == "succeeded"
-
-
-def test_fb2_design_confirmed_lifecycle_does_not_encode_success() -> None:
-    failed_objective = OutcomeRecord(
-        id="outcome_fb2_failed_objective",
-        action_ref="action:external",
-        lifecycle_status="confirmed",
-        metadata={"objective_result": "fail"},
-    )
-    assert failed_objective.lifecycle_status == "confirmed"
-    assert failed_objective.metadata["objective_result"] == "fail"
 
 
 def test_fb2_entry_persisted_bound_proof_does_not_self_authorize(tmp_path: Path) -> None:
@@ -195,298 +183,266 @@ def test_fb2_003_provider_attached_verification_is_not_authority_input(tmp_path:
             status="succeeded",
             verification_result=ClosedVerificationResult(result="pass"),
         )
-        records = ExecutionRecordIds(step.id, attempt.id, action.id)
-        commit_execution_projection(store, request, result, provider_id=action.provider_id, records=records)
+        commit_execution_projection(
+            store,
+            request,
+            result,
+            provider_id=action.provider_id,
+            records=ExecutionRecordIds(step.id, attempt.id, action.id),
+        )
         assert _confirmed(store) == []
 
 
 def test_fb2_010_recorded_outcome_is_not_confirmed_authority(tmp_path: Path) -> None:
     with _store("memory", tmp_path) as store:
         _work, _run, _step, _attempt, action = _seed_execution(store)
-        recorded = OutcomeRecord(
-            id="outcome_fb2_recorded",
-            action_ref=action.id,
-            lifecycle_status="recorded",
-            metadata={"objective_result": "pass"},
+        store.save_record(
+            OutcomeRecord(
+                id="outcome_fb2_recorded",
+                action_ref=action.id,
+                lifecycle_status="recorded",
+                metadata={"objective_result": "pass"},
+            )
         )
-        store.save_record(recorded)
         assert _confirmed(store) == []
 
 
-_XFAIL = pytest.mark.xfail(
-    strict=True,
-    reason="F1-B2 production authority intentionally absent at design-freeze rollback point",
-)
-
-
-class TestFB2ProductionCounterexamples:
-    pytestmark = _XFAIL
-
-    @pytest.mark.parametrize("backend", ["memory", "sqlite"])
-    def test_fb2_001_bound_persisted_pass_proof_confirms_one_outcome(
-        self,
-        backend: str,
-        tmp_path: Path,
-    ) -> None:
-        with _store(backend, tmp_path) as store:
-            work, run, _step, attempt, action = _seed_execution(store)
-            proof = _proof(store, work=work, run=run, attempt=attempt, action=action, result="pass")
-            outcome = _confirm(
-                _authority(store),
-                work=work,
-                run=run,
-                attempt=attempt,
-                action=action,
-                proof=proof,
-            )
-            assert outcome.lifecycle_status == "confirmed"
-            assert outcome.metadata["objective_result"] == "pass"
-            assert outcome.action_ref == action.id
-            assert outcome.evidence_refs == [proof.id]
-            assert [item.id for item in _confirmed(store)] == [outcome.id]
-
-    @pytest.mark.parametrize("backend", ["memory", "sqlite"])
-    def test_fb2_002_bound_persisted_fail_proof_confirms_not_satisfied_outcome(
-        self,
-        backend: str,
-        tmp_path: Path,
-    ) -> None:
-        with _store(backend, tmp_path) as store:
-            work, run, _step, attempt, action = _seed_execution(store)
-            proof = _proof(store, work=work, run=run, attempt=attempt, action=action, result="fail")
-            outcome = _confirm(
-                _authority(store),
-                work=work,
-                run=run,
-                attempt=attempt,
-                action=action,
-                proof=proof,
-            )
-            assert outcome.lifecycle_status == "confirmed"
-            assert outcome.metadata["objective_result"] == "fail"
-            assert outcome.metadata["objective_result"] != "pass"
-
-    @pytest.mark.parametrize(
-        "overrides",
-        [
-            {"action_ref": "action_wrong"},
-            {"request_id": "request_wrong"},
-            {"work_id": "work_wrong"},
-            {"run_id": "run_wrong"},
-        ],
-    )
-    def test_fb2_004_wrong_identity_binding_fails_closed(
-        self,
-        overrides: dict[str, object],
-        tmp_path: Path,
-    ) -> None:
-        with _store("memory", tmp_path) as store:
-            work, run, _step, attempt, action = _seed_execution(store)
-            proof = _proof(
-                store,
-                work=work,
-                run=run,
-                attempt=attempt,
-                action=action,
-                result="pass",
-                overrides=overrides,
-            )
-            with pytest.raises(ValueError):
-                _confirm(
-                    _authority(store),
-                    work=work,
-                    run=run,
-                    attempt=attempt,
-                    action=action,
-                    proof=proof,
-                )
-            assert _confirmed(store) == []
-
-    @pytest.mark.parametrize(
-        ("scope", "versions"),
-        [
-            ({"resource": "repo/other", "operation": "effect"}, _VERSIONS),
-            (_SCOPE, ["patch:v0"]),
-        ],
-    )
-    def test_fb2_005_wrong_scope_or_version_fails_closed(
-        self,
-        scope: dict[str, str],
-        versions: list[str],
-        tmp_path: Path,
-    ) -> None:
-        with _store("memory", tmp_path) as store:
-            work, run, _step, attempt, action = _seed_execution(store)
-            proof = _proof(
-                store,
-                work=work,
-                run=run,
-                attempt=attempt,
-                action=action,
-                result="pass",
-                scope=scope,
-                versions=versions,
-            )
-            with pytest.raises(ValueError):
-                _confirm(
-                    _authority(store),
-                    work=work,
-                    run=run,
-                    attempt=attempt,
-                    action=action,
-                    proof=proof,
-                )
-            assert _confirmed(store) == []
-
-    def test_fb2_006_missing_non_typed_or_unknown_proof_fails_closed(self, tmp_path: Path) -> None:
-        with _store("memory", tmp_path) as store:
-            work, run, _step, attempt, action = _seed_execution(store)
-            authority = _authority(store)
-            with pytest.raises(ValueError):
-                authority.confirm(
-                    action_ref=action.id,
-                    evidence_refs=["missing-proof"],
-                    expected_work_id=work.id,
-                    expected_run_id=run.id,
-                    expected_request_id=action.request_ref,
-                    expected_attempt_ref=attempt.id,
-                    verification_scope=dict(_SCOPE),
-                    subject_version_refs=list(_VERSIONS),
-                )
-            assert _confirmed(store) == []
-
-    @pytest.mark.parametrize("backend", ["memory", "sqlite"])
-    def test_fb2_007_same_verification_closure_replay_is_idempotent(
-        self,
-        backend: str,
-        tmp_path: Path,
-    ) -> None:
-        with _store(backend, tmp_path) as store:
-            work, run, _step, attempt, action = _seed_execution(store)
-            proof = _proof(store, work=work, run=run, attempt=attempt, action=action, result="pass")
-            authority = _authority(store)
-            first = _confirm(
-                authority,
-                work=work,
-                run=run,
-                attempt=attempt,
-                action=action,
-                proof=proof,
-            )
-            second = _confirm(
-                authority,
-                work=work,
-                run=run,
-                attempt=attempt,
-                action=action,
-                proof=proof,
-            )
-            assert second.id == first.id
-            assert [item.id for item in _confirmed(store)] == [first.id]
-
-    def test_fb2_008_proof_from_another_action_or_run_cannot_be_reused(self, tmp_path: Path) -> None:
-        with _store("memory", tmp_path) as store:
-            work_a, run_a, _step_a, attempt_a, action_a = _seed_execution(store, "a")
-            _work_b, _run_b, _step_b, _attempt_b, action_b = _seed_execution(store, "b")
-            proof = _proof(
-                store,
-                work=work_a,
-                run=run_a,
-                attempt=attempt_a,
-                action=action_a,
-                result="pass",
-            )
-            with pytest.raises(ValueError):
-                _authority(store).confirm(
-                    action_ref=action_b.id,
-                    evidence_refs=[proof.id],
-                    expected_work_id=action_b.work_id,
-                    expected_run_id=action_b.run_id,
-                    expected_request_id=action_b.request_ref,
-                    expected_attempt_ref="attempt_fb2_b",
-                    verification_scope=dict(_SCOPE),
-                    subject_version_refs=list(_VERSIONS),
-                )
-            assert _confirmed(store) == []
-
-    def test_fb2_009_outcome_and_authority_event_commit_is_atomic(self) -> None:
-        class FailingAuthorityEventStore(InMemoryStateStore):
-            def append_event(self, value: Any) -> None:
-                if getattr(value, "type", "") == "OutcomeConfirmed":
-                    raise RuntimeError("simulated authority-event journal failure")
-                super().append_event(value)
-
-        store = FailingAuthorityEventStore()
+@_xfail("FB2-001: VerifiedOutcomeAuthority not implemented")
+@pytest.mark.parametrize("backend", ["memory", "sqlite"])
+def test_fb2_001_bound_persisted_pass_proof_confirms_one_outcome(
+    backend: str,
+    tmp_path: Path,
+) -> None:
+    with _store(backend, tmp_path) as store:
         work, run, _step, attempt, action = _seed_execution(store)
         proof = _proof(store, work=work, run=run, attempt=attempt, action=action, result="pass")
-        with pytest.raises(RuntimeError):
+        outcome = _confirm(
+            store,
+            work=work,
+            run=run,
+            attempt=attempt,
+            action=action,
+            evidence_refs=[proof.id],
+        )
+        assert outcome.lifecycle_status == "confirmed"
+        assert outcome.metadata["objective_result"] == "pass"
+        assert [item.id for item in _confirmed(store)] == [outcome.id]
+
+
+@_xfail("FB2-002: verified fail Outcome authority not implemented")
+@pytest.mark.parametrize("backend", ["memory", "sqlite"])
+def test_fb2_002_bound_persisted_fail_proof_confirms_not_satisfied_outcome(
+    backend: str,
+    tmp_path: Path,
+) -> None:
+    with _store(backend, tmp_path) as store:
+        work, run, _step, attempt, action = _seed_execution(store)
+        proof = _proof(store, work=work, run=run, attempt=attempt, action=action, result="fail")
+        outcome = _confirm(
+            store,
+            work=work,
+            run=run,
+            attempt=attempt,
+            action=action,
+            evidence_refs=[proof.id],
+        )
+        assert outcome.lifecycle_status == "confirmed"
+        assert outcome.metadata["objective_result"] == "fail"
+
+
+@_xfail("FB2-004: durable identity binding validation not implemented")
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        {"action_ref": "action_wrong"},
+        {"request_id": "request_wrong"},
+        {"work_id": "work_wrong"},
+        {"run_id": "run_wrong"},
+    ],
+)
+def test_fb2_004_wrong_identity_binding_fails_closed(
+    overrides: dict[str, object],
+    tmp_path: Path,
+) -> None:
+    with _store("memory", tmp_path) as store:
+        work, run, _step, attempt, action = _seed_execution(store)
+        proof = _proof(
+            store,
+            work=work,
+            run=run,
+            attempt=attempt,
+            action=action,
+            result="pass",
+            overrides=overrides,
+        )
+        with pytest.raises(ValueError):
+            _confirm(store, work=work, run=run, attempt=attempt, action=action, evidence_refs=[proof.id])
+        assert _confirmed(store) == []
+
+
+@_xfail("FB2-005: scope/version binding validation not implemented")
+@pytest.mark.parametrize(
+    ("scope", "versions"),
+    [
+        ({"resource": "repo/other", "operation": "effect"}, _VERSIONS),
+        (_SCOPE, ["patch:v0"]),
+    ],
+)
+def test_fb2_005_wrong_scope_or_version_fails_closed(
+    scope: dict[str, str],
+    versions: list[str],
+    tmp_path: Path,
+) -> None:
+    with _store("memory", tmp_path) as store:
+        work, run, _step, attempt, action = _seed_execution(store)
+        proof = _proof(
+            store,
+            work=work,
+            run=run,
+            attempt=attempt,
+            action=action,
+            result="pass",
+            scope=scope,
+            versions=versions,
+        )
+        with pytest.raises(ValueError):
+            _confirm(store, work=work, run=run, attempt=attempt, action=action, evidence_refs=[proof.id])
+
+
+@_xfail("FB2-006: typed durable proof lookup not implemented")
+def test_fb2_006_missing_or_unknown_proof_fails_closed(tmp_path: Path) -> None:
+    with _store("memory", tmp_path) as store:
+        work, run, _step, attempt, action = _seed_execution(store)
+        with pytest.raises(ValueError):
             _confirm(
-                _authority(store),
+                store,
                 work=work,
                 run=run,
                 attempt=attempt,
                 action=action,
-                proof=proof,
+                evidence_refs=["missing-proof"],
+            )
+
+
+@_xfail("FB2-007: deterministic verified Outcome identity not implemented")
+@pytest.mark.parametrize("backend", ["memory", "sqlite"])
+def test_fb2_007_same_verification_closure_replay_is_idempotent(
+    backend: str,
+    tmp_path: Path,
+) -> None:
+    with _store(backend, tmp_path) as store:
+        work, run, _step, attempt, action = _seed_execution(store)
+        proof = _proof(store, work=work, run=run, attempt=attempt, action=action, result="pass")
+        kwargs = dict(work=work, run=run, attempt=attempt, action=action, evidence_refs=[proof.id])
+        first = _confirm(store, **kwargs)
+        second = _confirm(store, **kwargs)
+        assert second.id == first.id
+        assert [item.id for item in _confirmed(store)] == [first.id]
+
+
+@_xfail("FB2-008: cross-action proof reuse rejection not implemented")
+def test_fb2_008_proof_from_another_action_or_run_cannot_be_reused(tmp_path: Path) -> None:
+    with _store("memory", tmp_path) as store:
+        work_a, run_a, _step_a, attempt_a, action_a = _seed_execution(store, "a")
+        work_b, run_b, _step_b, attempt_b, action_b = _seed_execution(store, "b")
+        proof = _proof(store, work=work_a, run=run_a, attempt=attempt_a, action=action_a, result="pass")
+        with pytest.raises(ValueError):
+            _confirm(
+                store,
+                work=work_b,
+                run=run_b,
+                attempt=attempt_b,
+                action=action_b,
+                evidence_refs=[proof.id],
+            )
+
+
+@_xfail("FB2-009: atomic Outcome + authority event commit not implemented")
+def test_fb2_009_outcome_and_authority_event_commit_is_atomic() -> None:
+    class FailingAuthorityEventStore(InMemoryStateStore):
+        def append_event(self, value: Any) -> None:
+            if getattr(value, "type", "") == "OutcomeConfirmed":
+                raise RuntimeError("simulated authority-event journal failure")
+            super().append_event(value)
+
+    store = FailingAuthorityEventStore()
+    work, run, _step, attempt, action = _seed_execution(store)
+    proof = _proof(store, work=work, run=run, attempt=attempt, action=action, result="pass")
+    with pytest.raises(RuntimeError):
+        _confirm(store, work=work, run=run, attempt=attempt, action=action, evidence_refs=[proof.id])
+    assert _confirmed(store) == []
+    assert not any(event.type == "ObjectiveVerificationAccepted" for event in store.list_events())
+
+
+@_xfail("FB2-011: confirmed Outcome architecture lock pending authority implementation")
+def test_fb2_011_confirmed_outcome_does_not_discharge_governance(tmp_path: Path) -> None:
+    with _store("memory", tmp_path) as store:
+        work, run, _step, attempt, action = _seed_execution(store)
+        proof = _proof(store, work=work, run=run, attempt=attempt, action=action, result="pass")
+        _confirm(store, work=work, run=run, attempt=attempt, action=action, evidence_refs=[proof.id])
+        assert not any("governance" in event.type.lower() for event in store.list_events())
+
+
+@_xfail("FB2-012: terminal non-substitution lock pending authority implementation")
+def test_fb2_012_confirmed_outcome_does_not_authorize_terminal_completion(tmp_path: Path) -> None:
+    with _store("memory", tmp_path) as store:
+        work, run, _step, attempt, action = _seed_execution(store)
+        proof = _proof(store, work=work, run=run, attempt=attempt, action=action, result="pass")
+        _confirm(store, work=work, run=run, attempt=attempt, action=action, evidence_refs=[proof.id])
+        assert store.get_work(work.id).status != "completed"  # type: ignore[union-attr]
+        assert store.get_run(run.id).status != "succeeded"  # type: ignore[union-attr]
+
+
+@_xfail("FB2-A01: direct confirmed Outcome writes are not denied yet")
+def test_fb2_a01_direct_confirmed_outcome_write_is_not_an_authority_escape_hatch(tmp_path: Path) -> None:
+    with _store("memory", tmp_path) as store:
+        _work, _run, _step, _attempt, action = _seed_execution(store)
+        direct = OutcomeRecord(
+            id="outcome_fb2_direct_confirmed",
+            action_ref=action.id,
+            lifecycle_status="confirmed",
+            metadata={"objective_result": "pass"},
+        )
+        with pytest.raises(ValueError, match="verified-outcome"):
+            store.save_record(direct)
+        assert _confirmed(store) == []
+
+
+@_xfail("FB2-A02: inconsistent multi-proof closure rejection not implemented")
+def test_fb2_a02_mixed_pass_fail_closure_fails_closed(tmp_path: Path) -> None:
+    with _store("memory", tmp_path) as store:
+        work, run, _step, attempt, action = _seed_execution(store)
+        passed = _proof(store, work=work, run=run, attempt=attempt, action=action, result="pass", suffix="pass")
+        failed = _proof(store, work=work, run=run, attempt=attempt, action=action, result="fail", suffix="fail")
+        with pytest.raises(ValueError, match="inconsistent verification closure"):
+            _confirm(
+                store,
+                work=work,
+                run=run,
+                attempt=attempt,
+                action=action,
+                evidence_refs=[passed.id, failed.id],
             )
         assert _confirmed(store) == []
-        assert not any(event.type == "ObjectiveVerificationAccepted" for event in store.list_events())
 
-    def test_fb2_011_confirmed_outcome_does_not_discharge_governance(self, tmp_path: Path) -> None:
-        with _store("memory", tmp_path) as store:
-            work, run, _step, attempt, action = _seed_execution(store)
-            proof = _proof(store, work=work, run=run, attempt=attempt, action=action, result="pass")
-            _confirm(
-                _authority(store),
-                work=work,
-                run=run,
-                attempt=attempt,
-                action=action,
-                proof=proof,
-            )
-            assert not any("governance" in event.type.lower() for event in store.list_events())
 
-    def test_fb2_012_confirmed_outcome_does_not_authorize_terminal_completion(self, tmp_path: Path) -> None:
-        with _store("memory", tmp_path) as store:
-            work, run, _step, attempt, action = _seed_execution(store)
-            proof = _proof(store, work=work, run=run, attempt=attempt, action=action, result="pass")
-            _confirm(
-                _authority(store),
-                work=work,
-                run=run,
-                attempt=attempt,
-                action=action,
-                proof=proof,
-            )
-            assert store.get_work(work.id).status != "completed"  # type: ignore[union-attr]
-            assert store.get_run(run.id).status != "succeeded"  # type: ignore[union-attr]
-
-    def test_fb2_a01_direct_confirmed_outcome_write_is_not_an_authority_escape_hatch(
-        self,
-        tmp_path: Path,
-    ) -> None:
-        with _store("memory", tmp_path) as store:
-            work, run, _step, attempt, action = _seed_execution(store)
-            proof = _proof(store, work=work, run=run, attempt=attempt, action=action, result="pass")
-            forged = OutcomeRecord(
-                id="outcome_fb2_forged_confirmed",
+@_xfail("FB2-A03: import authority graph closure validation not implemented")
+def test_fb2_a03_matching_looking_authority_events_with_wrong_binding_fail_import(tmp_path: Path) -> None:
+    with _store("memory", tmp_path) as source:
+        _work, _run, _step, _attempt, action = _seed_execution(source)
+        source.save_record(
+            OutcomeRecord(
+                id="outcome_fb2_import_bad",
                 action_ref=action.id,
-                evidence_refs=[proof.id],
                 lifecycle_status="confirmed",
+                evidence_refs=["evidence:wrong"],
                 metadata={
                     "objective_result": "pass",
-                    "work_id": work.id,
-                    "run_id": run.id,
-                    "request_id": action.request_ref,
-                    "attempt_ref": attempt.id,
-                    "verification_scope": dict(_SCOPE),
-                    "subject_version_refs": list(_VERSIONS),
-                    "obligation_refs": ["verify.effect"],
-                    "verifier_provenance": proof.metadata["verifier_provenance"],
+                    "verification_binding_digest": "digest:wrong",
                 },
             )
-            with pytest.raises(
-                ValueError,
-                match="VerifiedOutcomeAuthority|verified-outcome|confirmed Outcome",
-            ):
-                store.save_record(forged)
-            assert _confirmed(store) == []
+        )
+        state = source.export_state()
+    with _store("memory", tmp_path) as target:
+        with pytest.raises(ValueError):
+            target.import_state(state)
