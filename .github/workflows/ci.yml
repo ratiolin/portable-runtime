@@ -62,6 +62,8 @@ jobs:
           tests/conformance/test_responsibility_separation_contracts.py
           tests/conformance/test_distinction_governance.py
           tests/conformance/test_distinction_governance_persistence.py
+          tests/conformance/test_distinction_governance_revalidation.py
+          tests/conformance/test_distinction_governance_revalidation_hardening.py
           tests/conformance/test_qualification_transition.py
           tests/conformance/test_terminal_authority.py
           tests/conformance/test_authoritative.py
