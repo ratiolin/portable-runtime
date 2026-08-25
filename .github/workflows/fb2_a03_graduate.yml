@@ -1,0 +1,71 @@
+name: FB2 A03 Graduate
+on:
+  push:
+    branches: [feat/verified-outcome-authority-impl]
+permissions:
+  contents: write
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with: {persist-credentials: true}
+      - shell: python
+        run: |
+          from pathlib import Path
+
+          p = Path('tests/conformance/test_verified_outcome_authority.py')
+          s = p.read_text()
+          start = s.index('@_xfail("FB2-A03: import authority graph closure validation not implemented")')
+          replacement = '''@pytest.mark.parametrize("corruption", ["binding-digest", "execution-graph"])
+def test_fb2_a03_matching_looking_authority_events_with_wrong_binding_fail_import(
+    corruption: str,
+    tmp_path: Path,
+) -> None:
+    from portable_runtime.records.verified_outcome_commit import VerifiedOutcomeCommitRequest
+
+    with _store("memory", tmp_path) as source:
+        work, run, _step, attempt, action = _seed_execution(source)
+        proof = _proof(
+            source,
+            work=work,
+            run=run,
+            attempt=attempt,
+            action=action,
+            result="pass",
+        )
+        outcome = source.commit_verified_outcome(
+            VerifiedOutcomeCommitRequest(
+                action_ref=action.id,
+                evidence_refs=(proof.id,),
+                expected_work_id=work.id,
+                expected_run_id=run.id,
+                expected_request_id=action.request_ref,
+                expected_attempt_ref=attempt.id,
+                verification_scope=dict(_SCOPE),
+                subject_version_refs=tuple(_VERSIONS),
+            )
+        )
+        state = source.export_state()
+
+    if corruption == "binding-digest":
+        raw_outcome = next(raw for raw in state["record"] if raw.get("id") == outcome.id)
+        metadata = dict(raw_outcome["metadata"])  # type: ignore[arg-type]
+        metadata["verification_binding_digest"] = "digest:wrong"
+        raw_outcome["metadata"] = metadata
+    else:
+        raw_action = next(raw for raw in state["action"] if raw.get("id") == action.id)
+        raw_action["provider_id"] = "provider-forged-executor"
+
+    with _store("memory", tmp_path) as target:
+        with pytest.raises(ValueError, match="incompatible confirmed-outcome authority history"):
+            target.import_state(state)
+        assert target.get_record(outcome.id) is None
+'''
+          p.write_text(s[:start] + replacement)
+      - run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add tests/conformance/test_verified_outcome_authority.py
+          git commit -m "test: graduate FB2-A03 import authority counterexample"
+          git push
