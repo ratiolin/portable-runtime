@@ -557,6 +557,7 @@ def test_r011_endpoint_match_does_not_substitute_for_matching_application_proven
             state,
             qid=qb,
             change_ref="model:v3",
+            anchor="model:v3@1",
             decision_id="dec-b",
         )
         app_b = _state_application(dec_b, app_id="app-b")
