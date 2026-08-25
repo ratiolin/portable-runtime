@@ -13,6 +13,7 @@ from typing import Any
 
 from portable_runtime.core.models import Run, Work
 from portable_runtime.interfaces.store import StateStore
+from portable_runtime.records.verification_binding import BoundVerificationEvidenceValidator
 from portable_runtime.workflows.context import validate_run_transition
 
 
@@ -162,46 +163,15 @@ class CompletionAuthority:
 
     @staticmethod
     def _proof_metadata(record: object) -> dict[str, Any] | None:
-        metadata = getattr(record, "metadata", None)
-        return metadata if isinstance(metadata, dict) else None
+        return BoundVerificationEvidenceValidator.proof_metadata(record)
 
     @staticmethod
     def _proof_class(record: object, metadata: dict[str, Any]) -> str:
-        explicit = metadata.get("proof_class")
-        allowed = {
-            "execution",
-            "observation",
-            "closed-verification",
-            "objective-verification",
-            "revalidation",
-        }
-        if explicit is not None:
-            value = str(explicit).strip().lower()
-            if value not in allowed:
-                raise ValueError(f"terminal completion proof has unknown proof_class {explicit!r}")
-            return value
-        kind = str(getattr(record, "kind", "")).strip().lower()
-        if kind == "task-objective-proof":
-            return "objective-verification"
-        return "closed-verification"
+        return BoundVerificationEvidenceValidator.proof_class(record, metadata)
 
     @staticmethod
     def _proof_can_cover(proof_class: str, obligation: str) -> bool:
-        if proof_class == "execution":
-            return False
-        normalized = obligation.strip().lower()
-        if normalized.startswith("revalidate."):
-            return proof_class == "revalidation"
-        if normalized.startswith("verify."):
-            return proof_class in {"closed-verification", "objective-verification", "revalidation"}
-        if normalized.startswith("observe."):
-            return proof_class in {"observation", "closed-verification", "revalidation"}
-        return proof_class in {
-            "observation",
-            "closed-verification",
-            "objective-verification",
-            "revalidation",
-        }
+        return BoundVerificationEvidenceValidator.proof_can_cover(proof_class, obligation)
 
     @staticmethod
     def validate_proof_invariant(
@@ -230,33 +200,19 @@ class CompletionAuthority:
         expected_criteria = list(work.acceptance_criteria)
         required_obligations = set(CompletionAuthority.required_obligation_refs(work))
         revalidation_obligations = set(CompletionAuthority.revalidation_obligation_refs(work))
+        validated = BoundVerificationEvidenceValidator.validate(
+            work=work,
+            run=run,
+            refs=normalized,
+            record_lookup=record_lookup,
+            expected_scope=expected_scope,
+            allowed_results=frozenset({"pass"}),
+            expected_work_version=expected_version,
+            expected_acceptance_criteria=expected_criteria,
+        )
         covered_obligations: set[str] = set()
-        for ref in normalized:
-            record = record_lookup(ref)
-            metadata = CompletionAuthority._proof_metadata(record)
-            if metadata is None:
-                raise ValueError("terminal completion requires explicit passing verification proofs")
-            closed = metadata.get("verification_result")
-            if not isinstance(closed, dict) or str(closed.get("result", "")).lower() != "pass":
-                raise ValueError("terminal completion requires explicit passing verification proofs")
-            if getattr(record, "record_type", None) != "EvidenceArtifact" or getattr(record, "kind", None) not in {
-                "closed-verification",
-                "verification-result",
-                "task-objective-proof",
-            }:
-                raise ValueError("terminal completion requires typed verification EvidenceArtifact proofs")
-            if metadata.get("work_id") != work.id or metadata.get("run_id") != run.id:
-                raise ValueError("terminal completion proof is not bound to this Work/Run")
-            proof_scope = metadata.get("verification_scope", metadata.get("scope"))
-            if not isinstance(proof_scope, dict) or proof_scope != expected_scope:
-                raise ValueError("terminal completion proof scope does not match Work scope")
-            proof_version = metadata.get("work_version", metadata.get("task_version", metadata.get("version")))
-            if proof_version != expected_version:
-                raise ValueError("terminal completion proof version does not match Work version")
-            criteria = metadata.get("acceptance_criteria", metadata.get("criteria"))
-            if not isinstance(criteria, list) or criteria != expected_criteria:
-                raise ValueError("terminal completion proof acceptance criteria do not match Work")
-            proof_class = CompletionAuthority._proof_class(record, metadata)
+        for record, proof_class in zip(validated.records, validated.proof_classes, strict=True):
+            metadata = BoundVerificationEvidenceValidator.proof_metadata(record) or {}
             raw_coverage = metadata.get(
                 "obligation_refs",
                 metadata.get("covered_obligations", metadata.get("verification_obligations", [])),
@@ -272,7 +228,7 @@ class CompletionAuthority:
                 obligation
                 for obligation in candidates
                 if (obligation not in revalidation_obligations or proof_class == "revalidation")
-                and CompletionAuthority._proof_can_cover(proof_class, obligation)
+                and BoundVerificationEvidenceValidator.proof_can_cover(proof_class, obligation)
             )
         required = sorted(required_obligations)
         covered = sorted(covered_obligations)
