@@ -16,11 +16,14 @@ from portable_runtime.core.capabilities import (
     ProviderDescriptor,
     ProviderHealth,
 )
+from portable_runtime.core.models import Run, Work
 from portable_runtime.core.qualification import (
     GOVERNANCE_NOT_APPLICABLE_DIGEST,
     InvocationPermit,
 )
 from portable_runtime.core.registry import ProviderRegistry
+from portable_runtime.core.reliability import ReliabilityControls
+from portable_runtime.core.router import CapabilityService
 from portable_runtime.governance.canonical import state_seed_event
 from portable_runtime.governance.distinction import DistinctionState, ReviewObligation, UseContext
 from portable_runtime.governance.persistence import (
@@ -35,6 +38,8 @@ from portable_runtime.governance.use_admission import (
 )
 from portable_runtime.stores.memory import InMemoryStateStore
 from portable_runtime.stores.sqlite import SQLiteStateStore
+from portable_runtime.workflows.context import WorkflowContext
+from tests._strict_fixtures import seed_action_governance
 
 BACKENDS = ("memory", "sqlite")
 
@@ -155,6 +160,7 @@ def _boundary(
     *,
     requirement: GovernanceUseRequirement | None,
     policy_engine: Any | None = None,
+    reliability: ReliabilityControls | None = None,
 ) -> RealityBoundary:
     registry = ProviderRegistry()
     registry.register(provider)
@@ -167,6 +173,7 @@ def _boundary(
         store=store,
         registry=registry,
         policy_engine=policy_engine,
+        reliability=reliability,
         governance_requirement_resolver=resolver,
     )
 
@@ -343,7 +350,7 @@ async def test_e2_006_non_governed_permit_explicitly_binds_not_applicable() -> N
         lease_generation=0,
     )
 
-    assert GOVERNANCE_NOT_APPLICABLE_DIGEST == governance_not_applicable_digest()
+    assert governance_not_applicable_digest() == GOVERNANCE_NOT_APPLICABLE_DIGEST
     assert permit.governance_applicable is False
     assert permit.governance_requirement_digest == GOVERNANCE_NOT_APPLICABLE_DIGEST
     assert permit.governance_snapshot_digest == GOVERNANCE_NOT_APPLICABLE_DIGEST
@@ -396,6 +403,206 @@ async def test_e2_007_tampered_permit_governance_digest_fails_closed(
         requirement=_requirement(),
     ).execute(_request("e2-007"))
 
+    assert provider.calls == 0
+    assert result.error is not None
+    assert result.error.get("code") == "GovernanceChanged"
+
+
+class _GovernanceChangingReliability(ReliabilityControls):
+    def __init__(self, persistence: DistinctionGovernancePersistence) -> None:
+        super().__init__(cooldown_seconds=0)
+        self._persistence = persistence
+        self._opened = False
+
+    def record_action(
+        self,
+        side_effect: bool = False,
+        *,
+        action_blast_radius: int = 1,
+        exposure: int | None = None,
+    ) -> None:
+        super().record_action(
+            side_effect,
+            action_blast_radius=action_blast_radius,
+            exposure=exposure,
+        )
+        if self._opened:
+            return
+        self._persistence.open_obligation(
+            ReviewObligation(
+                id="q-e2-008",
+                target="d",
+                trigger_ref="event-e2-008",
+                basis_refs=("basis-e2",),
+                context="ctx",
+                blocking=True,
+            )
+        )
+        self._opened = True
+
+
+@pytest.mark.parametrize("backend", BACKENDS)
+async def test_e2_008_final_recheck_after_precommit_aborts_execution_records(
+    backend: str,
+    tmp_path: Path,
+) -> None:
+    with _backend(backend, tmp_path, suffix=f"008-{backend}") as (store, persistence):
+        persistence.seed_state("d", _state())
+        work = Work(
+            id=f"work-e2-008-{backend}",
+            title="E2a precommit abort",
+            metadata={"resource_scope": "repo/e2", "patch_hint": "patch:v1"},
+        )
+        run = Run(
+            id=f"run-e2-008-{backend}",
+            work_id=work.id,
+            status="running",
+        )
+        store.save_work(work)
+        store.save_run(run)
+        seed_action_governance(
+            work,
+            run,
+            store,
+            capability="code.edit",
+            actor_ref="agent:e2",
+            resource_ref="repo/e2",
+            subject_version="patch:v1",
+            include_grant=True,
+        )
+        work = store.get_work(work.id) or work
+        run = store.get_run(run.id) or run
+
+        provider = _CountingProvider(
+            capability="code.edit",
+            side_effect_class="idempotent",
+            effect_semantics="idempotent",
+            reversibility="reversible",
+        )
+        registry = ProviderRegistry()
+        registry.register(provider)
+        reliability = _GovernanceChangingReliability(persistence)
+        boundary = RealityBoundary(
+            store=store,
+            registry=registry,
+            reliability=reliability,
+            governance_requirement_resolver=lambda _request: _requirement(),
+        )
+        service = CapabilityService(registry, store=store, boundary=boundary)
+        context = WorkflowContext(
+            work=work,
+            run=run,
+            store=store,
+            capabilities=service,
+            registry=registry,
+        )
+
+        result = await context.invoke("code.edit", instruction="edit", patch="v2")
+
+        assert provider.calls == 0
+        assert result.error is not None
+        assert result.error.get("code") == "GovernanceChanged"
+        steps = store.list_steps(run.id)
+        assert len(steps) == 1
+        step = steps[0]
+        assert step.status == "cancelled"
+        attempts = store.list_attempts(step.id)
+        assert len(attempts) == 1
+        assert attempts[0].status == "cancelled"
+        assert attempts[0].ended_at is not None
+        assert attempts[0].error is not None
+        assert attempts[0].error.get("code") == "GovernanceChanged"
+        exported = store.export_state()
+        actions = exported.get("action", [])
+        assert len(actions) == 1
+        assert actions[0].get("status") == "cancelled"
+        assert actions[0].get("metadata", {}).get("preinvocation_abort", {}).get("code") == "GovernanceChanged"
+        assert exported.get("outcome", []) == []
+        assert reliability.active_side_effects == 0
+        assert any(
+            event.type == "InvocationAbortedBeforeRealityExit"
+            and event.payload.get("code") == "GovernanceChanged"
+            for event in store.list_events()
+        )
+
+
+class _FinalGovernanceUnavailableStore(InMemoryStateStore):
+    def __init__(self) -> None:
+        super().__init__()
+        self._governance_list_calls = 0
+
+    def list_events(self, subject_ref: str | None = None) -> list[Any]:
+        self._governance_list_calls += 1
+        if self._governance_list_calls == 5:
+            raise RuntimeError("canonical governance history unavailable at final recheck")
+        return super().list_events(subject_ref)
+
+
+async def test_e2_009_final_governance_history_unavailable_fails_closed() -> None:
+    store = _FinalGovernanceUnavailableStore()
+    persistence = InMemoryDistinctionGovernancePersistence(store)
+    persistence.seed_state("d", _state())
+    provider = _CountingProvider()
+
+    result = await _boundary(
+        store,
+        provider,
+        requirement=_requirement(),
+    ).execute(_request("e2-009"))
+
+    assert provider.calls == 0
+    assert result.error is not None
+    assert result.error.get("code") == "GovernanceUnavailable"
+    assert any(
+        event.type == "InvocationAbortedBeforeRealityExit"
+        and event.payload.get("code") == "GovernanceUnavailable"
+        for event in store.list_events()
+    )
+
+
+class _AllowPolicyDecision:
+    disposition = "allow"
+    status = "allow"
+    obligations: tuple[()] = ()
+    reason = "allowed"
+
+
+class _AllowPolicy:
+    def __init__(self) -> None:
+        self.calls = 0
+
+    async def evaluate(self, _context: Any) -> _AllowPolicyDecision:
+        self.calls += 1
+        return _AllowPolicyDecision()
+
+
+async def test_e2_010_policy_allow_cannot_override_changed_governance() -> None:
+    store = InMemoryStateStore()
+    persistence = InMemoryDistinctionGovernancePersistence(store)
+    persistence.seed_state("d", _state())
+    policy = _AllowPolicy()
+
+    def open_blocker() -> None:
+        persistence.open_obligation(
+            ReviewObligation(
+                id="q-e2-010",
+                target="d",
+                trigger_ref="event-e2-010",
+                basis_refs=("basis-e2",),
+                context="ctx",
+                blocking=True,
+            )
+        )
+
+    provider = _CountingProvider(mutation=open_blocker)
+    result = await _boundary(
+        store,
+        provider,
+        requirement=_requirement(),
+        policy_engine=policy,
+    ).execute(_request("e2-010"))
+
+    assert policy.calls == 1
     assert provider.calls == 0
     assert result.error is not None
     assert result.error.get("code") == "GovernanceChanged"
