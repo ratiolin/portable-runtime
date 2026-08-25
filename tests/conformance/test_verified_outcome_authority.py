@@ -425,22 +425,47 @@ def test_fb2_a02_mixed_pass_fail_closure_fails_closed(tmp_path: Path) -> None:
         assert _confirmed(store) == []
 
 
-@_xfail("FB2-A03: import authority graph closure validation not implemented")
-def test_fb2_a03_matching_looking_authority_events_with_wrong_binding_fail_import(tmp_path: Path) -> None:
+@pytest.mark.parametrize("corruption", ["binding-digest", "execution-graph"])
+def test_fb2_a03_matching_looking_authority_events_with_wrong_binding_fail_import(
+    corruption: str,
+    tmp_path: Path,
+) -> None:
+    from portable_runtime.records.verified_outcome_commit import VerifiedOutcomeCommitRequest
+
     with _store("memory", tmp_path) as source:
-        _work, _run, _step, _attempt, action = _seed_execution(source)
-        source.save_record(
-            OutcomeRecord(
-                id="outcome_fb2_import_bad",
+        work, run, _step, attempt, action = _seed_execution(source)
+        proof = _proof(
+            source,
+            work=work,
+            run=run,
+            attempt=attempt,
+            action=action,
+            result="pass",
+        )
+        outcome = source.commit_verified_outcome(
+            VerifiedOutcomeCommitRequest(
                 action_ref=action.id,
-                lifecycle_status="confirmed",
-                evidence_refs=["evidence:wrong"],
-                metadata={
-                    "objective_result": "pass",
-                    "verification_binding_digest": "digest:wrong",
-                },
+                evidence_refs=(proof.id,),
+                expected_work_id=work.id,
+                expected_run_id=run.id,
+                expected_request_id=action.request_ref,
+                expected_attempt_ref=attempt.id,
+                verification_scope=dict(_SCOPE),
+                subject_version_refs=tuple(_VERSIONS),
             )
         )
         state = source.export_state()
-    with _store("memory", tmp_path) as target, pytest.raises(ValueError):
-        target.import_state(state)
+
+    if corruption == "binding-digest":
+        raw_outcome = next(raw for raw in state["record"] if raw.get("id") == outcome.id)
+        metadata = dict(raw_outcome["metadata"])  # type: ignore[arg-type]
+        metadata["verification_binding_digest"] = "digest:wrong"
+        raw_outcome["metadata"] = metadata
+    else:
+        raw_action = next(raw for raw in state["action"] if raw.get("id") == action.id)
+        raw_action["provider_id"] = "provider-forged-executor"
+
+    with _store("memory", tmp_path) as target:
+        with pytest.raises(ValueError, match="incompatible confirmed-outcome authority history"):
+            target.import_state(state)
+        assert target.get_record(outcome.id) is None
