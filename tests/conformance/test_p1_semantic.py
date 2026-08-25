@@ -261,6 +261,11 @@ def test_invocation_permit_binds_an_immutable_authority_sensitive_snapshot() -> 
         "capability": "deploy.prod",
         "constraints": {"resource": "repo/app"},
         "effect_class": "deploy",
+        "governance": {
+            "applicable": False,
+            "requirement_digest": permit.governance_requirement_digest,
+            "snapshot_digest": permit.governance_snapshot_digest,
+        },
         "idempotency_key": "idem-snapshot",
         "lease_generation": 7,
         "provider": "provider-a",
