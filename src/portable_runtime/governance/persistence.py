@@ -7,7 +7,7 @@ from abc import ABC, abstractmethod
 from collections.abc import Iterator
 from contextlib import contextmanager
 from datetime import datetime
-from typing import cast
+from typing import Any, cast
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -22,7 +22,6 @@ from portable_runtime.governance.distinction import (
     GovernedApplication,
     ReviewObligation,
     candidate_state_effect,
-    canonical_partition,
     effect_matches_decision,
     linked,
     obligation_key,
@@ -110,13 +109,6 @@ class PersistedGovernedApplication(_GovernanceEnvelope):
     post_anchor: str
     committed_at: datetime = Field(default_factory=utcnow)
 
-
-PersistedGovernanceModel = (
-    PersistedDistinctionState
-    | PersistedReviewObligation
-    | PersistedGovernanceDecision
-    | PersistedGovernedApplication
-)
 
 _MODEL_BY_KIND: dict[str, type[_GovernanceEnvelope]] = {
     GOVERNANCE_STATE_KIND: PersistedDistinctionState,
@@ -245,19 +237,20 @@ def _persist_application(value: ApplicationReceipt) -> PersistedGovernedApplicat
 
 
 def _restore_application(value: PersistedGovernedApplication) -> ApplicationReceipt:
+    application = GovernedApplication(
+        id=value.id,
+        actor=value.actor,
+        operation=value.operation,
+        scheme_id=value.scheme_id,
+        target=value.target,
+        decision_ref=value.decision_ref,
+        context=value.context,
+        new_qualification=value.new_qualification,
+        new_activation=value.new_activation,
+        review_obligation_id=value.review_obligation_id,
+    )
     return ApplicationReceipt(
-        application=GovernedApplication(
-            id=value.id,
-            actor=value.actor,
-            operation=value.operation,
-            scheme_id=value.scheme_id,
-            target=value.target,
-            decision_ref=value.decision_ref,
-            context=value.context,
-            new_qualification=value.new_qualification,
-            new_activation=value.new_activation,
-            review_obligation_id=value.review_obligation_id,
-        ),
+        application=application,
         effect_kind=value.effect_kind,
         pre_anchor=value.pre_anchor,
         post_anchor=value.post_anchor,
@@ -265,11 +258,11 @@ def _restore_application(value: PersistedGovernedApplication) -> ApplicationRece
 
 
 class DistinctionGovernancePersistence(ABC):
-    """Internal durable projection of Gamma=(Q, Dec, App) plus governed state.
+    """Durable projection of Gamma=(Q, Dec, App) plus governed state.
 
-    Semantic admission remains owned by :mod:`portable_runtime.governance.distinction`.
-    This layer only preserves durable identity, provenance, and atomic commit
-    invariants after a transition has been admitted.
+    Semantic admission remains owned by ``governance.distinction``. This layer
+    preserves durable identity, responsibility linkage, provenance, and atomic
+    commit invariants after admission.
     """
 
     @abstractmethod
@@ -295,15 +288,12 @@ class DistinctionGovernancePersistence(ABC):
 
     def get_state(self, scheme_id: str) -> DistinctionState | None:
         value = self._get_model(GOVERNANCE_STATE_KIND, scheme_id)
-        if not isinstance(value, PersistedDistinctionState):
-            return None
-        return _restore_state(value)
+        return _restore_state(value) if isinstance(value, PersistedDistinctionState) else None
 
     def list_states(self) -> dict[str, DistinctionState]:
-        values = self._list_models(GOVERNANCE_STATE_KIND)
         return {
             value.scheme_id: _restore_state(value)
-            for value in values
+            for value in self._list_models(GOVERNANCE_STATE_KIND)
             if isinstance(value, PersistedDistinctionState)
         }
 
@@ -316,22 +306,21 @@ class DistinctionGovernancePersistence(ABC):
             if existing is not None:
                 if isinstance(existing, PersistedDistinctionState) and _same_semantics(existing, incoming):
                     return
-                raise GovernancePersistenceError(
-                    f"distinction state {scheme_id!r} already exists; governed transitions require an application receipt"
+                message = (
+                    f"distinction state {scheme_id!r} already exists; "
+                    "governed transitions require an application receipt"
                 )
+                raise GovernancePersistenceError(message)
             self._put_model(GOVERNANCE_STATE_KIND, incoming)
 
     def get_obligation(self, obligation_id: str) -> ReviewObligation | None:
         value = self._get_model(GOVERNANCE_OBLIGATION_KIND, obligation_id)
-        if not isinstance(value, PersistedReviewObligation):
-            return None
-        return _restore_obligation(value)
+        return _restore_obligation(value) if isinstance(value, PersistedReviewObligation) else None
 
     def list_obligations(self) -> dict[str, ReviewObligation]:
-        values = self._list_models(GOVERNANCE_OBLIGATION_KIND)
         return {
             value.id: _restore_obligation(value)
-            for value in values
+            for value in self._list_models(GOVERNANCE_OBLIGATION_KIND)
             if isinstance(value, PersistedReviewObligation)
         }
 
@@ -354,27 +343,33 @@ class DistinctionGovernancePersistence(ABC):
 
     def get_decision(self, decision_id: str) -> GovernanceDecision | None:
         value = self._get_model(GOVERNANCE_DECISION_KIND, decision_id)
-        if not isinstance(value, PersistedGovernanceDecision):
-            return None
-        return _restore_decision(value)
+        return _restore_decision(value) if isinstance(value, PersistedGovernanceDecision) else None
 
     def list_decisions(self) -> dict[str, GovernanceDecision]:
-        values = self._list_models(GOVERNANCE_DECISION_KIND)
         return {
             value.id: _restore_decision(value)
-            for value in values
+            for value in self._list_models(GOVERNANCE_DECISION_KIND)
             if isinstance(value, PersistedGovernanceDecision)
         }
 
+    def get_application(self, application_id: str) -> ApplicationReceipt | None:
+        value = self._get_model(GOVERNANCE_APPLICATION_KIND, application_id)
+        return _restore_application(value) if isinstance(value, PersistedGovernedApplication) else None
+
+    def list_applications(self) -> dict[str, ApplicationReceipt]:
+        return {
+            value.id: _restore_application(value)
+            for value in self._list_models(GOVERNANCE_APPLICATION_KIND)
+            if isinstance(value, PersistedGovernedApplication)
+        }
+
     def _configuration(self) -> GovernanceConfiguration:
-        return GovernanceConfiguration(
-            states=self.list_states(),
-            runtime=GovernanceRuntime(
-                obligations=self.list_obligations(),
-                decisions=self.list_decisions(),
-                applications=self.list_applications(),
-            ),
+        runtime = GovernanceRuntime(
+            obligations=self.list_obligations(),
+            decisions=self.list_decisions(),
+            applications=self.list_applications(),
         )
+        return GovernanceConfiguration(states=self.list_states(), runtime=runtime)
 
     def record_decision(self, decision: GovernanceDecision) -> None:
         incoming = _persist_decision(decision)
@@ -387,26 +382,14 @@ class DistinctionGovernancePersistence(ABC):
                     f"governance decision {decision.id!r} cannot be rebound"
                 )
             if decision.target not in self.list_states():
-                raise GovernancePersistenceError("governance decision references unknown target state")
+                raise GovernancePersistenceError(
+                    "governance decision references unknown target state"
+                )
             if not review_decision_input_matches(decision, self._configuration()):
                 raise GovernancePersistenceError(
                     "governance decision does not match its open review inputs"
                 )
             self._put_model(GOVERNANCE_DECISION_KIND, incoming)
-
-    def get_application(self, application_id: str) -> ApplicationReceipt | None:
-        value = self._get_model(GOVERNANCE_APPLICATION_KIND, application_id)
-        if not isinstance(value, PersistedGovernedApplication):
-            return None
-        return _restore_application(value)
-
-    def list_applications(self) -> dict[str, ApplicationReceipt]:
-        values = self._list_models(GOVERNANCE_APPLICATION_KIND)
-        return {
-            value.id: _restore_application(value)
-            for value in values
-            if isinstance(value, PersistedGovernedApplication)
-        }
 
     def _require_fresh_application_id(self, application_id: str) -> None:
         if self._get_model(GOVERNANCE_APPLICATION_KIND, application_id) is not None:
@@ -425,34 +408,60 @@ class DistinctionGovernancePersistence(ABC):
             self._require_fresh_application_id(application.id)
             current = self.get_state(scheme_id)
             if current is None:
-                raise GovernancePersistenceError("state application references unknown distinction state")
+                raise GovernancePersistenceError(
+                    "state application references unknown distinction state"
+                )
             decision = self.get_decision(application.decision_ref)
             if decision is None:
-                raise GovernancePersistenceError("state application references unknown governance decision")
-            if (
-                receipt.effect_kind != "state"
-                or application.scheme_id != scheme_id
-                or application.target != scheme_id
-                or decision.target != scheme_id
-                or not linked(application, decision)
-            ):
-                raise GovernancePersistenceError("state application responsibility linkage is invalid")
+                raise GovernancePersistenceError(
+                    "state application references unknown governance decision"
+                )
+            linked_correctly = (
+                receipt.effect_kind == "state"
+                and application.scheme_id == scheme_id
+                and application.target == scheme_id
+                and decision.target == scheme_id
+                and linked(application, decision)
+            )
+            if not linked_correctly:
+                raise GovernancePersistenceError(
+                    "state application responsibility linkage is invalid"
+                )
             if receipt.pre_anchor != state_anchor(current):
-                raise GovernancePersistenceError("state application pre-anchor does not match persisted state")
+                raise GovernancePersistenceError(
+                    "state application pre-anchor does not match persisted state"
+                )
             if receipt.pre_anchor != decision.expected_state_anchor:
-                raise GovernancePersistenceError("state application does not start from the decision basis state")
+                raise GovernancePersistenceError(
+                    "state application does not start from the decision basis state"
+                )
             candidate = candidate_state_effect(application, current)
             if candidate != next_state:
-                raise GovernancePersistenceError("state application next state is not its declared candidate effect")
-            if not state_admissible_for(scheme_id, next_state) or not effect_matches_decision(decision, next_state):
-                raise GovernancePersistenceError("state application candidate violates governed state invariants")
+                raise GovernancePersistenceError(
+                    "state application next state is not its declared candidate effect"
+                )
+            candidate_valid = state_admissible_for(
+                scheme_id,
+                next_state,
+            ) and effect_matches_decision(decision, next_state)
+            if not candidate_valid:
+                raise GovernancePersistenceError(
+                    "state application candidate violates governed state invariants"
+                )
             if receipt.post_anchor != state_anchor(next_state):
-                raise GovernancePersistenceError("state application post-anchor does not match next state")
+                raise GovernancePersistenceError(
+                    "state application post-anchor does not match next state"
+                )
 
-            self._put_model(GOVERNANCE_STATE_KIND, _persist_state(scheme_id, next_state))
-            # Deliberately write the receipt second. A failure here must roll
-            # back the state write, proving there is no half-commit path.
-            self._put_model(GOVERNANCE_APPLICATION_KIND, _persist_application(receipt))
+            self._put_model(
+                GOVERNANCE_STATE_KIND,
+                _persist_state(scheme_id, next_state),
+            )
+            # Receipt second is deliberate: failure must roll back the state write.
+            self._put_model(
+                GOVERNANCE_APPLICATION_KIND,
+                _persist_application(receipt),
+            )
 
     def commit_review_discharge(
         self,
@@ -464,44 +473,52 @@ class DistinctionGovernancePersistence(ABC):
             self._require_fresh_application_id(application.id)
             obligation = self.get_obligation(obligation_id)
             if obligation is None:
-                raise GovernancePersistenceError("review discharge references unknown obligation")
+                raise GovernancePersistenceError(
+                    "review discharge references unknown obligation"
+                )
             decision = self.get_decision(application.decision_ref)
             if decision is None:
-                raise GovernancePersistenceError("review discharge references unknown governance decision")
-            if (
-                receipt.effect_kind != "review_discharge"
-                or application.operation != APPLY_REVIEW_DISCHARGE
-                or application.review_obligation_id != obligation_id
-                or application.target != f"review_obligation:{obligation_id}"
-                or application.scheme_id != decision.target
-                or obligation_id not in decision.review_refs
-                or obligation.target != decision.target
-                or obligation.context != decision.context
-                or not linked(application, decision)
-            ):
-                raise GovernancePersistenceError("review discharge responsibility linkage is invalid")
+                raise GovernancePersistenceError(
+                    "review discharge references unknown governance decision"
+                )
+            linked_correctly = (
+                receipt.effect_kind == "review_discharge"
+                and application.operation == APPLY_REVIEW_DISCHARGE
+                and application.review_obligation_id == obligation_id
+                and application.target == f"review_obligation:{obligation_id}"
+                and application.scheme_id == decision.target
+                and obligation_id in decision.review_refs
+                and obligation.target == decision.target
+                and obligation.context == decision.context
+                and linked(application, decision)
+            )
+            if not linked_correctly:
+                raise GovernancePersistenceError(
+                    "review discharge responsibility linkage is invalid"
+                )
 
-            current_obligations = self.list_obligations()
-            if receipt.pre_anchor != obligations_anchor(current_obligations):
-                raise GovernancePersistenceError("review discharge pre-anchor does not match open obligations")
-            remaining = dict(current_obligations)
+            current = self.list_obligations()
+            if receipt.pre_anchor != obligations_anchor(current):
+                raise GovernancePersistenceError(
+                    "review discharge pre-anchor does not match open obligations"
+                )
+            remaining = dict(current)
             remaining.pop(obligation_id)
             if receipt.post_anchor != obligations_anchor(remaining):
-                raise GovernancePersistenceError("review discharge post-anchor does not match remaining obligations")
+                raise GovernancePersistenceError(
+                    "review discharge post-anchor does not match remaining obligations"
+                )
 
             self._delete_model(GOVERNANCE_OBLIGATION_KIND, obligation_id)
-            # Deliberately write the receipt second. A failure here must roll
-            # back the obligation deletion.
-            self._put_model(GOVERNANCE_APPLICATION_KIND, _persist_application(receipt))
+            # Receipt second is deliberate: failure must restore the obligation.
+            self._put_model(
+                GOVERNANCE_APPLICATION_KIND,
+                _persist_application(receipt),
+            )
 
 
 class InMemoryDistinctionGovernancePersistence(DistinctionGovernancePersistence):
-    """Private governance sidecar for :class:`InMemoryStateStore`.
-
-    The sidecar is attached to the backing store but deliberately excluded
-    from ``StateStore.export_state`` so Phase C does not change the public
-    state-bundle surface.
-    """
+    """Private sidecar for ``InMemoryStateStore`` excluded from public export."""
 
     def __init__(self, store: InMemoryStateStore) -> None:
         self.store = store
@@ -510,9 +527,14 @@ class InMemoryDistinctionGovernancePersistence(DistinctionGovernancePersistence)
             "_distinction_governance_records",
             {kind: {} for kind in GOVERNANCE_KINDS},
         )
-        raw_lock = namespace.setdefault("_distinction_governance_lock", threading.RLock())
-        self._records = cast(dict[str, dict[str, _GovernanceEnvelope]], raw_records)
-        self._lock = cast(threading.RLock, raw_lock)
+        self._records = cast(
+            dict[str, dict[str, _GovernanceEnvelope]],
+            raw_records,
+        )
+        self._lock: Any = namespace.setdefault(
+            "_distinction_governance_lock",
+            threading.RLock(),
+        )
         for kind in GOVERNANCE_KINDS:
             self._records.setdefault(kind, {})
 
@@ -546,43 +568,58 @@ class InMemoryDistinctionGovernancePersistence(DistinctionGovernancePersistence)
 
 
 class SQLiteDistinctionGovernancePersistence(DistinctionGovernancePersistence):
-    """Durable governance sidecar for :class:`SQLiteStateStore`.
+    """Private durable sidecar for ``SQLiteStateStore``.
 
-    One private generic table carries all governance kinds. It is intentionally
-    separate from ``runtime_records`` so existing export/import bundles and
-    Runtime Protocol 2.0 remain unchanged.
+    One generic table carries all governance kinds. Keeping it separate from
+    ``runtime_records`` leaves current export/import bundles and Runtime
+    Protocol 2.0 unchanged.
     """
 
-    _TABLE = "runtime_governance_records"
+    _CREATE_SQL = (
+        "CREATE TABLE IF NOT EXISTS runtime_governance_records ("
+        "kind TEXT NOT NULL, id TEXT NOT NULL, data TEXT NOT NULL, "
+        "created_at TEXT NOT NULL, PRIMARY KEY(kind, id))"
+    )
+    _GET_SQL = (
+        "SELECT data FROM runtime_governance_records "
+        "WHERE kind=? AND id=?"
+    )
+    _LIST_SQL = (
+        "SELECT data FROM runtime_governance_records "
+        "WHERE kind=? ORDER BY created_at, id"
+    )
+    _PUT_SQL = (
+        "INSERT INTO runtime_governance_records(kind, id, data, created_at) "
+        "VALUES (?, ?, ?, ?) "
+        "ON CONFLICT(kind, id) DO UPDATE SET "
+        "data=excluded.data, created_at=excluded.created_at"
+    )
+    _DELETE_SQL = (
+        "DELETE FROM runtime_governance_records WHERE kind=? AND id=?"
+    )
 
     def __init__(self, store: SQLiteStateStore) -> None:
         self.store = store
         namespace = vars(store)
         self._connection = cast(sqlite3.Connection, namespace["_connection"])
-        self._lock = namespace["_lock"]
+        self._lock: Any = namespace["_lock"]
         with self._lock:
-            self._connection.execute(
-                f"CREATE TABLE IF NOT EXISTS {self._TABLE} ("
-                "kind TEXT NOT NULL, id TEXT NOT NULL, data TEXT NOT NULL, "
-                "created_at TEXT NOT NULL, PRIMARY KEY(kind, id))"
-            )
+            self._connection.execute(self._CREATE_SQL)
 
     def _get_model(self, kind: str, identifier: str) -> _GovernanceEnvelope | None:
         model_type = _MODEL_BY_KIND[kind]
         with self._lock:
             row = self._connection.execute(
-                f"SELECT data FROM {self._TABLE} WHERE kind=? AND id=?",
+                self._GET_SQL,
                 (kind, identifier),
             ).fetchone()
-        if row is None:
-            return None
-        return model_type.model_validate_json(row["data"])
+        return None if row is None else model_type.model_validate_json(row["data"])
 
     def _list_models(self, kind: str) -> list[_GovernanceEnvelope]:
         model_type = _MODEL_BY_KIND[kind]
         with self._lock:
             rows = self._connection.execute(
-                f"SELECT data FROM {self._TABLE} WHERE kind=? ORDER BY created_at, id",
+                self._LIST_SQL,
                 (kind,),
             ).fetchall()
         return [model_type.model_validate_json(row["data"]) for row in rows]
@@ -590,8 +627,7 @@ class SQLiteDistinctionGovernancePersistence(DistinctionGovernancePersistence):
     def _put_model(self, kind: str, value: _GovernanceEnvelope) -> None:
         payload = value.model_dump(mode="json")
         self._connection.execute(
-            f"INSERT INTO {self._TABLE}(kind, id, data, created_at) VALUES (?, ?, ?, ?) "
-            "ON CONFLICT(kind, id) DO UPDATE SET data=excluded.data, created_at=excluded.created_at",
+            self._PUT_SQL,
             (
                 kind,
                 value.id,
@@ -602,7 +638,7 @@ class SQLiteDistinctionGovernancePersistence(DistinctionGovernancePersistence):
 
     def _delete_model(self, kind: str, identifier: str) -> None:
         self._connection.execute(
-            f"DELETE FROM {self._TABLE} WHERE kind=? AND id=?",
+            self._DELETE_SQL,
             (kind, identifier),
         )
 
