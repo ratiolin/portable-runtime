@@ -1,0 +1,30 @@
+name: FB2 P3 Compat
+on:
+  push:
+    branches: [feat/verified-outcome-authority-impl]
+permissions:
+  contents: write
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with: {persist-credentials: true}
+      - shell: python
+        run: |
+          from pathlib import Path
+          p = Path('src/portable_runtime/records/verification_binding.py')
+          s = p.read_text()
+          old = '''            record = record_lookup(ref)\n            if not isinstance(record, EvidenceArtifact) or record.record_type != "EvidenceArtifact":\n                raise ValueError("verification requires typed EvidenceArtifact proofs")\n            if record.kind not in cls._KINDS:\n                raise ValueError("verification requires typed closed verification proof kinds")\n            metadata = cls.proof_metadata(record)\n'''
+          new = '''            record = record_lookup(ref)\n            if getattr(record, "record_type", None) != "EvidenceArtifact":\n                raise ValueError("verification requires typed EvidenceArtifact proofs")\n            try:\n                artifact = (\n                    record\n                    if isinstance(record, EvidenceArtifact)\n                    else EvidenceArtifact.model_validate(record.model_dump(mode="python"))\n                )\n            except (AttributeError, ValueError, TypeError) as exc:\n                raise ValueError("verification requires typed EvidenceArtifact proofs") from exc\n            if artifact.kind not in cls._KINDS:\n                raise ValueError("verification requires typed closed verification proof kinds")\n            metadata = cls.proof_metadata(artifact)\n'''
+          if old not in s: raise SystemExit('typed proof anchor missing')
+          s = s.replace(old, new, 1)
+          s = s.replace('action.id not in record.source_refs', 'action.id not in artifact.source_refs')
+          s = s.replace('records.append(record)\n            proof_classes.append(cls.proof_class(record, metadata))', 'records.append(artifact)\n            proof_classes.append(cls.proof_class(artifact, metadata))')
+          p.write_text(s)
+      - run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add src/portable_runtime/records/verification_binding.py
+          git commit -m "fix: normalize typed verification records"
+          git push
