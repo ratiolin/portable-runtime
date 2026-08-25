@@ -12,10 +12,23 @@ from typing import Any, cast
 from pydantic import BaseModel, ConfigDict, Field
 
 from portable_runtime.core.models import utcnow
+from portable_runtime.governance.canonical import (
+    GOVERNANCE_EVENT_PROCESSED,
+    GOVERNANCE_HISTORY_EVENT_TYPES,
+    application_committed_event,
+    decision_recorded_event,
+    processed_event,
+    processed_event_id,
+    reconstruct_governance_history,
+    review_opened_event,
+    state_seed_event,
+)
 from portable_runtime.governance.distinction import (
     APPLY_REVIEW_DISCHARGE,
     ApplicationReceipt,
+    BlockingCondition,
     DistinctionState,
+    FreshnessAnchorLookup,
     GovernanceConfiguration,
     GovernanceDecision,
     GovernanceRuntime,
@@ -26,6 +39,7 @@ from portable_runtime.governance.distinction import (
     linked,
     obligation_key,
     obligations_anchor,
+    relevant_basis_unchanged,
     review_decision_input_matches,
     state_admissible_for,
     state_anchor,
@@ -73,6 +87,7 @@ class PersistedReviewObligation(_GovernanceEnvelope):
     basis_refs: tuple[str, ...]
     context: str
     blocking: bool = True
+    blocking_condition: BlockingCondition | None = None
     closure_requirements: frozenset[str] = frozenset()
     invalidates_decisions: frozenset[str] = frozenset()
 
@@ -159,6 +174,7 @@ def _persist_obligation(value: ReviewObligation) -> PersistedReviewObligation:
         basis_refs=value.basis_refs,
         context=value.context,
         blocking=value.blocking,
+        blocking_condition=value.blocking_condition,
         closure_requirements=value.closure_requirements,
         invalidates_decisions=value.invalidates_decisions,
     )
@@ -172,6 +188,7 @@ def _restore_obligation(value: PersistedReviewObligation) -> ReviewObligation:
         basis_refs=value.basis_refs,
         context=value.context,
         blocking=value.blocking,
+        blocking_condition=value.blocking_condition,
         closure_requirements=value.closure_requirements,
         invalidates_decisions=value.invalidates_decisions,
     )
@@ -258,12 +275,14 @@ def _restore_application(value: PersistedGovernedApplication) -> ApplicationRece
 
 
 class DistinctionGovernancePersistence(ABC):
-    """Durable projection of Gamma=(Q, Dec, App) plus governed state.
+    """Materialized governance projection backed by canonical Event history.
 
-    Semantic admission remains owned by ``governance.distinction``. This layer
-    preserves durable identity, responsibility linkage, provenance, and atomic
-    commit invariants after admission.
+    The sidecar is a transactional index/cache. Canonical governance events in
+    the existing runtime Event journal are the portable durable source from
+    which the projection can be rebuilt.
     """
+
+    store: Any
 
     @abstractmethod
     def _get_model(self, kind: str, identifier: str) -> _GovernanceEnvelope | None:
@@ -282,9 +301,23 @@ class DistinctionGovernancePersistence(ABC):
         raise NotImplementedError
 
     @abstractmethod
+    def _clear_models(self) -> None:
+        raise NotImplementedError
+
+    @abstractmethod
     @contextmanager
     def _transaction(self) -> Iterator[None]:
         raise NotImplementedError
+
+    def _append_history_event(self, event: Any) -> None:
+        self.store.append_event(event)
+
+    def _history_events(self) -> list[Any]:
+        return [
+            event
+            for event in self.store.list_events()
+            if getattr(event, "type", "") in GOVERNANCE_HISTORY_EVENT_TYPES
+        ]
 
     def get_state(self, scheme_id: str) -> DistinctionState | None:
         value = self._get_model(GOVERNANCE_STATE_KIND, scheme_id)
@@ -312,6 +345,7 @@ class DistinctionGovernancePersistence(ABC):
                 )
                 raise GovernancePersistenceError(message)
             self._put_model(GOVERNANCE_STATE_KIND, incoming)
+            self._append_history_event(state_seed_event(scheme_id, state))
 
     def get_obligation(self, obligation_id: str) -> ReviewObligation | None:
         value = self._get_model(GOVERNANCE_OBLIGATION_KIND, obligation_id)
@@ -324,22 +358,72 @@ class DistinctionGovernancePersistence(ABC):
             if isinstance(value, PersistedReviewObligation)
         }
 
-    def open_obligation(self, obligation: ReviewObligation) -> None:
+    def _validate_new_obligation(self, obligation: ReviewObligation) -> bool:
         incoming = _persist_obligation(obligation)
+        existing = self._get_model(GOVERNANCE_OBLIGATION_KIND, obligation.id)
+        if existing is not None:
+            if isinstance(existing, PersistedReviewObligation) and _same_semantics(existing, incoming):
+                return False
+            raise GovernancePersistenceError(
+                f"review obligation {obligation.id!r} cannot be rebound"
+            )
+        key = obligation_key(obligation)
+        if any(obligation_key(item) == key for item in self.list_obligations().values()):
+            raise GovernancePersistenceError(
+                "equivalent review obligation is already open for this event instance"
+            )
+        return True
+
+    def open_obligation(self, obligation: ReviewObligation) -> None:
         with self._transaction():
-            existing = self._get_model(GOVERNANCE_OBLIGATION_KIND, obligation.id)
+            if not self._validate_new_obligation(obligation):
+                return
+            self._put_model(GOVERNANCE_OBLIGATION_KIND, _persist_obligation(obligation))
+            self._append_history_event(review_opened_event(obligation))
+
+    def processed_event_obligation_ids(self, event_ref: str) -> tuple[str, ...] | None:
+        event = self.store.get_event(processed_event_id(event_ref))
+        if event is None or getattr(event, "type", "") != GOVERNANCE_EVENT_PROCESSED:
+            return None
+        payload = getattr(event, "payload", {})
+        if not isinstance(payload, dict):
+            return None
+        key = str(payload.get("event_instance_key") or "")
+        if key != event_ref:
+            raise GovernancePersistenceError("processed event marker identity is inconsistent")
+        return tuple(str(item) for item in payload.get("obligation_ids", []))
+
+    def commit_event_obligations(
+        self,
+        event_ref: str,
+        obligations: tuple[ReviewObligation, ...],
+    ) -> tuple[str, ...]:
+        """Atomically materialize Q and mark one EventInstanceKey processed."""
+
+        if not event_ref:
+            raise GovernancePersistenceError("event instance key must be non-empty")
+        if any(obligation.trigger_ref != event_ref for obligation in obligations):
+            raise GovernancePersistenceError("review obligation trigger does not match event instance")
+        with self._transaction():
+            existing = self.processed_event_obligation_ids(event_ref)
             if existing is not None:
-                if isinstance(existing, PersistedReviewObligation) and _same_semantics(existing, incoming):
-                    return
-                raise GovernancePersistenceError(
-                    f"review obligation {obligation.id!r} cannot be rebound"
-                )
-            key = obligation_key(obligation)
-            if any(obligation_key(item) == key for item in self.list_obligations().values()):
-                raise GovernancePersistenceError(
-                    "equivalent review obligation is already open for this event instance"
-                )
-            self._put_model(GOVERNANCE_OBLIGATION_KIND, incoming)
+                return existing
+            requested_keys: set[tuple[str, str, tuple[str, ...], str]] = set()
+            for obligation in obligations:
+                key = obligation_key(obligation)
+                if key in requested_keys:
+                    raise GovernancePersistenceError("event projects duplicate review responsibility")
+                requested_keys.add(key)
+                if not self._validate_new_obligation(obligation):
+                    raise GovernancePersistenceError(
+                        "unprocessed event references an already-materialized obligation"
+                    )
+            for obligation in obligations:
+                self._put_model(GOVERNANCE_OBLIGATION_KIND, _persist_obligation(obligation))
+                self._append_history_event(review_opened_event(obligation))
+            ids = tuple(obligation.id for obligation in obligations)
+            self._append_history_event(processed_event(event_ref, ids))
+            return ids
 
     def get_decision(self, decision_id: str) -> GovernanceDecision | None:
         value = self._get_model(GOVERNANCE_DECISION_KIND, decision_id)
@@ -390,6 +474,7 @@ class DistinctionGovernancePersistence(ABC):
                     "governance decision does not match its open review inputs"
                 )
             self._put_model(GOVERNANCE_DECISION_KIND, incoming)
+            self._append_history_event(decision_recorded_event(decision))
 
     def _require_fresh_application_id(self, application_id: str) -> None:
         if self._get_model(GOVERNANCE_APPLICATION_KIND, application_id) is not None:
@@ -397,11 +482,23 @@ class DistinctionGovernancePersistence(ABC):
                 f"governed application {application_id!r} is immutable and cannot be replayed or rebound"
             )
 
+    @staticmethod
+    def _recheck_freshness(
+        decision: GovernanceDecision,
+        freshness: FreshnessAnchorLookup | None,
+    ) -> None:
+        if freshness is not None and not relevant_basis_unchanged(decision, freshness):
+            raise GovernancePersistenceError(
+                "governance decision basis changed before durable commit"
+            )
+
     def commit_state_application(
         self,
         scheme_id: str,
         next_state: DistinctionState,
         receipt: ApplicationReceipt,
+        *,
+        freshness: FreshnessAnchorLookup | None = None,
     ) -> None:
         application = receipt.application
         with self._transaction():
@@ -416,6 +513,7 @@ class DistinctionGovernancePersistence(ABC):
                 raise GovernancePersistenceError(
                     "state application references unknown governance decision"
                 )
+            self._recheck_freshness(decision, freshness)
             linked_correctly = (
                 receipt.effect_kind == "state"
                 and application.scheme_id == scheme_id
@@ -453,20 +551,16 @@ class DistinctionGovernancePersistence(ABC):
                     "state application post-anchor does not match next state"
                 )
 
-            self._put_model(
-                GOVERNANCE_STATE_KIND,
-                _persist_state(scheme_id, next_state),
-            )
-            # Receipt second is deliberate: failure must roll back the state write.
-            self._put_model(
-                GOVERNANCE_APPLICATION_KIND,
-                _persist_application(receipt),
-            )
+            self._put_model(GOVERNANCE_STATE_KIND, _persist_state(scheme_id, next_state))
+            self._put_model(GOVERNANCE_APPLICATION_KIND, _persist_application(receipt))
+            self._append_history_event(application_committed_event(receipt, next_state=next_state))
 
     def commit_review_discharge(
         self,
         obligation_id: str,
         receipt: ApplicationReceipt,
+        *,
+        freshness: FreshnessAnchorLookup | None = None,
     ) -> None:
         application = receipt.application
         with self._transaction():
@@ -481,6 +575,7 @@ class DistinctionGovernancePersistence(ABC):
                 raise GovernancePersistenceError(
                     "review discharge references unknown governance decision"
                 )
+            self._recheck_freshness(decision, freshness)
             linked_correctly = (
                 receipt.effect_kind == "review_discharge"
                 and application.operation == APPLY_REVIEW_DISCHARGE
@@ -510,15 +605,29 @@ class DistinctionGovernancePersistence(ABC):
                 )
 
             self._delete_model(GOVERNANCE_OBLIGATION_KIND, obligation_id)
-            # Receipt second is deliberate: failure must restore the obligation.
-            self._put_model(
-                GOVERNANCE_APPLICATION_KIND,
-                _persist_application(receipt),
-            )
+            self._put_model(GOVERNANCE_APPLICATION_KIND, _persist_application(receipt))
+            self._append_history_event(application_committed_event(receipt))
+
+    def rebuild_projection_from_canonical_history(self) -> GovernanceConfiguration:
+        """Discard the sidecar and rebuild an equivalent projection from Event history."""
+
+        history = reconstruct_governance_history(self._history_events())
+        config = history.configuration
+        with self._transaction():
+            self._clear_models()
+            for scheme_id, state in config.states.items():
+                self._put_model(GOVERNANCE_STATE_KIND, _persist_state(scheme_id, state))
+            for obligation in config.runtime.obligations.values():
+                self._put_model(GOVERNANCE_OBLIGATION_KIND, _persist_obligation(obligation))
+            for decision in config.runtime.decisions.values():
+                self._put_model(GOVERNANCE_DECISION_KIND, _persist_decision(decision))
+            for receipt in config.runtime.applications.values():
+                self._put_model(GOVERNANCE_APPLICATION_KIND, _persist_application(receipt))
+        return self._configuration()
 
 
 class InMemoryDistinctionGovernancePersistence(DistinctionGovernancePersistence):
-    """Private sidecar for ``InMemoryStateStore`` excluded from public export."""
+    """Materialized projection for ``InMemoryStateStore``."""
 
     def __init__(self, store: InMemoryStateStore) -> None:
         self.store = store
@@ -552,15 +661,17 @@ class InMemoryDistinctionGovernancePersistence(DistinctionGovernancePersistence)
     def _delete_model(self, kind: str, identifier: str) -> None:
         self._records[kind].pop(identifier, None)
 
+    def _clear_models(self) -> None:
+        for kind in GOVERNANCE_KINDS:
+            self._records[kind].clear()
+
     @contextmanager
     def _transaction(self) -> Iterator[None]:
         with self._lock:
-            snapshot = {
-                kind: dict(values)
-                for kind, values in self._records.items()
-            }
+            snapshot = {kind: dict(values) for kind, values in self._records.items()}
             try:
-                yield
+                with self.store.transaction():
+                    yield
             except Exception:
                 self._records.clear()
                 self._records.update(snapshot)
@@ -568,12 +679,7 @@ class InMemoryDistinctionGovernancePersistence(DistinctionGovernancePersistence)
 
 
 class SQLiteDistinctionGovernancePersistence(DistinctionGovernancePersistence):
-    """Private durable sidecar for ``SQLiteStateStore``.
-
-    One generic table carries all governance kinds. Keeping it separate from
-    ``runtime_records`` leaves current export/import bundles and Runtime
-    Protocol 2.0 unchanged.
-    """
+    """SQLite materialized projection; canonical Event history remains portable."""
 
     _CREATE_SQL = (
         "CREATE TABLE IF NOT EXISTS runtime_governance_records ("
@@ -594,9 +700,8 @@ class SQLiteDistinctionGovernancePersistence(DistinctionGovernancePersistence):
         "ON CONFLICT(kind, id) DO UPDATE SET "
         "data=excluded.data, created_at=excluded.created_at"
     )
-    _DELETE_SQL = (
-        "DELETE FROM runtime_governance_records WHERE kind=? AND id=?"
-    )
+    _DELETE_SQL = "DELETE FROM runtime_governance_records WHERE kind=? AND id=?"
+    _CLEAR_SQL = "DELETE FROM runtime_governance_records"
 
     def __init__(self, store: SQLiteStateStore) -> None:
         self.store = store
@@ -609,19 +714,13 @@ class SQLiteDistinctionGovernancePersistence(DistinctionGovernancePersistence):
     def _get_model(self, kind: str, identifier: str) -> _GovernanceEnvelope | None:
         model_type = _MODEL_BY_KIND[kind]
         with self._lock:
-            row = self._connection.execute(
-                self._GET_SQL,
-                (kind, identifier),
-            ).fetchone()
+            row = self._connection.execute(self._GET_SQL, (kind, identifier)).fetchone()
         return None if row is None else model_type.model_validate_json(row["data"])
 
     def _list_models(self, kind: str) -> list[_GovernanceEnvelope]:
         model_type = _MODEL_BY_KIND[kind]
         with self._lock:
-            rows = self._connection.execute(
-                self._LIST_SQL,
-                (kind,),
-            ).fetchall()
+            rows = self._connection.execute(self._LIST_SQL, (kind,)).fetchall()
         return [model_type.model_validate_json(row["data"]) for row in rows]
 
     def _put_model(self, kind: str, value: _GovernanceEnvelope) -> None:
@@ -637,10 +736,10 @@ class SQLiteDistinctionGovernancePersistence(DistinctionGovernancePersistence):
         )
 
     def _delete_model(self, kind: str, identifier: str) -> None:
-        self._connection.execute(
-            self._DELETE_SQL,
-            (kind, identifier),
-        )
+        self._connection.execute(self._DELETE_SQL, (kind, identifier))
+
+    def _clear_models(self) -> None:
+        self._connection.execute(self._CLEAR_SQL)
 
     @contextmanager
     def _transaction(self) -> Iterator[None]:
