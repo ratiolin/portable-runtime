@@ -23,7 +23,7 @@ from portable_runtime.core.models import (
     Work,
 )
 from portable_runtime.records.knowledge import KnowledgeProjection
-from portable_runtime.records.models import BaseRecord, EvidenceArtifact
+from portable_runtime.records.models import BaseRecord, EvidenceArtifact, OutcomeRecord
 from portable_runtime.records.relations import RecordRelation
 
 

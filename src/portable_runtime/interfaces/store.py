@@ -19,8 +19,8 @@ from portable_runtime.core.models import (
 )
 from portable_runtime.records.knowledge import KnowledgeProjection
 from portable_runtime.records.models import BaseRecord, OutcomeRecord
-from portable_runtime.records.verified_outcome_commit import VerifiedOutcomeCommitRequest
 from portable_runtime.records.relations import RecordRelation
+from portable_runtime.records.verified_outcome_commit import VerifiedOutcomeCommitRequest
 
 T = TypeVar("T")
 
