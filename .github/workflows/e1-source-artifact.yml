@@ -1,0 +1,25 @@
+name: E1 source artifact
+
+on:
+  push:
+    branches:
+      - feat/governance-use-admission
+
+permissions:
+  contents: read
+
+jobs:
+  source:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: actions/upload-artifact@v4
+        with:
+          name: e1-source
+          path: |
+            src/portable_runtime/core/boundary.py
+            src/portable_runtime/core/boundary_stages.py
+            .github/workflows/ci.yml
+            tests/conformance/test_boundary_architecture.py
