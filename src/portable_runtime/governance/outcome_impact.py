@@ -8,7 +8,7 @@ or payload claims alone never create B3 trigger authority.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Literal, Protocol
+from typing import Literal, Protocol
 
 from portable_runtime.core.models import Action, Event, Run, Step, StepAttempt, Work
 from portable_runtime.records.models import BaseRecord, OutcomeRecord
