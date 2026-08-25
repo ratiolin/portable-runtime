@@ -127,19 +127,10 @@ jobs:
           if old not in s:
               raise SystemExit("architecture stage assertion anchor missing")
           arch.write_text(s.replace(old, new, 1))
-
-          ci = Path(".github/workflows/ci.yml")
-          s = ci.read_text()
-          anchor = "          tests/conformance/test_distinction_governance_bundle_portability.py\n"
-          if anchor not in s:
-              raise SystemExit("strict-conformance anchor missing")
-          ci.write_text(s.replace(anchor, anchor + "          tests/conformance/test_governance_use_admission.py\n", 1))
-
-          Path(".github/workflows/e1-source-artifact.yml").unlink()
       - name: Commit exact seam
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add -A
+          git add src/portable_runtime/core/boundary.py src/portable_runtime/core/boundary_stages.py tests/conformance/test_boundary_architecture.py
           git commit -m "feat: insert read-only governance-use boundary seam"
           git push origin HEAD:feat/governance-use-admission
