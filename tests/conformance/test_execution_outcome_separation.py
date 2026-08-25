@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import inspect
 from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
 
 import pytest
 
+from portable_runtime.core.boundary import RealityBoundary
 from portable_runtime.core.boundary_stages import ExecutionRecordIds, commit_execution_projection
 from portable_runtime.core.capabilities import CapabilityRequest, CapabilityResult
 from portable_runtime.core.models import Action, Run, Step, StepAttempt, Work
@@ -233,3 +235,13 @@ def test_fb1_008_completion_authority_rejects_provider_success_without_bound_ver
 
     assert store.get_work(work.id).status == "open"  # type: ignore[union-attr]
     assert store.get_run(run.id).status == "running"  # type: ignore[union-attr]
+
+
+def test_fb1_009_live_boundary_events_cannot_claim_objective_outcome_authority() -> None:
+    source = inspect.getsource(RealityBoundary.execute)
+
+    assert '"ExecutionSucceeded"' in source
+    assert '"semantic_level": "execution"' in source
+    assert '"authoritative_outcome": False' in source
+    assert '"compatibility_event": True' in source
+    assert '"OutcomeRecorded"' not in source
