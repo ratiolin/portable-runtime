@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import hashlib
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Literal
 
 from portable_runtime.governance.distinction import (
     ApplicationReceipt,
@@ -43,9 +43,33 @@ _BLOCKING_ACTIONS = frozenset(
     }
 )
 
+ProjectionStatus = Literal["not-required", "ready", "projection-unavailable"]
+
 
 class GovernanceLifecycleRejected(ValueError):
     """The current governance snapshot rejects the requested lifecycle step."""
+
+
+@dataclass(frozen=True)
+class ReviewProjection:
+    """Structured result of projecting one policy disposition into governance state."""
+
+    status: ProjectionStatus
+    action: ImpactType
+    target: str
+    blocking: bool
+    obligation: ReviewObligation | None = None
+
+
+class GovernanceProjectionUnavailable(GovernanceLifecycleRejected):
+    """A review responsibility cannot be represented by the governance projection."""
+
+    def __init__(self, projection: ReviewProjection) -> None:
+        self.projection = projection
+        super().__init__(
+            f"governance projection unavailable for {projection.target!r} "
+            f"under {projection.action!r} disposition"
+        )
 
 
 @dataclass(frozen=True)
@@ -53,6 +77,7 @@ class RevalidationGovernanceResult:
     assessments: tuple[AffectedAssessment, ...]
     opened_obligations: tuple[ReviewObligation, ...]
     already_processed_obligation_ids: tuple[str, ...]
+    projection_unavailable: tuple[ReviewProjection, ...] = ()
 
 
 def _disposition(assessment: AffectedAssessment) -> ImpactType:
@@ -68,6 +93,8 @@ def _obligation_id(
     context: str,
     action: ImpactType,
 ) -> str:
+    # Phase D compatibility identity. Phase D.5 will move replay ownership to
+    # the durable EventInstance processor rather than deriving it from Q.
     material = "\x1f".join((event_ref, target, context, action)).encode()
     digest = hashlib.sha256(material).hexdigest()[:24]
     return f"review_{digest}"
@@ -111,26 +138,37 @@ def project_review_obligation(
     event_ref: str,
     context: str,
     persistence: DistinctionGovernancePersistence,
-) -> ReviewObligation | None:
-    """Project a revalidation policy disposition into one governance Q.
+) -> ReviewProjection:
+    """Project a policy disposition into a structured governance result.
 
     Revalidation remains the owner of impact/risk/policy interpretation. This
-    function creates no obligation for ``none`` or ``warn`` and never changes
-    qualification or activation state.
+    function never changes qualification or activation. Missing representation
+    is explicit rather than collapsing into the same result as ``no review``.
     """
 
     action = _disposition(assessment)
-    if action not in _REVIEW_ACTIONS:
-        return None
     target = assessment.affected_ref
+    blocking = action in _BLOCKING_ACTIONS
+    if action not in _REVIEW_ACTIONS:
+        return ReviewProjection(
+            status="not-required",
+            action=action,
+            target=target,
+            blocking=False,
+        )
     if persistence.get_state(target) is None:
-        return None
+        return ReviewProjection(
+            status="projection-unavailable",
+            action=action,
+            target=target,
+            blocking=blocking,
+        )
     invalidates = frozenset(
         decision.id
         for decision in persistence.list_decisions().values()
         if decision.target == target and decision.context == context
     )
-    return ReviewObligation(
+    obligation = ReviewObligation(
         id=_obligation_id(
             event_ref=event_ref,
             target=target,
@@ -141,9 +179,16 @@ def project_review_obligation(
         trigger_ref=event_ref,
         basis_refs=(assessment.change_ref,),
         context=context,
-        blocking=action in _BLOCKING_ACTIONS,
+        blocking=blocking,
         closure_requirements=_closure_requirements(action),
         invalidates_decisions=invalidates,
+    )
+    return ReviewProjection(
+        status="ready",
+        action=action,
+        target=target,
+        blocking=blocking,
+        obligation=obligation,
     )
 
 
@@ -195,15 +240,24 @@ class RevalidationGovernanceLifecycle:
         )
         opened: list[ReviewObligation] = []
         processed: list[str] = []
+        unavailable: list[ReviewProjection] = []
         for assessment in assessments:
-            obligation = project_review_obligation(
+            projection = project_review_obligation(
                 assessment,
                 event_ref=event_ref,
                 context=context,
                 persistence=self.persistence,
             )
-            if obligation is None:
+            if projection.status == "not-required":
                 continue
+            if projection.status == "projection-unavailable":
+                unavailable.append(projection)
+                if projection.blocking:
+                    raise GovernanceProjectionUnavailable(projection)
+                continue
+            obligation = projection.obligation
+            if obligation is None:
+                raise GovernanceLifecycleRejected("ready governance projection requires an obligation")
             if _obligation_already_processed(self.persistence, obligation.id):
                 processed.append(obligation.id)
                 continue
@@ -213,6 +267,7 @@ class RevalidationGovernanceLifecycle:
             assessments=assessments,
             opened_obligations=tuple(opened),
             already_processed_obligation_ids=tuple(processed),
+            projection_unavailable=tuple(unavailable),
         )
 
     def record_decision(self, decision: GovernanceDecision) -> None:
