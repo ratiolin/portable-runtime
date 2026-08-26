@@ -254,7 +254,8 @@ class ExperienceUseAdmissionEvaluator:
                 continue
             premise_refs = {str(value) for value in raw.get("premise_refs", []) if isinstance(value, str)}
             evidence_refs = {str(value) for value in raw.get("evidence_refs", []) if isinstance(value, str)}
-            metadata = raw.get("metadata") if isinstance(raw.get("metadata"), dict) else {}
+            metadata_value = raw.get("metadata")
+            metadata: dict[str, Any] = metadata_value if isinstance(metadata_value, dict) else {}
             scope_refs = {
                 str(value)
                 for value in metadata.get("scope_version_refs", [])
