@@ -1,7 +1,4 @@
-"""EUA-A: freeze the missing experience-use authority boundary.
-
-Audit-only. No production Experience Use API is implied by these tests.
-"""
+"""EUA-A baseline guards after EUA-B read-only graduation."""
 
 from __future__ import annotations
 
@@ -12,6 +9,12 @@ import pytest
 from portable_runtime.core.knowledge import can_promote, promote
 from portable_runtime.core.models import KnowledgeItem
 from portable_runtime.core.qualification import _KIND_TO_PROOF, _REF_KEYS
+from portable_runtime.experience.use_admission import (
+    ExperienceUseAdmission,
+    ExperienceUseAdmissionEvaluator,
+    ExperienceUseRequirement,
+    ResolvedExperienceUseSnapshot,
+)
 from portable_runtime.protocol.validation import validate_state_graph
 from portable_runtime.records.authorization import create_grant_for_approval
 from portable_runtime.records.knowledge import KnowledgeProjection
@@ -121,7 +124,9 @@ def test_eua_a_003_official_projection_truth_is_validated_as_a_typed_bound_graph
     assert not any("knowledge projection" in error.lower() for error in errors), errors
 
 
-def test_eua_a_004_existing_qualification_vocabulary_does_not_treat_projection_as_use_authority() -> None:
+def test_eua_a_004_generic_qualification_vocabulary_remains_distinct_from_experience_use() -> None:
+    # EUA-B adds an independent evaluator. It does not overload the generic
+    # qualification reference vocabulary or its opaque digest domain.
     assert "knowledge_projection_refs" not in _REF_KEYS
     assert "projection_refs" not in _REF_KEYS
     assert "knowledgeprojection" not in _KIND_TO_PROOF
@@ -136,13 +141,16 @@ def test_eua_a_005_no_duplicate_experience_qualification_authority_exists() -> N
     assert "class ExperienceQualification" not in _source_text()
 
 
-def test_eua_a_006_experience_use_admission_is_not_yet_production() -> None:
-    source = _source_text()
-    assert "class ExperienceUseAdmission" not in source
-    assert "class ExperienceUseRequirement" not in source
+def test_eua_a_006_read_only_experience_use_admission_is_now_production() -> None:
+    assert ExperienceUseRequirement is not None
+    assert ExperienceUseAdmission is not None
+    assert ExperienceUseAdmissionEvaluator is not None
+    assert ResolvedExperienceUseSnapshot is not None
 
 
-def test_eua_a_007_durable_experience_use_snapshot_is_not_yet_production() -> None:
+def test_eua_a_007_durable_experience_use_snapshot_is_still_not_production() -> None:
+    # ResolvedExperienceUseSnapshot is an immutable evaluator result, not the
+    # durable historical authority whose placement EUA-C must decide.
     assert "class ExperienceUseSnapshot" not in _source_text()
 
 
@@ -150,26 +158,3 @@ def test_eua_a_008_experience_impact_authority_is_not_preopened() -> None:
     source = _source_text()
     assert "ExperienceImpactApplicability" not in source
     assert "ExperienceImpactJudgment" not in source
-
-
-_EUA_COUNTEREXAMPLES = [
-    ("EUA-001", "official projection != usable in this concrete context"),
-    ("EUA-002", "retrieval hit != qualified experience use"),
-    ("EUA-003", "evidence exists != usable experience"),
-    ("EUA-004", "promotion authorization != experience-use or responsibility authorization"),
-    ("EUA-005", "experience-use eligibility != permission to execute"),
-    ("EUA-006", "scope match != environment/version match"),
-    ("EUA-007", "projection identity != immutable currently usable semantic state"),
-    ("EUA-008", "caller counterexample absence != canonical counterexample absence"),
-    ("EUA-009", "open revalidation/reopen blocker != still usable"),
-    ("EUA-010", "deprecated/archived projection != usable experience"),
-]
-
-
-@pytest.mark.parametrize(("case_id", "obligation"), _EUA_COUNTEREXAMPLES, ids=[item[0] for item in _EUA_COUNTEREXAMPLES])
-@pytest.mark.xfail(strict=True, reason="EUA-A counterexample freeze; read-only use admission not implemented")
-def test_eua_a_counterexamples_require_a_future_real_evaluator(case_id: str, obligation: str) -> None:
-    # EUA-A deliberately does not freeze a hypothetical production API. Each
-    # obligation must later graduate by being rewritten against the real EUA-B
-    # store-owned evaluator rather than by adding audit-only helpers.
-    raise AssertionError(f"{case_id}: {obligation}")
