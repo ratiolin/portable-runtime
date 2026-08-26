@@ -235,24 +235,30 @@ def test_eua_006_scope_match_does_not_hide_environment_or_version_drift() -> Non
     assert version_drift.status == "stale"
 
 
-def test_eua_007_same_projection_id_different_semantics_changes_snapshot_digest() -> None:
+def test_eua_007_same_projection_id_new_canonical_fact_changes_snapshot_digest() -> None:
     store = InMemoryStateStore()
     seeded = _seed_official(store)
     requirement = _requirement(seeded)
     evaluator = ExperienceUseAdmissionEvaluator(store)
     first = evaluator.evaluate(requirement)
     old_payload = first.resolved_snapshot.materialize()
+    projection = seeded["projection"]
+    assert isinstance(projection, KnowledgeProjection)
 
-    claim = seeded["claim"]
-    assert isinstance(claim, Assertion)
-    store.save_record(
-        claim.model_copy(
-            update={"statement": "revised claim semantics", "version": claim.version + 1}
+    change = ChangeObjectRecord(id="eua_semantic_change", lifecycle_status="draft")
+    store.save_record(change)
+    store.save_relation(
+        RecordRelation(
+            id="eua_semantic_revalidation",
+            relation_type="requires-revalidation",
+            subject_ref=projection.id,
+            object_ref=change.id,
         )
     )
     second = evaluator.evaluate(requirement)
 
-    assert first.status == second.status == "allowed"
+    assert first.status == "allowed"
+    assert second.status == "stale"
     assert first.requirement_digest == second.requirement_digest
     assert first.snapshot_digest != second.snapshot_digest
     assert old_payload == first.resolved_snapshot.materialize()
