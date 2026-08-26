@@ -47,6 +47,24 @@ jobs:
           enable-cache: true
       - name: Sync locked dependencies
         run: uv sync --locked --extra dev
+      - name: Verify canonical contracts are packaged in the wheel
+        run: |
+          rm -rf dist-contract-check
+          uv build --wheel --out-dir dist-contract-check
+          uv run python - <<'PY'
+          import glob
+          import tomllib
+          import zipfile
+
+          wheels = glob.glob("dist-contract-check/*.whl")
+          assert len(wheels) == 1, wheels
+          with zipfile.ZipFile(wheels[0]) as archive:
+              name = "portable_runtime/_contracts/catalog.toml"
+              assert name in archive.namelist(), "canonical contract catalog missing from wheel"
+              catalog = tomllib.loads(archive.read(name).decode("utf-8"))
+              assert catalog["owner"] == "portable-runtime/contracts"
+              assert catalog["catalog_version"] == "portable-runtime-contracts-v1"
+          PY
       - name: Public contract canonicalization oracle
         run: uv run python -m portable_runtime.public_contracts.vectors
       - name: Strict conformance
