@@ -11,6 +11,7 @@ from typing import Any, Literal, cast
 from portable_runtime.core.capabilities import CapabilityRequest
 from portable_runtime.core.models import Event
 from portable_runtime.core.qualification import InvocationPermit
+from portable_runtime.governance.provider_execution_binding import ProviderExecutionBinding
 from portable_runtime.governance.use_admission import (
     GovernanceUseAdmission,
     GovernanceUseRequirementResolver,
@@ -43,6 +44,7 @@ class DispatchCommitDecision:
     commit_ref: str | None = None
     reason: str = ""
     current_snapshot_digest: str | None = None
+    provider_execution_binding_ref: str | None = None
 
 
 class DispatchLinearizationError(RuntimeError):
@@ -51,13 +53,7 @@ class DispatchLinearizationError(RuntimeError):
 
 @contextmanager
 def _dispatch_linearized_write(store: Any) -> Iterator[None]:
-    """Serialize governance truth and dispatch commitment in one store domain.
-
-    The supported portable-local domains are one in-memory StateStore object
-    and one SQLite database. SQLite deliberately uses ``BEGIN IMMEDIATE`` so
-    the dispatch claim competes with canonical governance mutations for the
-    same writer serialization point before reading governance truth.
-    """
+    """Serialize governance truth and dispatch commitment in one store domain."""
 
     if isinstance(store, InMemoryStateStore):
         with store.transaction():
@@ -92,6 +88,7 @@ def _dispatch_commit_ref(
     request: CapabilityRequest,
     permit: InvocationPermit,
     attempt_id: str | None,
+    provider_execution_binding_ref: str | None = None,
 ) -> str:
     payload = {
         "schema": DISPATCH_COMMIT_SCHEMA,
@@ -102,18 +99,16 @@ def _dispatch_commit_ref(
         "governance_requirement_digest": permit.governance_requirement_digest,
         "governance_snapshot_digest": permit.governance_snapshot_digest,
     }
+    # Preserve exact legacy dispatch identities when no execution binding was
+    # captured. New reality-exit dispatches include the binding ref in identity.
+    if provider_execution_binding_ref is not None:
+        payload["provider_execution_binding_ref"] = provider_execution_binding_ref
     raw = json.dumps(payload, sort_keys=True, separators=(",", ":"))
     return f"dispatch_{hashlib.sha256(raw.encode()).hexdigest()}"
 
 
 def dispatch_recovery_mode(step: Any, attempt: Any) -> DispatchRecoveryMode:
-    """Classify recovery after a durable dispatch commitment.
-
-    A committed attempt is never equivalent to a fresh, never-dispatched
-    invocation. Pure/idempotent/deduplicatable work may be retried only under
-    the same idempotency identity; reconcilable work must reconcile; opaque
-    work is unknown and requires explicit recovery.
-    """
+    """Classify recovery after a durable dispatch commitment."""
 
     metadata = getattr(attempt, "metadata", {})
     if not isinstance(metadata, dict) or not metadata.get("dispatch_commit_ref"):
@@ -129,10 +124,10 @@ def dispatch_recovery_mode(step: Any, attempt: Any) -> DispatchRecoveryMode:
 class GovernanceDispatchCommitter:
     """Linearize one governed dispatch claim against canonical governance.
 
-    This bridge never owns provider capability. It only establishes a durable
-    execution fact after validating the exact governance judgment bound into
-    ``InvocationPermit`` while holding the authoritative StateStore write
-    serialization domain.
+    When an authoritative ProviderRegistry is supplied, the exact configured
+    execution binding is captured inside the same durable dispatch commitment
+    before provider reality exit. The binding is provenance only and grants no
+    provider capability.
     """
 
     def __init__(self, store: Any) -> None:
@@ -145,6 +140,7 @@ class GovernanceDispatchCommitter:
         resolver: GovernanceUseRequirementResolver | None,
         *,
         attempt_id: str | None,
+        provider_registry: Any | None = None,
     ) -> DispatchCommitDecision:
         if not permit.governance_applicable:
             return DispatchCommitDecision(
@@ -194,23 +190,46 @@ class GovernanceDispatchCommitter:
                         current_snapshot_digest=current.snapshot_digest,
                     )
 
-                commit_ref = _dispatch_commit_ref(request, permit, attempt_id)
+                execution_binding: ProviderExecutionBinding | None = None
+                if provider_registry is not None:
+                    binding_getter = getattr(provider_registry, "execution_binding", None)
+                    if not callable(binding_getter):
+                        raise DispatchLinearizationError(
+                            "authoritative provider registry lacks execution binding authority"
+                        )
+                    execution_binding = binding_getter(permit.provider_id)
+                    if execution_binding.provider_id != permit.provider_id:
+                        raise DispatchLinearizationError(
+                            "provider execution binding does not match InvocationPermit provider"
+                        )
+
+                binding_ref = execution_binding.id if execution_binding is not None else None
+                commit_ref = _dispatch_commit_ref(
+                    request,
+                    permit,
+                    attempt_id,
+                    binding_ref,
+                )
+                event_payload: dict[str, Any] = {
+                    "schema": DISPATCH_COMMIT_SCHEMA,
+                    "request_id": request.id,
+                    "provider_id": permit.provider_id,
+                    "attempt_ref": attempt_id,
+                    "invocation_permit_digest": permit.request_digest,
+                    "qualification_digest": permit.qualification_digest,
+                    "governance_requirement_digest": permit.governance_requirement_digest,
+                    "governance_snapshot_digest": permit.governance_snapshot_digest,
+                    "lease_generation": permit.lease_generation,
+                    "linearization_domain": "authoritative-state-store",
+                }
+                if execution_binding is not None:
+                    event_payload["provider_execution_binding_ref"] = execution_binding.id
+                    event_payload["provider_execution_binding"] = execution_binding.model_dump(mode="json")
                 event = Event(
                     id=commit_ref,
                     type=DISPATCH_COMMIT_EVENT,
                     subject_ref=request.id,
-                    payload={
-                        "schema": DISPATCH_COMMIT_SCHEMA,
-                        "request_id": request.id,
-                        "provider_id": permit.provider_id,
-                        "attempt_ref": attempt_id,
-                        "invocation_permit_digest": permit.request_digest,
-                        "qualification_digest": permit.qualification_digest,
-                        "governance_requirement_digest": permit.governance_requirement_digest,
-                        "governance_snapshot_digest": permit.governance_snapshot_digest,
-                        "lease_generation": permit.lease_generation,
-                        "linearization_domain": "authoritative-state-store",
-                    },
+                    payload=event_payload,
                 )
 
                 if attempt_id is not None:
@@ -239,6 +258,8 @@ class GovernanceDispatchCommitter:
                             "invocation_permit_digest": permit.request_digest,
                         }
                     )
+                    if execution_binding is not None:
+                        metadata["provider_execution_binding_ref"] = execution_binding.id
                     self.store.save_attempt(
                         attempt.model_copy(update={"metadata": metadata})
                     )
@@ -249,6 +270,7 @@ class GovernanceDispatchCommitter:
                     commit_ref=commit_ref,
                     reason="governed dispatch commitment linearized",
                     current_snapshot_digest=current.snapshot_digest,
+                    provider_execution_binding_ref=binding_ref,
                 )
         except Exception as exc:
             return DispatchCommitDecision(
