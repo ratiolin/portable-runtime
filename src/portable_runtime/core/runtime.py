@@ -8,7 +8,6 @@ from portable_runtime.core.capabilities import CapabilityRequest, CapabilityResu
 from portable_runtime.core.models import Run, Step, Work, new_id, utcnow
 from portable_runtime.core.registry import ProviderRegistry
 from portable_runtime.core.router import CapabilityService
-from portable_runtime.governance.dispatch import dispatch_recovery_mode
 from portable_runtime.interfaces.artifact_store import ArtifactStore
 from portable_runtime.interfaces.store import StateStore
 from portable_runtime.stores.memory import InMemoryStateStore
@@ -164,106 +163,53 @@ class Runtime:
             return []
 
     async def reconcile(self, step_id: str) -> CapabilityResult | None:
+        """Compatibility-only fail-closed reconciliation surface.
+
+        A step plus its latest attempt cannot prove one unique reconciliation
+        responsibility. Automated reconciliation therefore requires an
+        independent exact recovery-responsibility authority path. This legacy
+        method never crosses a provider reality boundary.
+        """
+
         try:
             step = self.store.get_step(step_id)  # type: ignore[attr-defined]
         except Exception:
             return None
         if not step:
             return None
-        attempts = []
         try:
             attempts = self.store.list_attempts(step_id)  # type: ignore[attr-defined]
         except Exception:
-            pass
+            return None
         if not attempts:
             return None
         last = sorted(attempts, key=lambda a: a.attempt_no)[-1]
         if not last.request_ref or not last.provider_id:
             return None
-        recovery_mode = dispatch_recovery_mode(step, last)
-        if recovery_mode == "unknown":
-            step.status = "unknown"
-            self.store.save_step(step)  # type: ignore
-            return CapabilityResult(
-                request_id=last.request_ref,
-                provider_id=last.provider_id,
-                status="unknown",
-                message="dispatch was durably committed; external effect is unknown and requires explicit recovery",
-            )
-        if recovery_mode == "idempotent-retry":
-            step.status = "unknown"
-            self.store.save_step(step)  # type: ignore
-            return CapabilityResult(
-                request_id=last.request_ref,
-                provider_id=last.provider_id,
-                status="unknown",
-                message="dispatch was durably committed; retry only with the same idempotency identity",
-            )
-        result = await self.capabilities.reconcile(last.request_ref, last.provider_id)
-        if result:
-            metadata = last.metadata if isinstance(last.metadata, dict) else {}
-            dispatch_commit_ref = metadata.get("dispatch_commit_ref")
-            if isinstance(dispatch_commit_ref, str) and dispatch_commit_ref:
-                from portable_runtime.workflows.recovery_observation import (
-                    RecoveryObservationCommitRequest,
-                    reported_status_from_capability_status,
+
+        # Compatibility projection only: a durable dispatch with no exact
+        # reconciliation responsibility selected remains locally unknown.
+        if step.status != "unknown":
+            with contextlib.suppress(Exception):
+                self.store.save_step(
+                    step.model_copy(update={"status": "unknown", "updated_at": utcnow()})
                 )
 
-                commit_observation = getattr(
-                    self.store,
-                    "commit_recovery_observation",
-                    None,
-                )
-                try:
-                    if not callable(commit_observation):
-                        raise RuntimeError(
-                            "StateStore lacks commit_recovery_observation"
-                        )
-                    observation = commit_observation(
-                        RecoveryObservationCommitRequest(
-                            observation_instance_ref=new_id(
-                                "recovery_observation_instance"
-                            ),
-                            dispatch_commit_ref=dispatch_commit_ref,
-                            observation_source="provider-reconcile",
-                            reported_status=reported_status_from_capability_status(
-                                result.status
-                            ),
-                            provenance_refs=(last.provider_id,),
-                        )
-                    )
-                    result = result.model_copy(
-                        update={
-                            "metadata": {
-                                **result.metadata,
-                                "recovery_observation_ref": observation.id,
-                            }
-                        }
-                    )
-                except Exception as exc:
-                    step.status = "unknown"
-                    self.store.save_step(step)  # type: ignore
-                    return CapabilityResult(
-                        request_id=last.request_ref,
-                        provider_id=last.provider_id,
-                        status="unknown",
-                        message=(
-                            "reconciliation result could not be durably observed"
-                        ),
-                        error={
-                            "code": "RecoveryObservationCommitFailed",
-                            "reason": str(exc),
-                        },
-                    )
-            if result.status == "unknown":
-                step.status = "unknown"
-                self.store.save_step(step)  # type: ignore
-            return result
-        if step.effect_semantics in ("irreversible-opaque", "reconcilable"):
-            step.status = "unknown"
-            self.store.save_step(step)  # type: ignore
-            return CapabilityResult(request_id=last.request_ref, provider_id=last.provider_id, status="unknown", message="reconcile failed, marked unknown")
-        return None
+        return CapabilityResult(
+            request_id=last.request_ref,
+            provider_id=last.provider_id,
+            status="unknown",
+            message=(
+                "dispatch was durably committed; legacy Runtime.reconcile(step_id) "
+                "is compatibility-only and cannot authorize automated reconciliation"
+            ),
+            error={
+                "code": "AuthoritativeReconciliationRequired",
+                "reason": (
+                    "step/latest Attempt identity cannot select a reconciliation responsibility"
+                ),
+            },
+        )
 
     def interrupt(self, run_id: str) -> Run:
         run = self.store.get_run(run_id)
