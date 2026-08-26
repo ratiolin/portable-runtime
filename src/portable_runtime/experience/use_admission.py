@@ -1,8 +1,8 @@
 """Read-only Experience Use Admission.
 
 EUA-B resolves canonical KnowledgeProjection state from one coherent store
-snapshot and answers whether the selected experience is usable for one exact
-context now.  It creates no durable authority and grants no execution
+snapshot and answers whether selected experience is usable for one exact
+context now. It creates no durable authority and grants no execution
 permission.
 """
 
@@ -42,9 +42,9 @@ _EXPECTED_DIRECT_TYPES: dict[str, set[tuple[str, str | None]]] = {
 def _freeze(value: Any) -> Any:
     if isinstance(value, Mapping):
         return MappingProxyType({str(key): _freeze(item) for key, item in value.items()})
-    if isinstance(value, list | tuple):
+    if isinstance(value, (list, tuple)):
         return tuple(_freeze(item) for item in value)
-    if isinstance(value, set | frozenset):
+    if isinstance(value, (set, frozenset)):
         return tuple(sorted((_freeze(item) for item in value), key=repr))
     return value
 
@@ -64,7 +64,7 @@ def _without_noise(value: Any) -> Any:
             for key, item in value.items()
             if str(key) not in _NOISE_KEYS
         }
-    if isinstance(value, list | tuple):
+    if isinstance(value, (list, tuple)):
         return [_without_noise(item) for item in value]
     return value
 
@@ -88,11 +88,11 @@ def _normal_refs(values: tuple[str, ...] | list[str]) -> tuple[str, ...]:
 
 @dataclass(frozen=True)
 class ExperienceUseRequirement:
-    """Caller request boundary for one read-only experience-use decision.
+    """Caller boundary for one read-only experience-use decision.
 
-    The caller may select canonical projection refs and describe the concrete
-    use context.  It cannot provide assertion/evidence/judgment/counterexample
-    refs; those are reconstructed from the store-owned projection graph.
+    The caller selects canonical projection refs and supplies only concrete use
+    context. Assertion/evidence/judgment/counterexample refs are reconstructed
+    from store-owned canonical state.
     """
 
     projection_refs: tuple[str, ...] = ()
@@ -125,10 +125,10 @@ class ExperienceUseRequirement:
 
 @dataclass(frozen=True)
 class ResolvedExperienceUseSnapshot:
-    """Immutable in-memory facts actually checked by one admission.
+    """Immutable in-memory facts checked by one admission.
 
-    This is intentionally not a durable historical use fact.  EUA-C decides
-    whether/how an allowed snapshot becomes bound to an actual judgment.
+    This is not a durable historical use fact. EUA-C decides whether and how
+    an allowed snapshot becomes bound to an actual judgment.
     """
 
     semantic_json: str
@@ -241,14 +241,14 @@ class ExperienceUseAdmissionEvaluator:
         cls,
         state: Mapping[str, Any],
         projection: KnowledgeProjection,
-        resolved: Mapping[str, dict[str, Any]],
+        projection_resolved: Mapping[str, dict[str, Any]],
     ) -> tuple[list[dict[str, Any]], list[dict[str, Any]], set[str]]:
         assertions = set(projection.current_assertion_refs)
         judgments = set(projection.epistemic_judgment_refs)
         evidence = set(projection.evidence_summary_refs)
         scopes = set(projection.scope_version_refs)
         derivations: list[dict[str, Any]] = []
-        graph_refs = {projection.id, *resolved.keys()}
+        graph_refs = {projection.id, *projection_resolved.keys()}
         for raw in cls._bucket(state, "record"):
             if raw.get("record_type") != "Derivation":
                 continue
@@ -272,8 +272,9 @@ class ExperienceUseAdmissionEvaluator:
                     graph_refs.add(identifier)
 
         relations: list[dict[str, Any]] = []
-        # Expand one stable hop so canonical contradiction/revalidation facts
-        # cannot be hidden merely because the caller omitted their refs.
+        # Expand one canonical hop. The seed is per-projection so one selected
+        # experience cannot pull another selected projection's graph into its
+        # eligibility domain.
         for raw in cls._bucket(state, "relation"):
             subject = raw.get("subject_ref")
             obj = raw.get("object_ref")
@@ -333,6 +334,23 @@ class ExperienceUseAdmissionEvaluator:
                 return "unavailable", [*reasons, f"invalid-epistemic-judgment:{ref}"]
         return ("stale", reasons) if reasons else (None, [])
 
+    @staticmethod
+    def _projection_payload(projection: KnowledgeProjection) -> dict[str, Any]:
+        return {
+            "id": projection.id,
+            "lifecycle_status": projection.lifecycle_status,
+            "current_assertion_refs": list(projection.current_assertion_refs),
+            "evidence_summary_refs": list(projection.evidence_summary_refs),
+            "epistemic_judgment_refs": list(projection.epistemic_judgment_refs),
+            "authorization_refs": list(projection.authorization_refs),
+            "scope_version_refs": list(projection.scope_version_refs),
+            "validity_scope": dict(projection.validity_scope),
+            "environment_bindings": dict(projection.environment_bindings),
+            "counterexample_refs": list(projection.counterexample_refs),
+            "negative_knowledge_refs": list(projection.negative_knowledge_refs),
+            "reopen_conditions": list(projection.reopen_conditions),
+        }
+
     @classmethod
     def _snapshot_payload(
         cls,
@@ -343,34 +361,25 @@ class ExperienceUseAdmissionEvaluator:
         relations: list[dict[str, Any]],
         unresolved: list[str],
     ) -> dict[str, Any]:
-        projection_payloads = []
-        for projection in projections:
-            projection_payloads.append(
-                {
-                    "id": projection.id,
-                    "lifecycle_status": projection.lifecycle_status,
-                    "current_assertion_refs": list(projection.current_assertion_refs),
-                    "evidence_summary_refs": list(projection.evidence_summary_refs),
-                    "epistemic_judgment_refs": list(projection.epistemic_judgment_refs),
-                    "authorization_refs": list(projection.authorization_refs),
-                    "scope_version_refs": list(projection.scope_version_refs),
-                    "validity_scope": dict(projection.validity_scope),
-                    "environment_bindings": dict(projection.environment_bindings),
-                    "counterexample_refs": list(projection.counterexample_refs),
-                    "negative_knowledge_refs": list(projection.negative_knowledge_refs),
-                    "reopen_conditions": list(projection.reopen_conditions),
-                }
-            )
         return {
             "schema": "resolved-experience-use-snapshot-v1",
             "requirement": requirement.semantic_payload(),
-            "projections": sorted(projection_payloads, key=lambda item: str(item["id"])),
+            "projections": sorted(
+                (cls._projection_payload(projection) for projection in projections),
+                key=lambda item: str(item["id"]),
+            ),
             "resolved_objects": [
                 {"ref": ref, **_without_noise(value)}
                 for ref, value in sorted(resolved_objects.items())
             ],
-            "derivations": sorted((_without_noise(value) for value in derivations), key=lambda item: str(item.get("id", ""))),
-            "relations": sorted((_without_noise(value) for value in relations), key=lambda item: str(item.get("id", ""))),
+            "derivations": sorted(
+                (_without_noise(value) for value in derivations),
+                key=lambda item: str(item.get("id", "")),
+            ),
+            "relations": sorted(
+                (_without_noise(value) for value in relations),
+                key=lambda item: str(item.get("id", "")),
+            ),
             "unresolved": sorted(set(unresolved)),
         }
 
@@ -417,12 +426,6 @@ class ExperienceUseAdmissionEvaluator:
                 reasons.append(f"projection-not-official:{projection_ref}:{projection.lifecycle_status}")
 
             direct, direct_errors = self._direct_graph(state, projection)
-            resolved_objects.update(direct)
-            unresolved.extend(direct_errors)
-            if direct_errors:
-                statuses.append("unavailable")
-                reasons.extend(direct_errors)
-
             counterexamples, counter_errors = self._resolve_optional_local_refs(
                 state,
                 projection.counterexample_refs,
@@ -433,18 +436,18 @@ class ExperienceUseAdmissionEvaluator:
                 projection.negative_knowledge_refs,
                 role="negative-knowledge",
             )
-            resolved_objects.update(counterexamples)
-            resolved_objects.update(negative)
-            unresolved.extend(counter_errors)
-            unresolved.extend(negative_errors)
-            if counter_errors or negative_errors:
+            projection_resolved = {**direct, **counterexamples, **negative}
+            resolved_objects.update(projection_resolved)
+            projection_errors = [*direct_errors, *counter_errors, *negative_errors]
+            unresolved.extend(projection_errors)
+            if projection_errors:
                 statuses.append("unavailable")
-                reasons.extend([*counter_errors, *negative_errors])
+                reasons.extend(projection_errors)
 
             related_derivations, related_relations, graph_refs = self._related_graph(
                 state,
                 projection,
-                resolved_objects,
+                projection_resolved,
             )
             derivations.extend(related_derivations)
             relations.extend(related_relations)
@@ -459,7 +462,10 @@ class ExperienceUseAdmissionEvaluator:
                 statuses.append("stale")
                 reasons.append(f"subject-version-drift:{projection_ref}")
 
-            direct_status, direct_reasons = self._classify_direct_records(projection, resolved_objects)
+            direct_status, direct_reasons = self._classify_direct_records(
+                projection,
+                projection_resolved,
+            )
             if direct_status is not None:
                 statuses.append(direct_status)
                 reasons.extend(direct_reasons)
@@ -473,14 +479,14 @@ class ExperienceUseAdmissionEvaluator:
 
             for relation in related_relations:
                 relation_type = relation.get("relation_type")
-                if relation_type == "requires-revalidation" and (
-                    relation.get("subject_ref") in graph_refs or relation.get("object_ref") in graph_refs
-                ):
+                touches_graph = (
+                    relation.get("subject_ref") in graph_refs
+                    or relation.get("object_ref") in graph_refs
+                )
+                if relation_type == "requires-revalidation" and touches_graph:
                     statuses.append("stale")
                     reasons.append(f"requires-revalidation:{relation.get('id', '')}")
-                if relation_type == "contradicts" and (
-                    relation.get("subject_ref") in graph_refs or relation.get("object_ref") in graph_refs
-                ):
+                if relation_type == "contradicts" and touches_graph:
                     statuses.append("blocked")
                     reasons.append(f"canonical-contradiction:{relation.get('id', '')}")
 
