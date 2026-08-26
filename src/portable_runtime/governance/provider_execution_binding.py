@@ -24,7 +24,7 @@ PROVIDER_EXECUTION_BINDING_SCHEMA = "provider-execution-binding-v1"
 DISPATCH_COMMIT_EVENT = "InvocationDispatchCommitted"
 
 
-def dispatch_has_provider_execution_binding_authority(event: Event) -> bool:
+def dispatch_has_provider_execution_binding_authority(event: object) -> bool:
     """Classify an input that attempts to carry B execution-binding authority.
 
     The classification is deliberately broader than the current valid dispatch
@@ -33,6 +33,8 @@ def dispatch_has_provider_execution_binding_authority(event: Event) -> bool:
     This predicate says nothing about graph validity or execution authority.
     """
 
+    if not isinstance(event, Event):
+        return False
     if event.type != DISPATCH_COMMIT_EVENT or not isinstance(event.payload, dict):
         return False
     return (
