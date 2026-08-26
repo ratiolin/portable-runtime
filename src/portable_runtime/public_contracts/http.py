@@ -29,7 +29,10 @@ def _require_local_mutation(request: Request) -> None:
     client = request.client
     host = client.host if client is not None else None
     if host not in {None, "127.0.0.1", "::1", "localhost", "testclient", "testserver"}:
-        raise HTTPException(status_code=403, detail=_problem("LocalControlRequired", "mutating contract API is local-only"))
+        raise HTTPException(
+            status_code=403,
+            detail=_problem("LocalControlRequired", "mutating contract API is local-only"),
+        )
 
 
 def contract_router(runtime: Runtime) -> APIRouter:
