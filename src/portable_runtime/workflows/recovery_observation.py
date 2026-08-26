@@ -4,6 +4,10 @@ A RecoveryObservation is not objective Outcome authority and is not a
 recovery decision. The store re-derives its execution binding from the
 exact InvocationDispatchCommitted graph before recording one observation
 instance.
+
+Legacy observations are dispatch-bound execution facts. Application-bound
+observations additionally name one exact RecoveryApplication and may serve
+as the durable completion fact for that one reconciliation responsibility.
 """
 
 from __future__ import annotations
@@ -17,6 +21,7 @@ from portable_runtime.core.models import Action, Event, Step, StepAttempt
 
 RECOVERY_OBSERVATION_EVENT = "RecoveryObservationRecorded"
 RECOVERY_OBSERVATION_SCHEMA = "recovery-observation-v1"
+RECOVERY_APPLICATION_OBSERVATION_ROLE = "reconciliation-application-completion"
 DISPATCH_COMMIT_EVENT = "InvocationDispatchCommitted"
 DISPATCH_COMMIT_SCHEMA = "governance-dispatch-commit-v1"
 
@@ -57,6 +62,7 @@ class RecoveryObservation:
     observation_source: str
     reported_status: RecoveryReportedStatus
     provenance_refs: tuple[str, ...]
+    recovery_application_ref: str | None = None
     durable: bool = True
     authoritative_outcome: bool = False
 
@@ -92,6 +98,31 @@ def _required_string(payload: dict[str, Any], key: str) -> str:
     if not isinstance(value, str) or not value.strip():
         raise ValueError(f"recovery observation requires dispatch {key}")
     return value
+
+
+def _required_ref(value: object, label: str) -> str:
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError(f"recovery observation requires {label}")
+    return value.strip()
+
+
+def recovery_application_observation_instance_ref(recovery_application_ref: str) -> str:
+    """Derive the non-caller-controlled observation instance ref for one application."""
+
+    application_ref = _required_ref(recovery_application_ref, "recovery_application_ref")
+    return f"recovery_application_completion:{application_ref}"
+
+
+def recovery_application_observation_identity(recovery_application_ref: str) -> str:
+    """Derive one stable completion-observation identity for one application."""
+
+    application_ref = _required_ref(recovery_application_ref, "recovery_application_ref")
+    identity = {
+        "schema": RECOVERY_OBSERVATION_SCHEMA,
+        "semantic_role": RECOVERY_APPLICATION_OBSERVATION_ROLE,
+        "recovery_application_ref": application_ref,
+    }
+    return f"recovery_observation_{_digest(identity)[:32]}"
 
 
 def _dispatch_commit_ref(payload: dict[str, Any]) -> str:
@@ -149,12 +180,32 @@ def recovery_observation_from_event(event: Event) -> RecoveryObservation:
     idempotency_key = payload.get("idempotency_key")
     if idempotency_key is not None and not isinstance(idempotency_key, str):
         raise ValueError("invalid recovery observation idempotency key")
+
+    instance_ref = _required_string(payload, "observation_instance_ref")
+    application_ref_raw = payload.get("recovery_application_ref")
+    observation_role = payload.get("observation_role")
+    application_ref: str | None
+    if application_ref_raw is None:
+        if observation_role is not None:
+            raise ValueError("legacy RecoveryObservation cannot claim application completion role")
+        application_ref = None
+    else:
+        application_ref = _required_ref(
+            application_ref_raw,
+            "recovery_application_ref",
+        )
+        if observation_role != RECOVERY_APPLICATION_OBSERVATION_ROLE:
+            raise ValueError("application-bound RecoveryObservation role mismatch")
+        expected_instance_ref = recovery_application_observation_instance_ref(application_ref)
+        if instance_ref != expected_instance_ref:
+            raise ValueError("application-bound RecoveryObservation instance identity mismatch")
+        expected_id = recovery_application_observation_identity(application_ref)
+        if event.id != expected_id or event.subject_ref != application_ref:
+            raise ValueError("application-bound RecoveryObservation deterministic identity mismatch")
+
     return RecoveryObservation(
         id=event.id,
-        observation_instance_ref=_required_string(
-            payload,
-            "observation_instance_ref",
-        ),
+        observation_instance_ref=instance_ref,
         dispatch_commit_ref=_required_string(payload, "dispatch_commit_ref"),
         action_ref=_required_string(payload, "action_ref"),
         attempt_ref=_required_string(payload, "attempt_ref"),
@@ -165,6 +216,7 @@ def recovery_observation_from_event(event: Event) -> RecoveryObservation:
         observation_source=_required_string(payload, "observation_source"),
         reported_status=cast(RecoveryReportedStatus, reported_status),
         provenance_refs=tuple(provenance_raw),
+        recovery_application_ref=application_ref,
     )
 
 

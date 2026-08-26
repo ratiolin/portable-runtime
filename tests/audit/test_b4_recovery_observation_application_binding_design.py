@@ -1,30 +1,82 @@
-"""B4 RecoveryObservation ↔ RecoveryApplication binding audit.
-
-Audit only. This file authorizes no RecoveryObservation schema production,
-reconciliation provider call, Runtime consumption, repeatability contract,
-configured-provider binding, retry, fresh invocation authority, or P5 import.
-"""
+"""B4-A production graduation for application-bound RecoveryObservation authority."""
 
 from __future__ import annotations
 
-import importlib
-import importlib.util
-import inspect
+from collections.abc import Iterator
+from contextlib import contextmanager
+from pathlib import Path
+from typing import Any
 
 import pytest
 
 from portable_runtime.core.models import Event
-from portable_runtime.core.runtime import Runtime
-from portable_runtime.workflows.recovery_application import RecoveryApplication
+from portable_runtime.stores.recovery_application_observation import (
+    RecoveryApplicationObservationInMemoryStateStore,
+    RecoveryApplicationObservationSQLiteStateStore,
+)
+from portable_runtime.workflows.recovery_application import (
+    RecoveryApplicationCommitRequest,
+)
+from portable_runtime.workflows.recovery_application_observation import (
+    RecoveryApplicationObservationCommitRequest,
+    application_observation_identity,
+    bound_application_ref,
+    is_application_completion,
+    prepare_recovery_application_observation_commit,
+)
 from portable_runtime.workflows.recovery_observation import (
+    RECOVERY_APPLICATION_OBSERVATION_ROLE,
     RecoveryObservation,
     RecoveryObservationCommitRequest,
     recovery_observation_from_event,
 )
+from tests.conformance.test_recovery_application_authority import _seed_disposition
 
 
-def _xfail(reason: str) -> pytest.MarkDecorator:
-    return pytest.mark.xfail(strict=True, reason=reason)
+@contextmanager
+def _store(backend: str, tmp_path: Path, suffix: str) -> Iterator[Any]:
+    if backend == "memory":
+        yield RecoveryApplicationObservationInMemoryStateStore()
+        return
+    store = RecoveryApplicationObservationSQLiteStateStore(
+        tmp_path / f"recovery-application-observation-{suffix}.db"
+    )
+    try:
+        yield store
+    finally:
+        store.close()
+
+
+def _seed_application(
+    store: Any,
+    *,
+    suffix: str,
+    action: str = "reconcile-again",
+) -> tuple[dict[str, Any], Any]:
+    graph, disposition = _seed_disposition(
+        store,
+        action=action,
+        suffix=suffix,
+        effect_semantics="reconcilable",
+    )
+    application = store.commit_recovery_application(
+        RecoveryApplicationCommitRequest(disposition_ref=disposition.id)
+    )
+    return graph, application
+
+
+def _request(
+    application_ref: str,
+    *,
+    status: str = "reported-unknown",
+    provenance_refs: tuple[str, ...] = (),
+) -> RecoveryApplicationObservationCommitRequest:
+    return RecoveryApplicationObservationCommitRequest(
+        recovery_application_ref=application_ref,
+        observation_source="provider-reconcile",
+        reported_status=status,  # type: ignore[arg-type]
+        provenance_refs=provenance_refs,
+    )
 
 
 def _legacy_observation_event() -> Event:
@@ -51,91 +103,27 @@ def _legacy_observation_event() -> Event:
     )
 
 
-def test_ab_audit_current_observation_request_has_no_application_binding() -> None:
-    fields = set(RecoveryObservationCommitRequest.__dataclass_fields__)
-    assert fields == {
+def test_ab_generic_request_remains_unbound_while_observation_decoder_is_compatible() -> None:
+    assert set(RecoveryObservationCommitRequest.__dataclass_fields__) == {
         "observation_instance_ref",
         "dispatch_commit_ref",
         "observation_source",
         "reported_status",
         "provenance_refs",
     }
-    assert "recovery_application_ref" not in fields
-
-
-def test_ab_audit_current_observation_has_no_application_binding() -> None:
-    fields = set(RecoveryObservation.__dataclass_fields__)
-    assert "recovery_application_ref" not in fields
-    assert "provenance_refs" in fields
-
-
-def test_ab_audit_application_carries_exact_source_graph_refs() -> None:
-    fields = set(RecoveryApplication.__dataclass_fields__)
-    assert {
-        "disposition_ref",
-        "application_kind",
-        "source_dispatch_ref",
-        "source_attempt_ref",
-        "source_step_ref",
-        "source_action_ref",
-        "source_request_ref",
-        "source_provider_id",
-    } <= fields
-
-
-def test_ab_audit_current_observation_identity_is_instance_ref_based() -> None:
-    module = importlib.import_module("portable_runtime.workflows.recovery_observation")
-    source = inspect.getsource(module.prepare_recovery_observation_commit)
-    assert '"observation_instance_ref": instance_ref' in source
-    assert "recovery_application_ref" not in source
-
-
-def test_ab_audit_legacy_provider_reconcile_observation_still_decodes_unbound() -> None:
-    observation = recovery_observation_from_event(_legacy_observation_event())
-    assert observation.observation_source == "provider-reconcile"
-    assert observation.provenance_refs == ("recovery_application_looks_like_a_ref",)
-    assert not hasattr(observation, "recovery_application_ref")
-    assert observation.authoritative_outcome is False
-
-
-def test_ab_audit_runtime_legacy_reconcile_allocates_new_observation_instance() -> None:
-    source = inspect.getsource(Runtime.reconcile)
-    assert 'new_id(\n                                "recovery_observation_instance"' in source
-    assert "recovery_application_ref" not in source
-
-
-def test_ab_audit_historical_source_string_is_not_application_authority() -> None:
-    event = _legacy_observation_event()
-    observation = recovery_observation_from_event(event)
-    assert observation.observation_source == "provider-reconcile"
-    assert "recovery_application_looks_like_a_ref" in observation.provenance_refs
-    assert not hasattr(observation, "recovery_application_ref")
-
-
-def test_ab_audit_no_application_observation_production_module_exists() -> None:
-    assert (
-        importlib.util.find_spec(
-            "portable_runtime.workflows.recovery_application_observation"
-        )
-        is None
-    )
-
-
-@_xfail("B4 AB-001: opaque provenance strings cannot establish application authority")
-def test_ab_001_opaque_provenance_is_not_application_authority() -> None:
-    module = importlib.import_module(
-        "portable_runtime.workflows.recovery_application_observation"
-    )
+    assert "recovery_application_ref" in RecoveryObservation.__dataclass_fields__
     legacy = recovery_observation_from_event(_legacy_observation_event())
-    assert module.is_application_completion(legacy) is False
+    assert legacy.recovery_application_ref is None
 
 
-@_xfail("B4 AB-002: application-bound request surface cannot accept caller dispatch/instance identity")
+def test_ab_001_opaque_provenance_is_not_application_authority() -> None:
+    legacy = recovery_observation_from_event(_legacy_observation_event())
+    assert is_application_completion(legacy) is False
+    assert bound_application_ref(legacy) is None
+
+
 def test_ab_002_bound_request_surface_is_application_plus_result_only() -> None:
-    module = importlib.import_module(
-        "portable_runtime.workflows.recovery_application_observation"
-    )
-    fields = set(module.RecoveryApplicationObservationCommitRequest.__dataclass_fields__)
+    fields = set(RecoveryApplicationObservationCommitRequest.__dataclass_fields__)
     assert fields == {
         "recovery_application_ref",
         "observation_source",
@@ -146,163 +134,213 @@ def test_ab_002_bound_request_surface_is_application_plus_result_only() -> None:
     assert "observation_instance_ref" not in fields
 
 
-@_xfail("B4 AB-003: exact durable RecoveryApplication is required")
 def test_ab_003_missing_or_forged_application_fails_closed() -> None:
-    module = importlib.import_module(
-        "portable_runtime.workflows.recovery_application_observation"
-    )
+    store = RecoveryApplicationObservationInMemoryStateStore()
     with pytest.raises(ValueError, match="RecoveryApplication|application|durable"):
-        module.prepare_recovery_application_observation_commit(
-            store=None,
-            request=module.RecoveryApplicationObservationCommitRequest(
-                recovery_application_ref="recovery_application:forged",
-                observation_source="provider-reconcile",
-                reported_status="reported-unknown",
-                provenance_refs=(),
-            ),
+        prepare_recovery_application_observation_commit(
+            store,
+            _request("recovery_application:forged"),
         )
 
 
-@_xfail("B4 AB-004: only reconciliation-request RecoveryApplication may bind completion observation")
 def test_ab_004_wrong_application_kind_fails_closed() -> None:
-    module = importlib.import_module(
-        "portable_runtime.workflows.recovery_application_observation"
-    )
-    fixture = module.ApplicationObservationAuditFixture.example(
-        application_kind="retry-request"
+    store = RecoveryApplicationObservationInMemoryStateStore()
+    _graph, application = _seed_application(
+        store,
+        suffix="wrong-kind",
+        action="hold-unresolved",
     )
     with pytest.raises(ValueError, match="reconciliation-request|kind|application"):
-        fixture.prepare_bound_observation()
+        store.commit_recovery_application_observation(_request(application.id))
 
 
-@_xfail("B4 AB-005: application source graph must be reconstructed and match exact dispatch/Attempt/Step/Action")
-def test_ab_005_mismatched_application_dispatch_graph_fails_closed() -> None:
-    module = importlib.import_module(
-        "portable_runtime.workflows.recovery_application_observation"
-    )
-    fixture = module.ApplicationObservationAuditFixture.example()
-    fixture.rebind_source_dispatch("dispatch:other")
-    with pytest.raises(ValueError, match="dispatch|Attempt|Action|binding|rebound"):
-        fixture.prepare_bound_observation()
+def test_ab_005_mismatched_application_dispatch_graph_fails_closed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    store = RecoveryApplicationObservationInMemoryStateStore()
+    _graph, application = _seed_application(store, suffix="graph-rebound")
+    original_get_event = store.get_event
+    durable = original_get_event(application.id)
+    assert durable is not None
+    payload = dict(durable.payload)
+    payload["source_dispatch_ref"] = "dispatch:other"
+    forged = durable.model_copy(update={"payload": payload})
+
+    def _get_event(event_id: str) -> Event | None:
+        if event_id == application.id:
+            return forged
+        return original_get_event(event_id)
+
+    monkeypatch.setattr(store, "get_event", _get_event)
+    with pytest.raises(ValueError, match="rebound|dispatch|binding"):
+        prepare_recovery_application_observation_commit(
+            store,
+            _request(application.id),
+        )
 
 
-@_xfail("B4 AB-006: legacy unbound RecoveryObservation stays valid but is never application completion")
 def test_ab_006_legacy_unbound_observation_is_not_completion() -> None:
-    module = importlib.import_module(
-        "portable_runtime.workflows.recovery_application_observation"
-    )
     legacy = recovery_observation_from_event(_legacy_observation_event())
-    assert module.is_application_completion(legacy) is False
-    assert module.bound_application_ref(legacy) is None
+    assert legacy.observation_source == "provider-reconcile"
+    assert legacy.provenance_refs == ("recovery_application_looks_like_a_ref",)
+    assert legacy.recovery_application_ref is None
+    assert is_application_completion(legacy) is False
 
 
-@_xfail("B4 AB-007: one exact application derives one stable completion observation identity")
 def test_ab_007_application_derives_stable_observation_identity() -> None:
-    module = importlib.import_module(
-        "portable_runtime.workflows.recovery_application_observation"
-    )
-    first = module.application_observation_identity("recovery_application:A")
-    second = module.application_observation_identity("recovery_application:A")
-    other = module.application_observation_identity("recovery_application:B")
+    first = application_observation_identity("recovery_application:A")
+    second = application_observation_identity("recovery_application:A")
+    other = application_observation_identity("recovery_application:B")
     assert first == second
     assert first != other
 
 
-@_xfail("B4 AB-008: same application + same semantics replays one durable bound observation")
-def test_ab_008_same_application_same_semantics_replays() -> None:
-    module = importlib.import_module(
-        "portable_runtime.workflows.recovery_application_observation"
-    )
-    fixture = module.ApplicationObservationAuditFixture.example()
-    first = fixture.commit_bound_observation(status="reported-succeeded")
-    replay = fixture.commit_bound_observation(status="reported-succeeded")
-    assert replay == first
-    assert fixture.bound_observation_count(first.recovery_application_ref) == 1
-
-
-@_xfail("B4 AB-009: same application + changed reported semantics is identity rebound")
-def test_ab_009_same_application_changed_report_is_rebound() -> None:
-    module = importlib.import_module(
-        "portable_runtime.workflows.recovery_application_observation"
-    )
-    fixture = module.ApplicationObservationAuditFixture.example()
-    fixture.commit_bound_observation(status="reported-succeeded")
-    with pytest.raises(ValueError, match="rebound|conflict|identity|semantics"):
-        fixture.commit_bound_observation(status="reported-failed")
-
-
-@_xfail("B4 AB-010: one application cannot accumulate arbitrary second completion observations")
-def test_ab_010_same_application_cannot_accumulate_second_completion() -> None:
-    module = importlib.import_module(
-        "portable_runtime.workflows.recovery_application_observation"
-    )
-    fixture = module.ApplicationObservationAuditFixture.example()
-    first = fixture.commit_bound_observation(
-        status="reported-unknown",
-        provenance_refs=("provider-report:1",),
-    )
-    with pytest.raises(ValueError, match="rebound|conflict|identity|semantics"):
-        fixture.commit_bound_observation(
-            status="reported-unknown",
-            provenance_refs=("provider-report:2",),
+@pytest.mark.parametrize("backend", ["memory", "sqlite"])
+def test_ab_008_same_application_same_semantics_replays(
+    backend: str,
+    tmp_path: Path,
+) -> None:
+    with _store(backend, tmp_path, f"replay-{backend}") as store:
+        _graph, application = _seed_application(
+            store,
+            suffix=f"replay-{backend}",
         )
-    assert fixture.bound_observation_count(first.recovery_application_ref) == 1
+        request = _request(application.id, status="reported-succeeded")
+        first = store.commit_recovery_application_observation(request)
+        replay = store.commit_recovery_application_observation(request)
+        assert replay == first
+        assert replay.recovery_application_ref == application.id
+        assert replay.id == application_observation_identity(application.id)
+        events = [event for event in store.list_events() if event.id == first.id]
+        assert len(events) == 1
 
 
-@_xfail("B4 AB-011: bound observation remains execution-level only")
-def test_ab_011_bound_observation_is_not_outcome_or_recovery_decision() -> None:
-    module = importlib.import_module(
-        "portable_runtime.workflows.recovery_application_observation"
+def test_ab_009_same_application_changed_report_is_rebound() -> None:
+    store = RecoveryApplicationObservationInMemoryStateStore()
+    _graph, application = _seed_application(store, suffix="status-rebound")
+    store.commit_recovery_application_observation(
+        _request(application.id, status="reported-succeeded")
     )
-    fixture = module.ApplicationObservationAuditFixture.example()
-    observation = fixture.commit_bound_observation(status="reported-succeeded")
+    with pytest.raises(ValueError, match="rebound|identity|semantics"):
+        store.commit_recovery_application_observation(
+            _request(application.id, status="reported-failed")
+        )
+
+
+def test_ab_010_same_application_cannot_accumulate_second_completion() -> None:
+    store = RecoveryApplicationObservationInMemoryStateStore()
+    _graph, application = _seed_application(store, suffix="provenance-rebound")
+    first = store.commit_recovery_application_observation(
+        _request(
+            application.id,
+            provenance_refs=("provider-report:1",),
+        )
+    )
+    with pytest.raises(ValueError, match="rebound|identity|semantics"):
+        store.commit_recovery_application_observation(
+            _request(
+                application.id,
+                provenance_refs=("provider-report:2",),
+            )
+        )
+    assert store.get_recovery_application_observation(application.id) == first
+
+
+def test_ab_011_bound_observation_is_execution_level_only() -> None:
+    store = RecoveryApplicationObservationInMemoryStateStore()
+    _graph, application = _seed_application(store, suffix="execution-level")
+    before_types = [event.type for event in store.list_events()]
+    observation = store.commit_recovery_application_observation(
+        _request(application.id, status="reported-succeeded")
+    )
+    after_types = [event.type for event in store.list_events()]
     assert observation.authoritative_outcome is False
-    assert fixture.outcomes == 0
-    assert fixture.recovery_dispositions == 0
-    assert fixture.recovery_applications == 1
-
-
-@_xfail("B4 AB-012: bound observation commit creates no follow-on recovery or fresh invocation authority")
-def test_ab_012_bound_commit_has_no_follow_on_authority() -> None:
-    module = importlib.import_module(
-        "portable_runtime.workflows.recovery_application_observation"
+    assert observation.recovery_application_ref == application.id
+    assert after_types.count("RecoveryDispositionRecorded") == before_types.count(
+        "RecoveryDispositionRecorded"
     )
-    fixture = module.ApplicationObservationAuditFixture.example()
-    fixture.commit_bound_observation(status="reported-unknown")
-    assert fixture.new_recovery_dispositions == 0
-    assert fixture.new_recovery_applications == 0
-    assert fixture.capability_requests == 0
-    assert fixture.invocation_permits == 0
-    assert fixture.attempts == 0
-    assert fixture.dispatches == 0
-    assert fixture.provider_calls == 0
-
-
-@_xfail("B4 AB-013: direct application-bound RecoveryObservation event append remains closed")
-def test_ab_013_direct_bound_event_append_is_denied() -> None:
-    module = importlib.import_module(
-        "portable_runtime.workflows.recovery_application_observation"
+    assert after_types.count("RecoveryApplicationRecorded") == before_types.count(
+        "RecoveryApplicationRecorded"
     )
-    fixture = module.ApplicationObservationAuditFixture.example()
-    forged = module.forged_bound_observation_event(
-        recovery_application_ref=fixture.application_ref
-    )
-    with pytest.raises(ValueError, match="RecoveryObservation|commit|authority"):
-        fixture.store.append_event(forged)
 
 
-@_xfail("B4 AB-014: P5 import of application-bound observation authority remains unsupported")
-def test_ab_014_serialized_bound_observation_import_fails_closed() -> None:
-    module = importlib.import_module(
-        "portable_runtime.workflows.recovery_application_observation"
-    )
-    fixture = module.ApplicationObservationAuditFixture.example()
-    state = {
-        "event": [
-            module.forged_bound_observation_event(
-                recovery_application_ref=fixture.application_ref
-            ).model_dump(mode="json")
-        ]
-    }
-    with pytest.raises(ValueError, match="P5|import|RecoveryObservation"):
-        fixture.store.import_state(state)
+def test_ab_012_bound_commit_has_no_follow_on_or_execution_authority() -> None:
+    store = RecoveryApplicationObservationInMemoryStateStore()
+    graph, application = _seed_application(store, suffix="stop")
+    attempts_before = [attempt.id for attempt in store.list_attempts(graph["step"].id)]
+    events_before = list(store.list_events())
+    store.commit_recovery_application_observation(_request(application.id))
+    events_after = list(store.list_events())
+    assert [attempt.id for attempt in store.list_attempts(graph["step"].id)] == attempts_before
+    assert len(events_after) == len(events_before) + 1
+    added = {event.id for event in events_after} - {event.id for event in events_before}
+    assert added == {application_observation_identity(application.id)}
+    assert not hasattr(store, "reconcile_recovery_application")
+    assert not hasattr(store, "retry_recovery_application")
+
+
+@pytest.mark.parametrize("backend", ["memory", "sqlite"])
+def test_ab_013_direct_bound_event_append_is_denied(
+    backend: str,
+    tmp_path: Path,
+) -> None:
+    with _store(backend, tmp_path, f"direct-{backend}") as store:
+        _graph, application = _seed_application(
+            store,
+            suffix=f"direct-{backend}",
+        )
+        prepared = prepare_recovery_application_observation_commit(
+            store,
+            _request(application.id),
+        )
+        with pytest.raises(ValueError, match="RecoveryObservation|commit_recovery_observation"):
+            store.append_event(prepared.event)
+
+
+@pytest.mark.parametrize("backend", ["memory", "sqlite"])
+def test_ab_014_serialized_bound_observation_import_fails_closed(
+    backend: str,
+    tmp_path: Path,
+) -> None:
+    with _store(backend, tmp_path, f"import-{backend}") as store:
+        _graph, application = _seed_application(
+            store,
+            suffix=f"import-{backend}",
+        )
+        prepared = prepare_recovery_application_observation_commit(
+            store,
+            _request(application.id),
+        )
+        state = {"event": [prepared.event.model_dump(mode="json")]}
+        with pytest.raises(ValueError, match="P5|import|RecoveryObservation"):
+            store.import_state(state)
+
+
+def test_ab_bound_event_carries_first_class_role_and_application_ref() -> None:
+    store = RecoveryApplicationObservationInMemoryStateStore()
+    _graph, application = _seed_application(store, suffix="payload")
+    observation = store.commit_recovery_application_observation(_request(application.id))
+    event = store.get_event(observation.id)
+    assert event is not None
+    assert event.subject_ref == application.id
+    assert event.payload["observation_role"] == RECOVERY_APPLICATION_OBSERVATION_ROLE
+    assert event.payload["recovery_application_ref"] == application.id
+
+
+def test_ab_sqlite_replays_after_close_reopen(tmp_path: Path) -> None:
+    path = tmp_path / "application-observation-reopen.db"
+    first_store = RecoveryApplicationObservationSQLiteStateStore(path)
+    try:
+        _graph, application = _seed_application(first_store, suffix="sqlite-reopen")
+        request = _request(application.id, status="reported-succeeded")
+        first = first_store.commit_recovery_application_observation(request)
+    finally:
+        first_store.close()
+
+    reopened = RecoveryApplicationObservationSQLiteStateStore(path)
+    try:
+        replay = reopened.commit_recovery_application_observation(request)
+        assert replay == first
+        assert reopened.get_recovery_application_observation(application.id) == first
+    finally:
+        reopened.close()
