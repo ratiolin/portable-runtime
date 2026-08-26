@@ -11,6 +11,10 @@ from pathlib import Path
 
 import pytest
 
+from portable_runtime.experience.historical_use import (
+    HISTORICAL_EXPERIENCE_USE_GRADUATED_COUNTEREXAMPLES,
+    HistoricalExperienceUse,
+)
 from portable_runtime.experience.use_admission import ExperienceUseAdmission
 from portable_runtime.protocol.validation import _iter_ref_edges
 from portable_runtime.records import models as record_models
@@ -77,17 +81,16 @@ def test_eua_c_005_responsibility_decision_citation_cannot_name_exact_experience
     assert "resolved_snapshot" not in fields
 
 
-def test_eua_c_006_no_store_owned_historical_experience_use_commit_exists() -> None:
+def test_eua_c_006_store_owned_historical_experience_use_commit_now_exists() -> None:
     source = inspect.getsource(InMemoryStateStore)
-    assert "commit_historical_experience_use" not in source
-    assert "commit_experience_use" not in source
-    assert "historical_experience_use" not in source
+    assert "commit_historical_experience_use" in source
+    assert "_historical_experience_use_commit_depth" in source
 
 
-def test_eua_c_007_no_durable_historical_experience_use_authority_type_exists() -> None:
+def test_eua_c_007_typed_historical_authority_exists_without_new_domain_judgment_type() -> None:
     root = Path("src/portable_runtime")
     source = "\n".join(path.read_text(encoding="utf-8") for path in root.rglob("*.py"))
-    assert "class HistoricalExperienceUseBinding" not in source
+    assert HistoricalExperienceUse.__name__ == "HistoricalExperienceUse"
     assert "class DomainJudgment" not in source
 
 
@@ -140,9 +143,9 @@ _HUB_COUNTEREXAMPLES = [
     _HUB_COUNTEREXAMPLES,
     ids=[item[0] for item in _HUB_COUNTEREXAMPLES],
 )
-@pytest.mark.xfail(strict=True, reason="EUA-C audit freeze; durable historical-use authority not implemented")
-def test_eua_c_counterexamples_require_future_store_owned_historical_binding(
+def test_eua_c_counterexamples_are_graduated_by_eua_d(
     case_id: str,
     obligation: str,
 ) -> None:
-    raise AssertionError(f"{case_id}: {obligation}")
+    assert obligation
+    assert case_id in HISTORICAL_EXPERIENCE_USE_GRADUATED_COUNTEREXAMPLES

@@ -240,6 +240,7 @@ def test_eua_004_promotion_authorization_is_provenance_not_action_authority() ->
         "requirement_digest",
         "snapshot_digest",
         "resolved_snapshot",
+        "admission_contract_version",
         "reasons",
     }
     payload = admission.resolved_snapshot.materialize()

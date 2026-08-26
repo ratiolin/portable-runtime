@@ -151,6 +151,7 @@ class SQLiteStateStore:
         self._recovery_observation_commit_depth = 0
         self._recovery_disposition_commit_depth = 0
         self._recovery_application_commit_depth = 0
+        self._historical_experience_use_commit_depth = 0
         self._provider_execution_binding_dispatch_commit_depth = 0
         self._connection = sqlite3.connect(_safe_db_path(path), check_same_thread=False, isolation_level=None)  # NOSONAR  # noqa: E501
         self._connection.row_factory = sqlite3.Row
@@ -280,6 +281,44 @@ class SQLiteStateStore:
                 if owns_transaction:
                     self._connection.execute("COMMIT")
                 return prepared.outcome
+            except Exception:
+                if owns_transaction:
+                    self._rollback(self._connection.cursor())
+                raise
+
+    def commit_historical_experience_use(self, request: Any) -> Any:
+        """Writer-serialized compare-and-bind of one judgment to exact experience semantics."""
+        from portable_runtime.experience.historical_use import (
+            freeze_historical_experience_use_request,
+            historical_experience_use_event_id,
+            prepare_historical_experience_use_commit,
+            validate_historical_experience_use_authority_graph,
+        )
+
+        frozen = freeze_historical_experience_use_request(request)
+        with self._lock:
+            owns_transaction = not self._connection.in_transaction
+            if owns_transaction:
+                self._connection.execute("BEGIN IMMEDIATE")
+            try:
+                event_id = historical_experience_use_event_id(frozen.judgment.id, frozen.judgment.version)
+                if self.get_event(event_id) is None and self.get_record(frozen.judgment.id) is None:
+                    self._validate_record_write_semantics(frozen.judgment)
+                    self._validate_candidate_write("record", frozen.judgment)
+                prepared = prepare_historical_experience_use_commit(self, frozen)
+                if not prepared.replayed:
+                    # Full save_record semantic/graph gates ran above; raw
+                    # write merely keeps J and its authority event atomic.
+                    self._save("record", prepared.judgment)
+                    self._historical_experience_use_commit_depth += 1
+                    try:
+                        self.append_event(prepared.event)
+                    finally:
+                        self._historical_experience_use_commit_depth -= 1
+                validate_historical_experience_use_authority_graph(self.export_state())
+                if owns_transaction:
+                    self._connection.execute("COMMIT")
+                return prepared.binding
             except Exception:
                 if owns_transaction:
                     self._rollback(self._connection.cursor())
@@ -555,6 +594,8 @@ class SQLiteStateStore:
             raise ValueError("RecoveryDisposition events require commit_recovery_disposition")
         if value.type == "RecoveryApplicationRecorded" and self._recovery_application_commit_depth <= 0:
             raise ValueError("RecoveryApplication events require commit_recovery_application")
+        if value.type == "HistoricalExperienceUseRecorded" and self._historical_experience_use_commit_depth <= 0:
+            raise ValueError("HistoricalExperienceUse events require commit_historical_experience_use")
         if (
             dispatch_has_provider_execution_binding_authority(value)
             and self._provider_execution_binding_dispatch_commit_depth <= 0
@@ -902,6 +943,16 @@ class SQLiteStateStore:
                 raise LeaseExecutionError(f"SQLite lease release failed for {run_id!r}") from exc
 
     # Records R1.2 implementation milestone
+    def _validate_record_write_semantics(self, value: BaseRecord) -> None:
+        from portable_runtime.protocol.validation import assert_semantic_mutation_authorized, validate_record_write
+        from portable_runtime.records.validation import validate_canonical_write
+
+        existing = self.get_record(value.id)
+        errs = [*validate_record_write(value, existing), *validate_canonical_write(value)]
+        if errs:
+            raise ValueError("; ".join(errs))
+        assert_semantic_mutation_authorized(value, existing, self.export_state())
+
     def save_record(self, value: BaseRecord) -> None:
         try:
             from portable_runtime.records.authorization import AuthorizationGrant
@@ -910,17 +961,7 @@ class SQLiteStateStore:
                 return
         except Exception:
             pass
-        from portable_runtime.protocol.validation import assert_semantic_mutation_authorized, validate_record_write
-        from portable_runtime.records.validation import validate_canonical_write
-
-        def validate() -> None:
-            existing = self.get_record(value.id)
-            errs = [*validate_record_write(value, existing), *validate_canonical_write(value)]
-            if errs:
-                raise ValueError("; ".join(errs))
-            assert_semantic_mutation_authorized(value, existing, self.export_state())
-
-        self._atomic_graph_save("record", value, validate)
+        self._atomic_graph_save("record", value, lambda: self._validate_record_write_semantics(value))
 
     def get_record(self, record_id: str) -> BaseRecord | None:
         return self._get("record", BaseRecord, record_id)
@@ -1025,6 +1066,9 @@ class SQLiteStateStore:
         return result
 
     def import_state(self, state: dict[str, list[dict[str, object]]]) -> None:
+        from portable_runtime.experience.historical_use import assert_historical_experience_use_import_closed
+
+        assert_historical_experience_use_import_closed(state)
         with self._lock:
             # A state import is a compare/validate/replace operation against a
             # single locked database snapshot. BEGIN IMMEDIATE prevents a
