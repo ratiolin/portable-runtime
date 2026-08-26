@@ -14,11 +14,11 @@ import inspect
 import pytest
 
 from portable_runtime.core.capabilities import CapabilityRequest, InvocationContext, ProviderDescriptor
+from portable_runtime.interactions.feishu.provider import FeishuHumanProvider, FeishuNotificationProvider
 from portable_runtime.interfaces.provider import CapabilityProvider
 from portable_runtime.protocol.messages import InvokeMessage
 from portable_runtime.providers.codex.provider import CodexProvider
 from portable_runtime.providers.stdio import StdioJsonlProvider
-from portable_runtime.interactions.feishu.provider import FeishuHumanProvider, FeishuNotificationProvider
 
 
 def _xfail(reason: str) -> pytest.MarkDecorator:
@@ -32,7 +32,7 @@ def test_partition_audit_capability_request_allows_provider_visible_extras() -> 
         capability="example.write",
         opaque_provider_extension="changes-behavior",
     )
-    assert getattr(value, "opaque_provider_extension") == "changes-behavior"
+    assert value.opaque_provider_extension == "changes-behavior"
 
 
 def test_partition_audit_python_provider_receives_full_request_and_context() -> None:
