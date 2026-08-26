@@ -92,6 +92,7 @@ jobs:
           tests/audit/test_b4_reconciliation_substrate_production_freeze.py
           tests/audit/test_eua_a_experience_use_authority_audit.py
           tests/conformance/test_experience_use_admission.py
+          tests/conformance/test_experience_use_snapshot_coherence.py
           tests/conformance/test_recovery_application_authority.py
           tests/conformance/test_recovery_disposition_counterexamples.py
           tests/conformance/test_recovery_disposition_preparation.py
