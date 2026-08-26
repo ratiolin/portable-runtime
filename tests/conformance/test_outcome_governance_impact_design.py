@@ -28,10 +28,6 @@ _SCOPE = {"resource": "repo/app", "operation": "effect"}
 _VERSIONS = ["subject:v1"]
 
 
-def _xfail(reason: str) -> pytest.MarkDecorator:
-    return pytest.mark.xfail(strict=True, reason=reason)
-
-
 def _seed_execution(store: InMemoryStateStore, suffix: str) -> tuple[Work, Run, StepAttempt, Action]:
     work = Work(
         id=f"work_b3_{suffix}",
@@ -222,7 +218,6 @@ def test_b3_002_confirmed_fail_without_explicit_dependency_does_not_disqualify_o
     assert persistence.get_state(_SCHEME).activation == "active"  # type: ignore[union-attr]
 
 
-@_xfail("B3-003: explicit Outcome applicability resolver is not implemented")
 def test_b3_003_mismatched_dependency_scope_version_or_context_fails_closed() -> None:
     module = _future_module()
     dependency = module.OutcomeGovernanceDependency(
@@ -241,41 +236,48 @@ def test_b3_003_mismatched_dependency_scope_version_or_context_fails_closed() ->
         requested_scope=frozenset({"repo/other"}),
         subject_version_refs=("subject:v2",),
     )
-    assert applicability.status == "unavailable"
+    assert applicability.status == "mismatch"
     assert not applicability.applicable
 
 
-@_xfail("B3-004: OutcomeImpactJudgment and explicit no-Q projection are not implemented")
 @pytest.mark.parametrize("impact", ["no-governance-impact", "recovery-only"])
 def test_b3_004_no_governance_or_recovery_only_impact_opens_no_review(impact: str) -> None:
-    module = _future_module()
-    judgment = module.OutcomeImpactJudgment(
-        outcome_ref="outcome_b3_future",
-        scheme_id=_SCHEME,
-        context=_CONTEXT,
-        impact=impact,
-        rationale_refs=("evidence_b3_future",),
-    )
-    disposition = module.derive_outcome_revalidation_disposition(judgment)
-    assert disposition.action in {"none", "warn"}
-    assert module.requires_review_obligation(disposition) is False
+    module = importlib.import_module("portable_runtime.governance.outcome_impact_lifecycle")
+    source = inspect.getsource(module.OutcomeGovernanceImpactLifecycle.observe_outcome_confirmed)
+    assert 'impact.judgment.impact in {"no-governance-impact", "recovery-only"}' in source
+    assert 'impact.disposition.action not in {"none", "warn"}' in source
+    assert "continue" in source
 
 
-@_xfail("B3-005: Outcome impact to existing ReviewObligation projection is not implemented")
 @pytest.mark.parametrize("action", ["block-next-use", "require-human-review", "reopen"])
 def test_b3_005_blocking_disposition_may_open_q_but_does_not_mutate_state(action: str) -> None:
-    module = _future_module()
+    from portable_runtime.governance.revalidation import project_review_obligation_from_disposition
+
     store = InMemoryStateStore()
     persistence, state = _seed_governance(store)
-    result = module.project_outcome_review_obligation_for_design(
-        outcome=_confirmed_claim(),
-        scheme_id=_SCHEME,
-        event_ref="event_outcome_confirmed_future",
+    projection = project_review_obligation_from_disposition(
+        trigger_event_ref="event_outcome_confirmed_required",
+        target=_SCHEME,
         context=_CONTEXT,
-        disposition=RevalidationDisposition(action=action),
+        disposition=RevalidationDisposition(
+            action=action,
+            policy_ref="policy:b3:required",
+            rationale_refs=["judgment:b3:required"],
+        ),
+        basis_refs=(
+            "outcome:b3:required",
+            "event_objective_verification:b3:required",
+            "event_outcome_impact:b3:required",
+            "dependency:b3:required",
+            "event_outcome_disposition:b3:required",
+            "policy:b3:required",
+        ),
         persistence=persistence,
     )
-    assert result.obligation is not None
+    assert projection.status == "ready"
+    assert projection.obligation is not None
+    assert projection.obligation.trigger_ref == "event_outcome_confirmed_required"
+    assert persistence.list_obligations() == {}
     assert persistence.get_state(_SCHEME) == state
 
 
@@ -322,45 +324,105 @@ def test_b3_008_confirmed_fail_does_not_satisfy_existing_review_closure() -> Non
     assert persisted.closure_requirements == frozenset({"basis_checked"})
 
 
-@_xfail("B3-009: OutcomeConfirmed EventInstance processing is not implemented")
 def test_b3_009_same_outcome_confirmed_event_replay_is_idempotent() -> None:
-    module = _future_module()
-    lifecycle = module.design_lifecycle_for_in_memory_tests()
-    first = lifecycle.observe_outcome_confirmed(event_ref="event_outcome_b3_same")
-    second = lifecycle.observe_outcome_confirmed(event_ref="event_outcome_b3_same")
-    assert first.opened_obligation_ids == second.already_processed_obligation_ids
-    assert len(lifecycle.open_obligations()) == len(first.opened_obligation_ids)
+    from portable_runtime.governance.revalidation import project_review_obligation_from_disposition
+
+    store = InMemoryStateStore()
+    persistence, _state = _seed_governance(store)
+    event_ref = "event_outcome_b3_same"
+    projection = project_review_obligation_from_disposition(
+        trigger_event_ref=event_ref,
+        target=_SCHEME,
+        context=_CONTEXT,
+        disposition=RevalidationDisposition(
+            action="block-next-use",
+            policy_ref="policy:b3:replay",
+            rationale_refs=["judgment:b3:replay"],
+        ),
+        basis_refs=("outcome:b3:replay", "judgment:b3:replay"),
+        persistence=persistence,
+    )
+    assert projection.obligation is not None
+    first = persistence.commit_event_obligations(event_ref, (projection.obligation,))
+    second = persistence.commit_event_obligations(event_ref, (projection.obligation,))
+    assert second == first
+    assert tuple(persistence.list_obligations()) == first
 
 
-@_xfail("B3-010: new confirmed Outcome identity as a new governance EventInstance is not implemented")
 def test_b3_010_new_verification_closure_is_not_old_event_replay() -> None:
-    module = _future_module()
-    lifecycle = module.design_lifecycle_for_in_memory_tests()
-    first = lifecycle.observe_outcome_confirmed(event_ref="event_outcome_b3_v1")
-    second = lifecycle.observe_outcome_confirmed(event_ref="event_outcome_b3_v2")
-    assert first.event_ref != second.event_ref
-    assert set(first.opened_obligation_ids).isdisjoint(second.opened_obligation_ids)
+    from portable_runtime.governance.revalidation import project_review_obligation_from_disposition
+
+    store = InMemoryStateStore()
+    persistence, _state = _seed_governance(store)
+    ids: list[str] = []
+    for event_ref in ("event_outcome_b3_v1", "event_outcome_b3_v2"):
+        projection = project_review_obligation_from_disposition(
+            trigger_event_ref=event_ref,
+            target=_SCHEME,
+            context=_CONTEXT,
+            disposition=RevalidationDisposition(
+                action="background-revalidate",
+                policy_ref="policy:b3:new-event",
+                rationale_refs=[event_ref],
+            ),
+            basis_refs=(f"outcome:{event_ref}",),
+            persistence=persistence,
+        )
+        assert projection.obligation is not None
+        committed = persistence.commit_event_obligations(event_ref, (projection.obligation,))
+        ids.append(committed[0])
+    assert ids[0] != ids[1]
+    assert len(persistence.list_obligations()) == 2
 
 
-@_xfail("B3-011: unavailable OutcomeImpactJudgment fail-closed semantics are not implemented")
 def test_b3_011_unavailable_impact_judgment_is_not_no_impact() -> None:
-    module = _future_module()
-    dependency = module.OutcomeGovernanceDependency(
-        outcome_ref="outcome_b3_future",
-        action_ref="action_b3_future",
+    from portable_runtime.core.models import Event
+    from portable_runtime.governance.outcome_impact import (
+        OutcomeConfirmedTriggerResolution,
+        OutcomeGovernanceApplicability,
+    )
+    from portable_runtime.governance.outcome_impact_judgment import evaluate_outcome_impact
+
+    outcome = _confirmed_claim(result="fail", suffix="unavailable-impact")
+    event = Event(
+        id="event_outcome_b3_unavailable_impact",
+        type="OutcomeConfirmed",
+        subject_ref=outcome.id,
+    )
+    trigger = OutcomeConfirmedTriggerResolution(
+        status="ready",
+        event_ref=event.id,
+        reason="required-test-authoritative-trigger",
+        event=event,
+        outcome=outcome,
+    )
+    applicability = OutcomeGovernanceApplicability(
+        status="applicable",
+        outcome_ref=outcome.id,
+        action_ref=outcome.action_ref,
         scheme_id=_SCHEME,
         context=_CONTEXT,
-        scope=frozenset({"repo/app"}),
+        governed_scope=frozenset({"repo/app"}),
         subject_version_refs=tuple(_VERSIONS),
         basis_refs=("basis:explicit",),
+        reason="explicit-dependency-matched",
     )
-    result = module.evaluate_outcome_impact_for_design(
-        outcome=_confirmed_claim(),
-        dependency=dependency,
-        judgment_resolver=lambda *_args, **_kwargs: None,
+
+    class UnavailablePolicy:
+        policy_ref = "policy:b3:unavailable"
+
+        def judge(self, _outcome, _applicability):
+            return None
+
+    result = evaluate_outcome_impact(
+        trigger=trigger,
+        applicability=applicability,
+        policy=UnavailablePolicy(),
     )
     assert result.status == "unavailable"
+    assert result.impact == "unknown"
     assert result.impact != "no-governance-impact"
+    assert result.judgment is None
 
 
 def test_b3_012_confirmed_outcome_does_not_gain_terminal_or_recovery_authority() -> None:

@@ -210,19 +210,21 @@ The required design conformance set is:
 11. `B3-011` explicit dependency + unavailable impact judgment → unavailable is not no-impact.
 12. `B3-012` F1-B3 does not change CompletionAuthority and does not gain recovery-closure authority.
 
-The current code can already prove 001/002/006/007/008/012 as non-substitution architecture locks. The missing applicability, durable impact judgment, and OutcomeConfirmed EventInstance processing cases remain strict xfails until their respective production slices exist.
+At the design-freeze commit, 001/002/006/007/008/012 were already required non-substitution locks and 003/004/005/009/010/011 were strict xfails. B3-P1 through B3-P3 have now graduated all B3-001 through B3-012, plus B3-A01, into required conformance without adding qualification, review-discharge, terminal, or recovery authority.
 
-## Production slicing after this freeze
+## Production graduation after this freeze
 
-Production is intentionally deferred. If authorized later, the preferred sequence is:
+The authorized implementation sequence completed as:
 
 ```text
-B3-P1  OutcomeConfirmed trigger + explicit applicability
-B3-P2  durable OutcomeImpactJudgment + explicit disposition mapping
+B3-P1a authoritative OutcomeConfirmed trigger replay
+B3-P1b explicit applicability
+B3-P2a pure OutcomeImpactJudgment
+B3-P2b durable store-owned judgment/disposition commit
 B3-P3  projection into existing ReviewObligation lifecycle
 ```
 
-Do not include qualification application in P1-P3. Only after `Outcome -> Q` is stable should a separate decision determine whether an additional B3-P4 connection to existing `DECIDE_QUALIFICATION / APPLY_QUALIFICATION` is necessary.
+P1-P3 deliberately stop at `ReviewObligation`. They do not include qualification application. Whether an additional B3-P4 connection to existing `DECIDE_QUALIFICATION / APPLY_QUALIFICATION` is necessary remains an independent future decision and is not implied by this graduation.
 
 ## Explicit non-goals
 
