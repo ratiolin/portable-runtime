@@ -7,6 +7,10 @@ from .invocation_specification import (
     InvocationSpecificationSQLiteStateStore,
 )
 from .memory import InMemoryStateStore
+from .recovery_application_observation import (
+    RecoveryApplicationObservationInMemoryStateStore,
+    RecoveryApplicationObservationSQLiteStateStore,
+)
 from .sqlite import CASExecutionError, LeaseExecutionError, SQLiteStateStore, StoreUnavailable
 
 __all__ = [
@@ -16,6 +20,8 @@ __all__ = [
     "InvocationSpecificationInMemoryStateStore",
     "InvocationSpecificationSQLiteStateStore",
     "LeaseExecutionError",
+    "RecoveryApplicationObservationInMemoryStateStore",
+    "RecoveryApplicationObservationSQLiteStateStore",
     "SQLiteStateStore",
     "StoreUnavailable",
     "export_bundle",
