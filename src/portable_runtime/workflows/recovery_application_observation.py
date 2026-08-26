@@ -22,10 +22,10 @@ from portable_runtime.workflows.recovery_application import (
 )
 from portable_runtime.workflows.recovery_observation import (
     RECOVERY_APPLICATION_OBSERVATION_ROLE,
+    PreparedRecoveryObservationCommit,
     RecoveryObservation,
     RecoveryObservationCommitRequest,
     RecoveryReportedStatus,
-    PreparedRecoveryObservationCommit,
     prepare_recovery_observation_commit,
     recovery_application_observation_identity,
     recovery_application_observation_instance_ref,
