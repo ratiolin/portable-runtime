@@ -25,7 +25,12 @@ ExperienceUseStatus = Literal[
     "unavailable",
 ]
 
-EXPERIENCE_USE_ADMISSION_CONTRACT_VERSION = "experience-use-admission-v1"
+EXPERIENCE_USE_REQUIREMENT_SCHEMA = "experience-use-requirement-v1"
+RESOLVED_EXPERIENCE_USE_SNAPSHOT_SCHEMA = "resolved-experience-use-snapshot-v1"
+CURRENT_EXPERIENCE_USE_ADMISSION_CONTRACT = "experience-use-admission-v1"
+# Compatibility alias for callers that previously imported the current value.
+# Historical authority reconstruction must not use this alias as a support set.
+EXPERIENCE_USE_ADMISSION_CONTRACT_VERSION = CURRENT_EXPERIENCE_USE_ADMISSION_CONTRACT
 _NegativeApplicability = Literal["current", "outside", "unknown"]
 
 _NOISE_KEYS = frozenset({"created_at", "updated_at"})
@@ -139,13 +144,30 @@ class ExperienceUseRequirement:
 
     def semantic_payload(self) -> dict[str, Any]:
         return {
-            "schema": "experience-use-requirement-v1",
+            "schema": EXPERIENCE_USE_REQUIREMENT_SCHEMA,
             "projection_refs": list(self.projection_refs),
             "use_scope": _thaw(self.use_scope),
             "subject_version_refs": list(self.subject_version_refs),
             "environment_bindings": _thaw(self.environment_bindings),
             "use_context": _thaw(self.use_context),
         }
+
+
+def experience_use_requirement_digest(
+    requirement: ExperienceUseRequirement | Mapping[str, Any],
+) -> str:
+    """Return the EUA-B-owned canonical digest for one exact use requirement."""
+
+    payload = requirement.semantic_payload() if isinstance(requirement, ExperienceUseRequirement) else dict(requirement)
+    if payload.get("schema") != EXPERIENCE_USE_REQUIREMENT_SCHEMA:
+        raise ValueError("Experience Use requirement schema mismatch")
+    return _digest(payload)
+
+
+def experience_use_snapshot_digest(semantic_json: str) -> str:
+    """Digest the exact canonical snapshot bytes emitted by EUA-B."""
+
+    return hashlib.sha256(semantic_json.encode("utf-8")).hexdigest()
 
 
 @dataclass(frozen=True)
@@ -174,7 +196,7 @@ class ExperienceUseAdmission:
     requirement_digest: str
     snapshot_digest: str
     resolved_snapshot: ResolvedExperienceUseSnapshot
-    admission_contract_version: str = EXPERIENCE_USE_ADMISSION_CONTRACT_VERSION
+    admission_contract_version: str = CURRENT_EXPERIENCE_USE_ADMISSION_CONTRACT
     reasons: tuple[str, ...] = ()
 
     @property
@@ -575,7 +597,7 @@ class ExperienceUseAdmissionEvaluator:
         unresolved: list[str],
     ) -> dict[str, Any]:
         return {
-            "schema": "resolved-experience-use-snapshot-v1",
+            "schema": RESOLVED_EXPERIENCE_USE_SNAPSHOT_SCHEMA,
             "requirement": requirement.semantic_payload(),
             "projections": sorted(
                 (cls._projection_payload(projection) for projection in projections),
@@ -597,7 +619,7 @@ class ExperienceUseAdmissionEvaluator:
         }
 
     def evaluate(self, requirement: ExperienceUseRequirement) -> ExperienceUseAdmission:
-        requirement_digest = _digest(requirement.semantic_payload())
+        requirement_digest = experience_use_requirement_digest(requirement)
         # One call is necessary but not sufficient: EUA-B relies on each store
         # backend making export_state itself a coherent point-in-time read.
         state = self._store.export_state()
@@ -747,18 +769,23 @@ class ExperienceUseAdmissionEvaluator:
         return ExperienceUseAdmission(
             status=status,
             requirement_digest=requirement_digest,
-            snapshot_digest=hashlib.sha256(semantic_json.encode("utf-8")).hexdigest(),
+            snapshot_digest=experience_use_snapshot_digest(semantic_json),
             resolved_snapshot=snapshot,
-            admission_contract_version=EXPERIENCE_USE_ADMISSION_CONTRACT_VERSION,
+            admission_contract_version=CURRENT_EXPERIENCE_USE_ADMISSION_CONTRACT,
             reasons=tuple(sorted(set(reasons))),
         )
 
 
 __all__ = [
+    "CURRENT_EXPERIENCE_USE_ADMISSION_CONTRACT",
     "EXPERIENCE_USE_ADMISSION_CONTRACT_VERSION",
+    "EXPERIENCE_USE_REQUIREMENT_SCHEMA",
+    "RESOLVED_EXPERIENCE_USE_SNAPSHOT_SCHEMA",
     "ExperienceUseAdmission",
     "ExperienceUseAdmissionEvaluator",
     "ExperienceUseRequirement",
     "ExperienceUseStatus",
     "ResolvedExperienceUseSnapshot",
+    "experience_use_requirement_digest",
+    "experience_use_snapshot_digest",
 ]

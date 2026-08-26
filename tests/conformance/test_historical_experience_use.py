@@ -1,15 +1,19 @@
 from __future__ import annotations
 
 import threading
+from collections.abc import Iterator
 from dataclasses import fields
-from typing import Any, Iterator
+from typing import Any
 
 import pytest
 
+import portable_runtime.experience.historical_use as historical_use_module
 from portable_runtime.core.models import Event
 from portable_runtime.experience.historical_use import (
     DOMAIN_JUDGMENT_SEMANTIC_ROLE,
     HISTORICAL_EXPERIENCE_USE_EVENT_TYPE,
+    HISTORICAL_EXPERIENCE_USE_SCHEMA,
+    SUPPORTED_HISTORICAL_EXPERIENCE_USE_CONTRACTS,
     HistoricalExperienceUse,
     HistoricalExperienceUseCommitRequest,
     assert_historical_experience_use_import_closed,
@@ -18,14 +22,26 @@ from portable_runtime.experience.historical_use import (
     validate_historical_experience_use_authority_graph,
 )
 from portable_runtime.experience.use_admission import (
+    CURRENT_EXPERIENCE_USE_ADMISSION_CONTRACT,
     EXPERIENCE_USE_ADMISSION_CONTRACT_VERSION,
+    EXPERIENCE_USE_REQUIREMENT_SCHEMA,
+    RESOLVED_EXPERIENCE_USE_SNAPSHOT_SCHEMA,
     ExperienceUseAdmissionEvaluator,
     ExperienceUseRequirement,
+    experience_use_requirement_digest,
+    experience_use_snapshot_digest,
 )
 from portable_runtime.records.authorization import create_grant_for_approval
 from portable_runtime.records.knowledge import KnowledgeProjection
-from portable_runtime.records.models import Assertion, ChangeObjectRecord, Derivation, EvidenceArtifact
+from portable_runtime.records.models import (
+    Assertion,
+    ChangeObjectRecord,
+    Derivation,
+    EvidenceArtifact,
+    RevisionRecord,
+)
 from portable_runtime.records.relations import RecordRelation
+from portable_runtime.records.revision import create_revision
 from portable_runtime.stores.memory import InMemoryStateStore
 from portable_runtime.stores.sqlite import SQLiteStateStore
 
@@ -143,7 +159,11 @@ def _task_judgment(
     )
 
 
-def _request(store: Any, seed: dict[str, object], judgment: Assertion | None = None) -> HistoricalExperienceUseCommitRequest:
+def _request(
+    store: Any,
+    seed: dict[str, object],
+    judgment: Assertion | None = None,
+) -> HistoricalExperienceUseCommitRequest:
     requirement = _requirement(seed)
     admission = ExperienceUseAdmissionEvaluator(store).evaluate(requirement)
     assert admission.status == "allowed"
@@ -172,9 +192,10 @@ def store(request: pytest.FixtureRequest, tmp_path) -> Iterator[Any]:
 def test_eua_d_admission_contract_is_explicit_and_not_snapshot_schema(store: Any) -> None:
     seed = _seed_official(store)
     admission = ExperienceUseAdmissionEvaluator(store).evaluate(_requirement(seed))
-    assert admission.admission_contract_version == EXPERIENCE_USE_ADMISSION_CONTRACT_VERSION
+    assert admission.admission_contract_version == CURRENT_EXPERIENCE_USE_ADMISSION_CONTRACT
+    assert EXPERIENCE_USE_ADMISSION_CONTRACT_VERSION == CURRENT_EXPERIENCE_USE_ADMISSION_CONTRACT
     assert admission.admission_contract_version == "experience-use-admission-v1"
-    assert admission.resolved_snapshot.materialize()["schema"] == "resolved-experience-use-snapshot-v1"
+    assert admission.resolved_snapshot.materialize()["schema"] == RESOLVED_EXPERIENCE_USE_SNAPSHOT_SCHEMA
     assert admission.admission_contract_version != admission.resolved_snapshot.materialize()["schema"]
 
 
@@ -209,7 +230,7 @@ def test_hub_001_new_judgment_and_exact_allowed_snapshot_commit_atomically(store
     assert binding.judgment_version == request.judgment.version
     assert binding.requirement_digest == request.expected_requirement_digest
     assert binding.snapshot_digest == request.expected_snapshot_digest
-    assert binding.admission_contract_version == EXPERIENCE_USE_ADMISSION_CONTRACT_VERSION
+    assert binding.admission_contract_version == CURRENT_EXPERIENCE_USE_ADMISSION_CONTRACT
     persisted_judgment = store.get_record(request.judgment.id)
     assert isinstance(persisted_judgment, Assertion)
     event = store.get_event(binding.id)
@@ -238,7 +259,11 @@ def test_hub_003_same_exact_judgment_same_semantics_replays(store: Any) -> None:
     first = store.commit_historical_experience_use(request)
     second = store.commit_historical_experience_use(request)
     assert second == first
-    matching = [event for event in store.list_events(request.judgment.id) if event.type == HISTORICAL_EXPERIENCE_USE_EVENT_TYPE]
+    matching = [
+        event
+        for event in store.list_events(request.judgment.id)
+        if event.type == HISTORICAL_EXPERIENCE_USE_EVENT_TYPE
+    ]
     assert len(matching) == 1
 
 
@@ -276,7 +301,12 @@ def test_hub_004_projection_qualifying_judgment_cannot_be_consuming_judgment(sto
     qualifying = seed["epistemic_judgment"]
     assert isinstance(qualifying, Assertion)
     consuming_shape = qualifying.model_copy(
-        update={"metadata": {**qualifying.metadata, "semantic_role": DOMAIN_JUDGMENT_SEMANTIC_ROLE}}
+        update={
+            "metadata": {
+                **qualifying.metadata,
+                "semantic_role": DOMAIN_JUDGMENT_SEMANTIC_ROLE,
+            }
+        }
     )
     request = _request(store, seed, consuming_shape)
     with pytest.raises(ValueError, match="qualifies selected experience|backfill"):
@@ -288,11 +318,31 @@ def test_hub_004_projection_current_assertion_cannot_be_consuming_judgment(store
     claim = seed["claim"]
     assert isinstance(claim, Assertion)
     consuming_shape = claim.model_copy(
-        update={"metadata": {**claim.metadata, "semantic_role": DOMAIN_JUDGMENT_SEMANTIC_ROLE}}
+        update={
+            "metadata": {
+                **claim.metadata,
+                "semantic_role": DOMAIN_JUDGMENT_SEMANTIC_ROLE,
+            }
+        }
     )
     request = _request(store, seed, consuming_shape)
     with pytest.raises(ValueError, match="qualifies selected experience|backfill"):
         store.commit_historical_experience_use(request)
+
+
+def test_hub_005_historical_use_does_not_create_responsibility_or_action_authority(store: Any) -> None:
+    seed = _seed_official(store)
+    request = _request(store, seed)
+    before = store.export_state()
+    binding = store.commit_historical_experience_use(request)
+    after = store.export_state()
+
+    assert after.get("decision", []) == before.get("decision", [])
+    assert after.get("authorization", []) == before.get("authorization", [])
+    assert not hasattr(binding, "decision_ref")
+    assert not hasattr(binding, "authorization_ref")
+    assert not hasattr(binding, "permit_ref")
+    assert not hasattr(binding, "dispatch_ref")
 
 
 def test_eua_d_allowed_experience_does_not_upgrade_judgment_truth(store: Any) -> None:
@@ -305,7 +355,9 @@ def test_eua_d_allowed_experience_does_not_upgrade_judgment_truth(store: Any) ->
     assert persisted.epistemic_status == "contested"
 
 
-def test_hub_006_later_projection_drift_does_not_mutate_or_invalidate_historical_replay(store: Any) -> None:
+def test_hub_006_later_projection_drift_does_not_mutate_or_invalidate_historical_replay(
+    store: Any,
+) -> None:
     seed = _seed_official(store)
     request = _request(store, seed)
     binding = store.commit_historical_experience_use(request)
@@ -328,7 +380,9 @@ def test_hub_006_later_projection_drift_does_not_mutate_or_invalidate_historical
     assert replay.snapshot_semantic_json == original_json
 
 
-def test_hub_007_state_change_between_caller_evaluation_and_commit_fails_compare_and_bind(store: Any) -> None:
+def test_hub_007_state_change_between_caller_evaluation_and_commit_fails_compare_and_bind(
+    store: Any,
+) -> None:
     seed = _seed_official(store)
     request = _request(store, seed)
     projection = seed["projection"]
@@ -391,7 +445,10 @@ def test_eua_d_generic_import_of_historical_authority_is_closed(store: Any) -> N
         assert_historical_experience_use_import_closed(exported)
 
 
-def test_eua_d_memory_and_sqlite_import_paths_reject_historical_authority(store: Any, tmp_path) -> None:
+def test_eua_d_memory_and_sqlite_import_paths_reject_historical_authority(
+    store: Any,
+    tmp_path,
+) -> None:
     seed = _seed_official(store)
     request = _request(store, seed)
     store.commit_historical_experience_use(request)
@@ -409,7 +466,10 @@ def test_eua_d_memory_and_sqlite_import_paths_reject_historical_authority(store:
         sqlite_target.close()
 
 
-def test_eua_d_fault_after_judgment_write_before_event_rolls_back(store: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_eua_d_fault_after_judgment_write_before_event_rolls_back(
+    store: Any,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     seed = _seed_official(store)
     request = _request(store, seed)
 
@@ -424,7 +484,10 @@ def test_eua_d_fault_after_judgment_write_before_event_rolls_back(store: Any, mo
     assert store.get_event(historical_experience_use_event_id(request.judgment.id, 1)) is None
 
 
-def test_eua_d_fault_after_event_write_before_commit_rolls_back_both(store: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_eua_d_fault_after_event_write_before_commit_rolls_back_both(
+    store: Any,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     seed = _seed_official(store)
     request = _request(store, seed)
     original_append = store.append_event
@@ -441,7 +504,9 @@ def test_eua_d_fault_after_event_write_before_commit_rolls_back_both(store: Any,
     assert store.get_event(historical_experience_use_event_id(request.judgment.id, 1)) is None
 
 
-def test_eua_d_two_concurrent_same_judgment_commits_linearize_one_semantic_result(store: Any) -> None:
+def test_eua_d_two_concurrent_same_judgment_commits_linearize_one_semantic_result(
+    store: Any,
+) -> None:
     seed = _seed_official(store)
     request = _request(store, seed)
     results: list[HistoricalExperienceUse] = []
@@ -464,39 +529,54 @@ def test_eua_d_two_concurrent_same_judgment_commits_linearize_one_semantic_resul
     assert not errors
     assert len(results) == 2
     assert results[0] == results[1]
-    matching = [event for event in store.list_events(request.judgment.id) if event.type == HISTORICAL_EXPERIENCE_USE_EVENT_TYPE]
+    matching = [
+        event
+        for event in store.list_events(request.judgment.id)
+        if event.type == HISTORICAL_EXPERIENCE_USE_EVENT_TYPE
+    ]
     assert len(matching) == 1
 
 
 def test_eua_d_binding_without_judgment_is_invalid_authority_graph() -> None:
-    semantic_json = (
-        '{"derivations":[],"projections":[],"relations":[],"requirement":'
-        '{"environment_bindings":{},"projection_refs":[],"schema":"experience-use-requirement-v1",'
-        '"subject_version_refs":[],"use_context":{},"use_scope":{}},'
-        '"resolved_objects":[],"schema":"resolved-experience-use-snapshot-v1","unresolved":[]}'
-    )
-    import hashlib
+    requirement_payload = {
+        "schema": EXPERIENCE_USE_REQUIREMENT_SCHEMA,
+        "projection_refs": [],
+        "use_scope": {},
+        "subject_version_refs": [],
+        "environment_bindings": {},
+        "use_context": {},
+    }
+    snapshot_payload = {
+        "schema": RESOLVED_EXPERIENCE_USE_SNAPSHOT_SCHEMA,
+        "requirement": requirement_payload,
+        "projections": [],
+        "resolved_objects": [],
+        "derivations": [],
+        "relations": [],
+        "unresolved": [],
+    }
     import json
 
-    requirement_payload = json.loads(semantic_json)["requirement"]
-    requirement_digest = hashlib.sha256(
-        json.dumps(requirement_payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode()
-    ).hexdigest()
-    snapshot_digest = hashlib.sha256(semantic_json.encode()).hexdigest()
+    semantic_json = json.dumps(
+        snapshot_payload,
+        ensure_ascii=True,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
     event = Event(
         id=historical_experience_use_event_id("missing_judgment", 1),
         type=HISTORICAL_EXPERIENCE_USE_EVENT_TYPE,
         subject_ref="missing_judgment",
         payload={
-            "schema": "historical-experience-use-v1",
+            "schema": HISTORICAL_EXPERIENCE_USE_SCHEMA,
             "semantic_role": "historical-experience-use",
             "judgment_ref": "missing_judgment",
             "judgment_version": 1,
-            "requirement_digest": requirement_digest,
-            "snapshot_digest": snapshot_digest,
+            "requirement_digest": experience_use_requirement_digest(requirement_payload),
+            "snapshot_digest": experience_use_snapshot_digest(semantic_json),
             "snapshot_semantic_json": semantic_json,
             "selected_projection_refs": [],
-            "admission_contract_version": EXPERIENCE_USE_ADMISSION_CONTRACT_VERSION,
+            "admission_contract_version": CURRENT_EXPERIENCE_USE_ADMISSION_CONTRACT,
         },
     )
     with pytest.raises(ValueError, match="judgment missing"):
@@ -518,3 +598,152 @@ def test_eua_d_contract_drift_fails_before_new_authority(store: Any) -> None:
     with pytest.raises(ValueError, match="contract changed"):
         store.commit_historical_experience_use(drifted)
     assert store.get_record(request.judgment.id) is None
+
+
+def test_eua_d_non_ascii_requirement_digest_is_single_owner_end_to_end(store: Any) -> None:
+    seed = _seed_official(store)
+    base = _requirement(seed)
+    requirement = ExperienceUseRequirement(
+        projection_refs=base.projection_refs,
+        use_scope=dict(base.use_scope),
+        subject_version_refs=base.subject_version_refs,
+        environment_bindings=dict(base.environment_bindings),
+        use_context={"语言": "中文", "地点": "東京"},
+    )
+    admission = ExperienceUseAdmissionEvaluator(store).evaluate(requirement)
+    assert admission.status == "allowed"
+    assert admission.requirement_digest == experience_use_requirement_digest(requirement)
+
+    request = HistoricalExperienceUseCommitRequest(
+        judgment=_task_judgment("unicode_judgment"),
+        requirement=requirement,
+        expected_requirement_digest=admission.requirement_digest,
+        expected_snapshot_digest=admission.snapshot_digest,
+    )
+    binding = store.commit_historical_experience_use(request)
+    event = store.get_event(binding.id)
+    assert event is not None
+    reconstructed = historical_experience_use_from_event(event)
+    replayed = store.commit_historical_experience_use(request)
+
+    assert reconstructed.requirement_digest == admission.requirement_digest
+    assert reconstructed.requirement_digest == experience_use_requirement_digest(
+        reconstructed.materialize_snapshot()["requirement"]
+    )
+    assert replayed.requirement_digest == admission.requirement_digest
+    assert replayed == binding
+
+
+def test_eua_d_historical_contract_support_is_independent_of_current_contract_symbol(
+    store: Any,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    seed = _seed_official(store)
+    request = _request(store, seed)
+    binding = store.commit_historical_experience_use(request)
+    event = store.get_event(binding.id)
+    assert event is not None
+    assert binding.admission_contract_version in SUPPORTED_HISTORICAL_EXPERIENCE_USE_CONTRACTS
+
+    monkeypatch.setattr(
+        historical_use_module,
+        "CURRENT_EXPERIENCE_USE_ADMISSION_CONTRACT",
+        "experience-use-admission-v2",
+    )
+    assert historical_experience_use_from_event(event) == binding
+
+
+def test_eua_d_unsupported_historical_contract_fails_closed(store: Any) -> None:
+    seed = _seed_official(store)
+    request = _request(store, seed)
+    binding = store.commit_historical_experience_use(request)
+    event = store.get_event(binding.id)
+    assert event is not None
+    forged = event.model_copy(
+        update={
+            "payload": {
+                **event.payload,
+                "admission_contract_version": "experience-use-admission-unsupported",
+            }
+        }
+    )
+    with pytest.raises(ValueError, match="admission contract is unsupported"):
+        historical_experience_use_from_event(forged)
+
+
+def test_eua_d_multi_projection_exact_set_is_order_normalized_without_rebound(store: Any) -> None:
+    first = _seed_official(store, projection_id="hist_projection_a")
+    second = _seed_official(store, projection_id="hist_projection_b")
+    first_projection = first["projection"]
+    second_projection = second["projection"]
+    first_scope = first["scope"]
+    second_scope = second["scope"]
+    assert isinstance(first_projection, KnowledgeProjection)
+    assert isinstance(second_projection, KnowledgeProjection)
+    assert isinstance(first_scope, ChangeObjectRecord)
+    assert isinstance(second_scope, ChangeObjectRecord)
+
+    requirement_reversed = ExperienceUseRequirement(
+        projection_refs=(second_projection.id, first_projection.id),
+        use_scope={"domain": "payments", "task": "refund-review"},
+        subject_version_refs=(second_scope.id, first_scope.id),
+        environment_bindings={"runtime": "v1", "model": "m1"},
+        use_context={"judgment_context": "refund-review"},
+    )
+    first_admission = ExperienceUseAdmissionEvaluator(store).evaluate(requirement_reversed)
+    assert first_admission.status == "allowed"
+    request = HistoricalExperienceUseCommitRequest(
+        judgment=_task_judgment("multi_projection_judgment"),
+        requirement=requirement_reversed,
+        expected_requirement_digest=first_admission.requirement_digest,
+        expected_snapshot_digest=first_admission.snapshot_digest,
+    )
+    binding = store.commit_historical_experience_use(request)
+
+    requirement_forward = ExperienceUseRequirement(
+        projection_refs=(first_projection.id, second_projection.id),
+        use_scope={"domain": "payments", "task": "refund-review"},
+        subject_version_refs=(first_scope.id, second_scope.id),
+        environment_bindings={"runtime": "v1", "model": "m1"},
+        use_context={"judgment_context": "refund-review"},
+    )
+    second_admission = ExperienceUseAdmissionEvaluator(store).evaluate(requirement_forward)
+    replay_request = HistoricalExperienceUseCommitRequest(
+        judgment=request.judgment,
+        requirement=requirement_forward,
+        expected_requirement_digest=second_admission.requirement_digest,
+        expected_snapshot_digest=second_admission.snapshot_digest,
+    )
+    replay = store.commit_historical_experience_use(replay_request)
+
+    expected_refs = tuple(sorted((first_projection.id, second_projection.id)))
+    assert requirement_reversed.projection_refs == expected_refs
+    assert requirement_forward.projection_refs == expected_refs
+    assert first_admission.requirement_digest == second_admission.requirement_digest
+    assert first_admission.snapshot_digest == second_admission.snapshot_digest
+    assert binding.selected_projection_refs == expected_refs
+    assert replay == binding
+
+
+def test_eua_d_judgment_revision_creates_new_history_without_invalidating_old(store: Any) -> None:
+    seed = _seed_official(store)
+    first_request = _request(store, seed, _task_judgment("revision_judgment_v1"))
+    first_binding = store.commit_historical_experience_use(first_request)
+
+    second_request = _request(store, seed, _task_judgment("revision_judgment_v2"))
+    second_binding = store.commit_historical_experience_use(second_request)
+    revision = create_revision(first_request.judgment.id, second_request.judgment.id)
+    store.save_record(revision)
+    persisted_revision = store.get_record(revision.id)
+
+    assert isinstance(persisted_revision, RevisionRecord)
+    assert persisted_revision.revises_ref == first_request.judgment.id
+    assert persisted_revision.produces_ref == second_request.judgment.id
+    assert persisted_revision.revises_ref != persisted_revision.produces_ref
+    assert first_binding.id != second_binding.id
+    first_event = store.get_event(first_binding.id)
+    second_event = store.get_event(second_binding.id)
+    assert first_event is not None
+    assert second_event is not None
+    assert historical_experience_use_from_event(first_event) == first_binding
+    assert historical_experience_use_from_event(second_event) == second_binding

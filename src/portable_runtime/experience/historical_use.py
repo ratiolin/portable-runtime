@@ -1,7 +1,7 @@
 """Durable Historical Experience Use authority.
 
 EUA-D linearizes one exact task/domain Assertion with the exact Experience Use
-semantic state that the store re-evaluated as allowed at commit time.  The
+semantic state that the store re-evaluated as allowed at commit time. The
 caller supplies expectations, never an authority event or resolved snapshot.
 """
 
@@ -10,15 +10,20 @@ from __future__ import annotations
 import copy
 import hashlib
 import json
+from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import Any, Mapping, Protocol
+from typing import Any, Protocol
 
 from portable_runtime.core.models import Event
 from portable_runtime.experience.use_admission import (
-    EXPERIENCE_USE_ADMISSION_CONTRACT_VERSION,
+    CURRENT_EXPERIENCE_USE_ADMISSION_CONTRACT,
+    EXPERIENCE_USE_REQUIREMENT_SCHEMA,
+    RESOLVED_EXPERIENCE_USE_SNAPSHOT_SCHEMA,
     ExperienceUseAdmission,
     ExperienceUseAdmissionEvaluator,
     ExperienceUseRequirement,
+    experience_use_requirement_digest,
+    experience_use_snapshot_digest,
 )
 from portable_runtime.records.models import Assertion
 
@@ -26,6 +31,9 @@ HISTORICAL_EXPERIENCE_USE_EVENT_TYPE = "HistoricalExperienceUseRecorded"
 HISTORICAL_EXPERIENCE_USE_SCHEMA = "historical-experience-use-v1"
 HISTORICAL_EXPERIENCE_USE_SEMANTIC_ROLE = "historical-experience-use"
 DOMAIN_JUDGMENT_SEMANTIC_ROLE = "task-domain-judgment"
+SUPPORTED_HISTORICAL_EXPERIENCE_USE_CONTRACTS = frozenset(
+    {CURRENT_EXPERIENCE_USE_ADMISSION_CONTRACT}
+)
 
 HISTORICAL_EXPERIENCE_USE_GRADUATED_COUNTEREXAMPLES = frozenset(
     {f"HUB-{index:03d}" for index in range(1, 9)}
@@ -39,13 +47,17 @@ class HistoricalExperienceUseCommitRequest:
     ``judgment`` and ``requirement`` are inputs to store-owned reconstruction.
     The caller cannot submit a durable binding, resolved snapshot payload, or
     assertion/evidence/counterexample refs independently of the requirement.
+
+    ``expected_admission_contract_version`` is optional for historical replay.
+    A new commit always uses the current EUA-B contract. Historical replay
+    validates the event-declared contract against the historical support set.
     """
 
     judgment: Assertion
     requirement: ExperienceUseRequirement
     expected_requirement_digest: str
     expected_snapshot_digest: str
-    expected_admission_contract_version: str = EXPERIENCE_USE_ADMISSION_CONTRACT_VERSION
+    expected_admission_contract_version: str | None = None
 
 
 @dataclass(frozen=True)
@@ -83,12 +95,9 @@ class HistoricalExperienceUseStoreReader(Protocol):
     def export_state(self) -> dict[str, list[dict[str, object]]]: ...
 
 
-def _canonical_json(value: object) -> str:
-    return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
-
-
-def _digest(value: object) -> str:
-    return hashlib.sha256(_canonical_json(value).encode("utf-8")).hexdigest()
+def _identity_digest(value: object) -> str:
+    canonical = json.dumps(value, ensure_ascii=True, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
 def _is_sha256(value: str) -> bool:
@@ -118,12 +127,15 @@ def freeze_historical_experience_use_request(
         environment_bindings=copy.deepcopy(dict(requirement.environment_bindings)),
         use_context=copy.deepcopy(dict(requirement.use_context)),
     )
+    expected_contract = request.expected_admission_contract_version
     return HistoricalExperienceUseCommitRequest(
         judgment=request.judgment.model_copy(deep=True),
         requirement=frozen_requirement,
         expected_requirement_digest=str(request.expected_requirement_digest),
         expected_snapshot_digest=str(request.expected_snapshot_digest),
-        expected_admission_contract_version=str(request.expected_admission_contract_version),
+        expected_admission_contract_version=(
+            None if expected_contract is None else str(expected_contract)
+        ),
     )
 
 
@@ -134,7 +146,7 @@ def historical_experience_use_event_id(judgment_ref: str, judgment_version: int)
         "judgment_ref": judgment_ref,
         "judgment_version": judgment_version,
     }
-    return f"event_historical_experience_use_{_digest(identity)[:32]}"
+    return f"event_historical_experience_use_{_identity_digest(identity)[:32]}"
 
 
 def _validate_task_domain_judgment(judgment: Assertion) -> None:
@@ -163,7 +175,8 @@ def _validate_role_separation_from_current_projections(
             refs = getattr(projection, field, ())
             if judgment.id in refs:
                 raise ValueError(
-                    "task/domain judgment cannot be an assertion or epistemic judgment that qualifies selected experience"
+                    "task/domain judgment cannot be an assertion or epistemic "
+                    "judgment that qualifies selected experience"
                 )
 
 
@@ -182,7 +195,8 @@ def _validate_role_separation(judgment: Assertion, admission: ExperienceUseAdmis
                 qualifying_refs.update(str(ref) for ref in refs if isinstance(ref, str))
         if judgment.id in qualifying_refs:
             raise ValueError(
-                "task/domain judgment cannot be an assertion or epistemic judgment that qualifies selected experience"
+                "task/domain judgment cannot be an assertion or epistemic "
+                "judgment that qualifies selected experience"
             )
 
 
@@ -192,7 +206,9 @@ def _event_from_admission(judgment: Assertion, admission: ExperienceUseAdmission
     if not isinstance(requirement_payload, dict):
         raise ValueError("allowed Experience Use snapshot is missing its requirement payload")
     projection_refs = requirement_payload.get("projection_refs")
-    if not isinstance(projection_refs, list) or not all(isinstance(ref, str) for ref in projection_refs):
+    if not isinstance(projection_refs, list) or not all(
+        isinstance(ref, str) for ref in projection_refs
+    ):
         raise ValueError("allowed Experience Use snapshot has malformed projection refs")
     event_id = historical_experience_use_event_id(judgment.id, judgment.version)
     return Event(
@@ -247,27 +263,36 @@ def historical_experience_use_from_event(event: Event) -> HistoricalExperienceUs
         raise ValueError("Historical Experience Use snapshot_digest is invalid")
     if not isinstance(snapshot_semantic_json, str):
         raise ValueError("Historical Experience Use snapshot payload is invalid")
-    if hashlib.sha256(snapshot_semantic_json.encode("utf-8")).hexdigest() != snapshot_digest:
+    if experience_use_snapshot_digest(snapshot_semantic_json) != snapshot_digest:
         raise ValueError("Historical Experience Use snapshot digest mismatch")
-    if contract_version != EXPERIENCE_USE_ADMISSION_CONTRACT_VERSION:
+    if (
+        not isinstance(contract_version, str)
+        or contract_version not in SUPPORTED_HISTORICAL_EXPERIENCE_USE_CONTRACTS
+    ):
         raise ValueError("Historical Experience Use admission contract is unsupported")
     if not isinstance(selected_projection_refs, list) or not all(
         isinstance(ref, str) and ref for ref in selected_projection_refs
     ):
         raise ValueError("Historical Experience Use selected projection refs are invalid")
-    if len(set(selected_projection_refs)) != len(selected_projection_refs):
-        raise ValueError("Historical Experience Use selected projection refs must be unique")
+    if selected_projection_refs != sorted(set(selected_projection_refs)):
+        raise ValueError("Historical Experience Use selected projection refs are not canonical")
 
     try:
         snapshot = json.loads(snapshot_semantic_json)
     except json.JSONDecodeError as exc:
         raise ValueError("Historical Experience Use snapshot JSON is invalid") from exc
-    if not isinstance(snapshot, dict) or snapshot.get("schema") != "resolved-experience-use-snapshot-v1":
+    if (
+        not isinstance(snapshot, dict)
+        or snapshot.get("schema") != RESOLVED_EXPERIENCE_USE_SNAPSHOT_SCHEMA
+    ):
         raise ValueError("Historical Experience Use snapshot schema mismatch")
     requirement = snapshot.get("requirement")
-    if not isinstance(requirement, dict) or requirement.get("schema") != "experience-use-requirement-v1":
+    if (
+        not isinstance(requirement, dict)
+        or requirement.get("schema") != EXPERIENCE_USE_REQUIREMENT_SCHEMA
+    ):
         raise ValueError("Historical Experience Use requirement schema mismatch")
-    if _digest(requirement) != requirement_digest:
+    if experience_use_requirement_digest(requirement) != requirement_digest:
         raise ValueError("Historical Experience Use embedded requirement digest mismatch")
     embedded_refs = requirement.get("projection_refs")
     if embedded_refs != selected_projection_refs:
@@ -276,7 +301,9 @@ def historical_experience_use_from_event(event: Event) -> HistoricalExperienceUs
     if not isinstance(projections, list):
         raise ValueError("Historical Experience Use snapshot projections are malformed")
     resolved_projection_ids = [
-        raw.get("id") for raw in projections if isinstance(raw, dict) and isinstance(raw.get("id"), str)
+        raw.get("id")
+        for raw in projections
+        if isinstance(raw, dict) and isinstance(raw.get("id"), str)
     ]
     if resolved_projection_ids != selected_projection_refs:
         raise ValueError("Historical Experience Use resolved projection set mismatch")
@@ -289,7 +316,7 @@ def historical_experience_use_from_event(event: Event) -> HistoricalExperienceUs
         snapshot_digest=snapshot_digest,
         snapshot_semantic_json=snapshot_semantic_json,
         selected_projection_refs=tuple(selected_projection_refs),
-        admission_contract_version=str(contract_version),
+        admission_contract_version=contract_version,
     )
 
 
@@ -318,10 +345,17 @@ def prepare_historical_experience_use_commit(
     if not _is_sha256(request.expected_snapshot_digest):
         raise ValueError("expected Experience Use snapshot digest is invalid")
 
-    event_id = historical_experience_use_event_id(request.judgment.id, request.judgment.version)
+    event_id = historical_experience_use_event_id(
+        request.judgment.id,
+        request.judgment.version,
+    )
     existing_event = store.get_event(event_id)
     if existing_event is None:
-        _validate_role_separation_from_current_projections(store, request.judgment, request.requirement)
+        _validate_role_separation_from_current_projections(
+            store,
+            request.judgment,
+            request.requirement,
+        )
     existing_record = store.get_record(request.judgment.id)
 
     if existing_event is not None:
@@ -330,18 +364,22 @@ def prepare_historical_experience_use_commit(
         if not isinstance(existing_record, Assertion):
             raise ValueError("Historical Experience Use judgment ref does not resolve to Assertion")
         if existing_record.version != request.judgment.version or not same_assertion_semantics(
-            existing_record, request.judgment
+            existing_record,
+            request.judgment,
         ):
             raise ValueError("Historical Experience Use exact judgment identity rebound")
         binding = historical_experience_use_from_event(existing_event)
-        request_requirement_digest = _digest(request.requirement.semantic_payload())
+        request_requirement_digest = experience_use_requirement_digest(request.requirement)
         if request_requirement_digest != binding.requirement_digest:
             raise ValueError("Historical Experience Use requirement rebound")
         if request.expected_requirement_digest != binding.requirement_digest:
             raise ValueError("Historical Experience Use expected requirement rebound")
         if request.expected_snapshot_digest != binding.snapshot_digest:
             raise ValueError("Historical Experience Use snapshot rebound")
-        if request.expected_admission_contract_version != binding.admission_contract_version:
+        if (
+            request.expected_admission_contract_version is not None
+            and request.expected_admission_contract_version != binding.admission_contract_version
+        ):
             raise ValueError("Historical Experience Use admission contract rebound")
         if tuple(request.requirement.projection_refs) != binding.selected_projection_refs:
             raise ValueError("Historical Experience Use projection selection rebound")
@@ -355,13 +393,18 @@ def prepare_historical_experience_use_commit(
     if existing_record is not None:
         raise ValueError("retroactive Historical Experience Use backfill onto an existing judgment is closed")
 
-    if request.expected_admission_contract_version != EXPERIENCE_USE_ADMISSION_CONTRACT_VERSION:
+    expected_contract = (
+        CURRENT_EXPERIENCE_USE_ADMISSION_CONTRACT
+        if request.expected_admission_contract_version is None
+        else request.expected_admission_contract_version
+    )
+    if expected_contract != CURRENT_EXPERIENCE_USE_ADMISSION_CONTRACT:
         raise ValueError("Experience Use admission contract changed before historical commit")
 
     admission = ExperienceUseAdmissionEvaluator(store).evaluate(request.requirement)
     if admission.status != "allowed":
         raise ValueError(f"Historical Experience Use requires allowed admission, got {admission.status!r}")
-    if admission.admission_contract_version != request.expected_admission_contract_version:
+    if admission.admission_contract_version != expected_contract:
         raise ValueError("Experience Use admission contract changed before historical commit")
     if admission.requirement_digest != request.expected_requirement_digest:
         raise ValueError("Experience Use requirement changed before historical commit")
@@ -407,7 +450,10 @@ def validate_historical_experience_use_authority_graph(
         if record.get("version") != binding.judgment_version:
             raise ValueError("Historical Experience Use judgment version mismatch")
         metadata = record.get("metadata")
-        if not isinstance(metadata, dict) or metadata.get("semantic_role") != DOMAIN_JUDGMENT_SEMANTIC_ROLE:
+        if (
+            not isinstance(metadata, dict)
+            or metadata.get("semantic_role") != DOMAIN_JUDGMENT_SEMANTIC_ROLE
+        ):
             raise ValueError("Historical Experience Use judgment semantic role mismatch")
 
 
