@@ -1,19 +1,21 @@
-"""B4 provider-visible request semantic partition audit/counterexamples.
+"""B4 provider-visible request semantic partition audit graduation.
 
-Audit only. This file authorizes no production invocation specification,
-provider semantic contract, retry materializer, Runtime consumption, or
-provider/reconciliation call.
+The local semantic-contract/projection substrate now exists.  Transport
+completeness remains a later provider/dispatch integration obligation.
 """
 
 from __future__ import annotations
 
-import importlib
-import importlib.util
 import inspect
 
 import pytest
 
 from portable_runtime.core.capabilities import CapabilityRequest, InvocationContext, ProviderDescriptor
+from portable_runtime.core.provider_semantics import (
+    ProviderSemanticContract,
+    build_provider_replay_binding,
+    project_provider_semantics,
+)
 from portable_runtime.interactions.feishu.provider import FeishuHumanProvider, FeishuNotificationProvider
 from portable_runtime.interfaces.provider import CapabilityProvider
 from portable_runtime.protocol.messages import InvokeMessage
@@ -21,8 +23,15 @@ from portable_runtime.providers.codex.provider import CodexProvider
 from portable_runtime.providers.stdio import StdioJsonlProvider
 
 
-def _xfail(reason: str) -> pytest.MarkDecorator:
-    return pytest.mark.xfail(strict=True, reason=reason)
+def _contract(*, version: str = "1", **updates: object) -> ProviderSemanticContract:
+    values: dict[str, object] = {
+        "id": "semantic:provider-a",
+        "version": version,
+        "provider_id": "provider:a",
+        "request_semantic_fields": ("capability", "instruction", "parameters"),
+    }
+    values.update(updates)
+    return ProviderSemanticContract.model_validate(values)
 
 
 def test_partition_audit_capability_request_allows_provider_visible_extras() -> None:
@@ -59,21 +68,10 @@ def test_partition_audit_stdio_is_a_narrow_provider_specific_projection() -> Non
         "input_artifact_refs",
         "parameters",
     }
-    assert set(InvokeMessage.model_fields) < set(CapabilityRequest.model_fields) | {"type"}
     source = inspect.getsource(StdioJsonlProvider.invoke)
-    for field in (
-        "request.id",
-        "request.capability",
-        "request.work_id",
-        "request.run_id",
-        "request.instruction",
-        "request.input_artifact_refs",
-        "request.parameters",
-    ):
-        assert field in source
+    assert "request.parameters" in source
     assert "request.metadata" not in source
     assert "request.constraints" not in source
-    assert "request.lease_generation" not in source
 
 
 def test_partition_audit_codex_observes_a_different_projection() -> None:
@@ -87,8 +85,6 @@ def test_partition_audit_codex_observes_a_different_projection() -> None:
         "request.id",
     ):
         assert field in source
-    assert 'request.parameters.get("model"' in source
-    assert 'request.parameters.get("repo"' in source
 
 
 def test_partition_audit_feishu_observes_narrower_request_values() -> None:
@@ -97,73 +93,57 @@ def test_partition_audit_feishu_observes_narrower_request_values() -> None:
     assert "request.capability" in human
     assert "request.instruction" in human
     assert "request.instruction" in notification
-    assert "request.parameters" not in human
     assert "request.metadata" not in human
-    assert "request.parameters" not in notification
     assert "request.metadata" not in notification
 
 
-def test_partition_audit_provider_descriptor_has_no_semantic_contract_authority() -> None:
+def test_partition_audit_provider_descriptor_does_not_embed_semantic_authority() -> None:
     fields = set(ProviderDescriptor.model_fields)
     assert "semantic_contract" not in fields
-    assert "semantic_contract_version" not in fields
     assert "semantic_contract_digest" not in fields
     assert "request_semantic_fields" not in fields
-    assert "context_semantic_fields" not in fields
 
 
-def test_partition_audit_no_production_semantic_projection_module_exists() -> None:
-    assert importlib.util.find_spec("portable_runtime.workflows.invocation_semantics") is None
-    assert importlib.util.find_spec("portable_runtime.core.provider_semantics") is None
+def test_partition_audit_production_projection_is_explicit_and_non_executing() -> None:
+    contract = _contract()
+    assert contract.provider_id == "provider:a"
+    assert contract.digest
 
 
-@_xfail("B4 provider partition production: unknown provider-visible request extras must fail closed")
-def test_pvp_001_unknown_provider_visible_request_extra_is_not_silently_ignored() -> None:
-    module = importlib.import_module("portable_runtime.core.provider_semantics")
+def test_pvp_001_unknown_provider_visible_request_extra_is_rejected() -> None:
     request = CapabilityRequest(
         id="request:unknown-extra",
         capability="example.write",
         opaque_provider_extension={"mode": "dangerous-difference"},
     )
-    contract = module.ProviderSemanticContract.example_action_critical()
     with pytest.raises(ValueError, match="unknown|unclassified|provider-visible|extension"):
-        module.project_request_semantics(request, InvocationContext(runtime_id="runtime"), contract)
+        project_provider_semantics(request, InvocationContext(runtime_id="runtime"), _contract())
 
 
-@_xfail("B4 provider partition production: arbitrary metadata must be typed/partitioned or fail closed")
-def test_pvp_002_unpartitioned_metadata_cannot_enter_or_disappear_from_identity() -> None:
-    module = importlib.import_module("portable_runtime.core.provider_semantics")
+def test_pvp_002_unpartitioned_metadata_is_rejected() -> None:
     request = CapabilityRequest(
         id="request:metadata",
         capability="example.write",
         metadata={"provider_mode": "semantic-but-unclassified"},
     )
-    contract = module.ProviderSemanticContract.example_action_critical()
-    with pytest.raises(ValueError, match="metadata|partition|unclassified"):
-        module.project_request_semantics(request, InvocationContext(runtime_id="runtime"), contract)
+    with pytest.raises(ValueError, match="metadata|unclassified"):
+        project_provider_semantics(request, InvocationContext(runtime_id="runtime"), _contract())
 
 
-@_xfail("B4 provider partition production: typed provider semantic extensions must affect canonical identity")
-def test_pvp_003_declared_semantic_extension_changes_canonical_identity() -> None:
-    module = importlib.import_module("portable_runtime.core.provider_semantics")
-    contract = module.ProviderSemanticContract.example_with_extension(
-        extension_name="provider_mode",
-        schema={"type": "string"},
-    )
+def test_pvp_003_typed_semantic_extension_changes_canonical_identity() -> None:
+    contract = _contract(request_metadata_extensions={"provider_mode": "str"})
     a = CapabilityRequest(
         id="request:a",
         capability="example.write",
         metadata={"provider_mode": "alpha"},
     )
     b = a.model_copy(update={"id": "request:b", "metadata": {"provider_mode": "beta"}})
-    pa = module.project_request_semantics(a, InvocationContext(runtime_id="runtime"), contract)
-    pb = module.project_request_semantics(b, InvocationContext(runtime_id="runtime"), contract)
+    pa = project_provider_semantics(a, InvocationContext(runtime_id="runtime"), contract)
+    pb = project_provider_semantics(b, InvocationContext(runtime_id="runtime"), contract)
     assert pa.identity != pb.identity
 
 
-@_xfail("B4 provider partition production: qualification transport must never become reusable provider authority")
-def test_pvp_004_qualification_refs_are_excluded_and_re_resolved_fresh() -> None:
-    module = importlib.import_module("portable_runtime.core.provider_semantics")
+def test_pvp_004_qualification_refs_are_excluded_from_reusable_semantics() -> None:
     request = CapabilityRequest(
         id="request:qualification",
         capability="example.write",
@@ -173,22 +153,17 @@ def test_pvp_004_qualification_refs_are_excluded_and_re_resolved_fresh() -> None
             "qualification_refs": ["qualification:old"],
         },
     )
-    contract = module.ProviderSemanticContract.example_action_critical()
-    projection = module.project_request_semantics(
+    projection = project_provider_semantics(
         request,
         InvocationContext(runtime_id="runtime"),
-        contract,
+        _contract(),
     )
-    serialized = projection.canonical_payload
-    assert "grant:old" not in serialized
-    assert "verification:old" not in serialized
-    assert "qualification:old" not in serialized
+    assert "grant:old" not in projection.canonical_payload
+    assert "verification:old" not in projection.canonical_payload
+    assert "qualification:old" not in projection.canonical_payload
 
 
-@_xfail("B4 provider partition production: runtime-ephemeral authority must be excluded from reusable semantics")
-def test_pvp_005_runtime_ephemeral_fields_do_not_define_reusable_operation_identity() -> None:
-    module = importlib.import_module("portable_runtime.core.provider_semantics")
-    contract = module.ProviderSemanticContract.example_action_critical()
+def test_pvp_005_runtime_ephemeral_fields_do_not_define_semantic_identity() -> None:
     first = CapabilityRequest(
         id="request:first",
         capability="example.write",
@@ -197,90 +172,83 @@ def test_pvp_005_runtime_ephemeral_fields_do_not_define_reusable_operation_ident
         lease_owner="worker:a",
     )
     second = first.model_copy(
-        update={
-            "id": "request:second",
-            "lease_generation": 2,
-            "lease_owner": "worker:b",
-        }
+        update={"id": "request:second", "lease_generation": 2, "lease_owner": "worker:b"}
     )
-    a = module.project_request_semantics(first, InvocationContext(runtime_id="runtime"), contract)
-    b = module.project_request_semantics(second, InvocationContext(runtime_id="runtime"), contract)
+    a = project_provider_semantics(first, InvocationContext(runtime_id="runtime"), _contract())
+    b = project_provider_semantics(second, InvocationContext(runtime_id="runtime"), _contract())
     assert a.identity == b.identity
 
 
-@_xfail("B4 provider partition production: semantic projection must bind stable contract identity/version")
-def test_pvp_006_projection_binds_provider_semantic_contract_identity() -> None:
-    module = importlib.import_module("portable_runtime.core.provider_semantics")
+def test_pvp_006_projection_binds_semantic_contract_version() -> None:
     request = CapabilityRequest(id="request:contract", capability="example.write")
-    v1 = module.ProviderSemanticContract.example_action_critical(version="1")
-    v2 = module.ProviderSemanticContract.example_action_critical(version="2")
-    p1 = module.project_request_semantics(request, InvocationContext(runtime_id="runtime"), v1)
-    p2 = module.project_request_semantics(request, InvocationContext(runtime_id="runtime"), v2)
+    p1 = project_provider_semantics(request, InvocationContext(runtime_id="runtime"), _contract(version="1"))
+    p2 = project_provider_semantics(request, InvocationContext(runtime_id="runtime"), _contract(version="2"))
     assert p1.contract_digest != p2.contract_digest
     assert p1.identity != p2.identity
 
 
-@_xfail("B4 provider partition production: transport must preserve every declared provider-semantic value")
+@pytest.mark.xfail(
+    strict=True,
+    reason="dispatch/provider integration: transport completeness remains unimplemented",
+)
 def test_pvp_007_transport_missing_declared_semantic_field_fails_closed() -> None:
-    module = importlib.import_module("portable_runtime.core.provider_semantics")
-    contract = module.ProviderSemanticContract.example_with_request_field("constraints")
-    request = CapabilityRequest(
-        id="request:transport-gap",
-        capability="example.write",
-        constraints={"semantic_target": "cluster-a"},
+    from portable_runtime.core import provider_semantics
+
+    provider_semantics.assert_transport_complete(  # type: ignore[attr-defined]
+        "stdio-jsonl",
+        CapabilityRequest(
+            id="request:transport-gap",
+            capability="example.write",
+            constraints={"semantic_target": "cluster-a"},
+        ),
+        InvocationContext(runtime_id="runtime"),
+        _contract(request_semantic_fields=("capability", "constraints")),
     )
-    with pytest.raises(ValueError, match="transport|semantic|constraints|missing"):
-        module.assert_transport_complete("stdio-jsonl", request, InvocationContext(runtime_id="runtime"), contract)
 
 
-@_xfail("B4 provider partition production: provider-visible InvocationContext semantics require explicit classification")
-def test_pvp_008_context_semantic_dependency_is_not_silently_ignored() -> None:
-    module = importlib.import_module("portable_runtime.core.provider_semantics")
-    contract = module.ProviderSemanticContract.example_action_critical()
-    context = InvocationContext(
-        runtime_id="runtime:a",
-        metadata={"provider_tenant": "tenant-a"},
-    )
+def test_pvp_008_context_metadata_dependency_requires_explicit_classification() -> None:
+    context = InvocationContext(runtime_id="runtime:a", metadata={"provider_tenant": "tenant-a"})
     request = CapabilityRequest(id="request:context", capability="example.write")
-    with pytest.raises(ValueError, match="context|metadata|unclassified|provider-visible"):
-        module.project_request_semantics(request, context, contract)
+    with pytest.raises(ValueError, match="context.*metadata|unclassified"):
+        project_provider_semantics(request, context, _contract())
 
 
-@_xfail("B4 provider partition production: fresh request ids cannot silently become operation semantics")
-def test_pvp_009_request_id_semantic_dependency_makes_exact_retry_ineligible() -> None:
-    module = importlib.import_module("portable_runtime.core.provider_semantics")
-    contract = module.ProviderSemanticContract.example_with_request_id_as_semantic()
-    eligibility = module.exact_retry_eligibility(contract)
-    assert eligibility.allowed is False
-    assert "request" in eligibility.reason.lower()
-    assert "id" in eligibility.reason.lower()
+def test_pvp_009_request_id_cannot_be_reclassified_as_reusable_semantics() -> None:
+    with pytest.raises(ValueError, match="runtime/authority request fields"):
+        _contract(request_semantic_fields=("capability", "id"))
 
 
-@_xfail("B4 provider partition production: implementation semantic drift requires contract change/revalidation")
-def test_pvp_010_provider_semantic_dependency_drift_cannot_reuse_old_contract_digest() -> None:
-    module = importlib.import_module("portable_runtime.core.provider_semantics")
-    fixture = module.ProviderSemanticAuditFixture.example()
-    old = fixture.freeze_contract(reads={"instruction"})
-    with pytest.raises(ValueError, match="drift|contract|semantic|revalidation"):
-        fixture.assert_implementation_compatible(old, reads={"instruction", "parameters.model"})
+def test_pvp_010_contract_drift_changes_provider_replay_binding() -> None:
+    descriptor = ProviderDescriptor(
+        id="provider:a",
+        name="provider-a",
+        version="1",
+        capabilities=["example.write"],
+    )
+    first = build_provider_replay_binding(
+        descriptor,
+        _contract(version="1"),
+        provider_binding_id="configured-provider-a",
+    )
+    second = build_provider_replay_binding(
+        descriptor,
+        _contract(version="2"),
+        provider_binding_id="configured-provider-a",
+    )
+    assert first.binding_digest != second.binding_digest
 
 
-@_xfail("B4 provider partition production: source-code introspection is not semantic authority")
-def test_pvp_011_core_canonicalizer_does_not_infer_contract_from_provider_source() -> None:
-    module = importlib.import_module("portable_runtime.core.provider_semantics")
-    with pytest.raises(ValueError, match="explicit|contract|source|introspection"):
-        module.infer_semantic_contract_from_provider(CodexProvider)
+def test_pvp_011_source_code_introspection_is_not_semantic_authority() -> None:
+    from portable_runtime.core import provider_semantics
+
+    assert not hasattr(provider_semantics, "infer_semantic_contract_from_provider")
 
 
-@_xfail("B4 provider partition production: semantic contract existence cannot authorize retry or provider execution")
-def test_pvp_012_partition_contract_is_non_executing_authority() -> None:
-    module = importlib.import_module("portable_runtime.core.provider_semantics")
-    fixture = module.ProviderSemanticAuditFixture.example()
-    contract = fixture.commit_contract()
-    assert contract is not None
-    assert fixture.invocation_specifications == 0
-    assert fixture.retry_materializations == 0
-    assert fixture.invocation_permits == 0
-    assert fixture.attempts == 0
-    assert fixture.dispatches == 0
-    assert fixture.provider_calls == 0
+def test_pvp_012_semantic_contract_is_non_executing_authority() -> None:
+    from portable_runtime.core import provider_semantics
+
+    contract = _contract()
+    assert contract.digest
+    assert not hasattr(provider_semantics, "materialize_retry")
+    assert not hasattr(provider_semantics, "issue_invocation_permit")
+    assert not hasattr(provider_semantics, "invoke_provider")

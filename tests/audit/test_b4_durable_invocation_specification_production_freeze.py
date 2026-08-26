@@ -1,261 +1,435 @@
-"""B4 DurableInvocationSpecification production counterexample freeze.
+"""B4 DurableInvocationSpecification production graduation.
 
-Audit only. The next production slice may implement local semantic projection
-and durable specification authority, but this file authorizes no Runtime
-consumption, dispatch integration, retry materialization, or provider call.
+Local semantic projection and durable specification authority are production
+conformance. Dispatch/spec integration remains a strict later blocker.
 """
 
 from __future__ import annotations
 
-import importlib
-import importlib.util
+import hashlib
 import inspect
+import json
 
 import pytest
+from pydantic import ValidationError
 
 from portable_runtime.core.capabilities import CapabilityRequest, InvocationContext, ProviderDescriptor
+from portable_runtime.core.models import Event
+from portable_runtime.core.provider_semantics import (
+    ProviderSemanticContract,
+    build_provider_replay_binding,
+    project_provider_semantics,
+)
 from portable_runtime.governance.dispatch import GovernanceDispatchCommitter
+from portable_runtime.stores.invocation_specification import (
+    InvocationSpecificationInMemoryStateStore,
+    InvocationSpecificationSQLiteStateStore,
+)
 from portable_runtime.stores.memory import InMemoryStateStore
 from portable_runtime.stores.sqlite import SQLiteStateStore
+from portable_runtime.workflows.invocation_specification import (
+    DurableInvocationSpecification,
+    InvocationSpecificationCommitRequest,
+    build_invocation_specification,
+    invocation_specification_event,
+    invocation_specification_from_event,
+    reject_historical_specification_backfill,
+)
 
 
-def _xfail(reason: str) -> pytest.MarkDecorator:
-    return pytest.mark.xfail(strict=True, reason=reason)
+def _contract(*, provider_id: str = "provider:a", version: str = "1") -> ProviderSemanticContract:
+    return ProviderSemanticContract(
+        id=f"semantic:{provider_id}",
+        version=version,
+        provider_id=provider_id,
+        request_semantic_fields=("capability", "instruction", "parameters"),
+    )
 
 
-def test_dis_freeze_no_production_specification_module_exists_yet() -> None:
-    assert importlib.util.find_spec("portable_runtime.workflows.invocation_specification") is None
-    assert importlib.util.find_spec("portable_runtime.core.provider_semantics") is None
+def _descriptor(
+    *,
+    provider_id: str = "provider:a",
+    version: str = "1",
+    effect_semantics: str = "pure",
+) -> ProviderDescriptor:
+    return ProviderDescriptor(
+        id=provider_id,
+        name=provider_id,
+        version=version,
+        capabilities=["example.write"],
+        effect_semantics=effect_semantics,
+        side_effect_class=effect_semantics,
+    )
 
 
-def test_dis_freeze_stores_do_not_own_specification_commit_yet() -> None:
+def _request(
+    *,
+    request_id: str = "request:source",
+    instruction: str = "perform operation",
+    idempotency_key: str | None = None,
+    metadata: dict[str, object] | None = None,
+    **extra: object,
+) -> CapabilityRequest:
+    return CapabilityRequest(
+        id=request_id,
+        capability="example.write",
+        work_id="work:a",
+        run_id="run:a",
+        instruction=instruction,
+        idempotency_key=idempotency_key,
+        metadata=dict(metadata or {}),
+        **extra,
+    )
+
+
+def _context() -> InvocationContext:
+    return InvocationContext(runtime_id="runtime:a", work_id="work:a", run_id="run:a")
+
+
+def _commit_request(
+    *,
+    request: CapabilityRequest | None = None,
+    descriptor: ProviderDescriptor | None = None,
+    contract: ProviderSemanticContract | None = None,
+    provider_binding_id: str = "configured-provider-a:v1",
+) -> InvocationSpecificationCommitRequest:
+    return InvocationSpecificationCommitRequest(
+        request=request or _request(),
+        context=_context(),
+        provider_descriptor=descriptor or _descriptor(),
+        semantic_contract=contract or _contract(),
+        provider_binding_id=provider_binding_id,
+    )
+
+
+def _canonical_json(value: object) -> str:
+    return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+
+
+def _projection_identity(canonical_payload: str) -> str:
+    return f"provider_semantics_{hashlib.sha256(canonical_payload.encode()).hexdigest()}"
+
+
+def test_dis_production_is_opt_in_and_runtime_baseline_is_not_expanded() -> None:
     assert not hasattr(InMemoryStateStore, "commit_invocation_specification")
     assert not hasattr(SQLiteStateStore, "commit_invocation_specification")
+    assert hasattr(InvocationSpecificationInMemoryStateStore, "commit_invocation_specification")
+    assert hasattr(InvocationSpecificationSQLiteStateStore, "commit_invocation_specification")
 
 
-def test_dis_freeze_dispatch_has_no_specification_binding_yet() -> None:
+def test_dis_dispatch_and_runtime_integration_remain_absent() -> None:
     source = inspect.getsource(GovernanceDispatchCommitter.commit)
     assert "invocation_spec_ref" not in source
     assert "InvocationSpecificationRecorded" not in source
 
+    from portable_runtime.core import runtime
 
-def test_dis_freeze_runtime_has_no_specification_consumption() -> None:
-    source = inspect.getsource(importlib.import_module("portable_runtime.core.runtime"))
-    assert "DurableInvocationSpecification" not in source
-    assert "commit_invocation_specification" not in source
-    assert "invocation_spec_ref" not in source
-
-
-def test_dis_freeze_request_and_context_still_have_mixed_surfaces() -> None:
-    request_fields = set(CapabilityRequest.model_fields)
-    context_fields = set(InvocationContext.model_fields)
-    assert {"metadata", "lease_generation", "idempotency_key"} <= request_fields
-    assert {"metadata", "lease_generation", "idempotency_key"} <= context_fields
-    assert CapabilityRequest.model_config.get("extra") == "allow"
+    runtime_source = inspect.getsource(runtime)
+    assert "DurableInvocationSpecification" not in runtime_source
+    assert "commit_invocation_specification" not in runtime_source
 
 
-def test_dis_freeze_provider_descriptor_still_lacks_stable_replay_binding() -> None:
-    fields = set(ProviderDescriptor.model_fields)
-    assert "version" in fields
-    assert "provider_binding_id" not in fields
-    assert "semantic_contract_digest" not in fields
-    assert "idempotency_domain" not in fields
-
-
-@_xfail("DIS production: action-critical capture requires explicit provider semantic contract")
 def test_dis_001_explicit_provider_semantic_contract_required() -> None:
-    module = importlib.import_module("portable_runtime.workflows.invocation_specification")
-    request = CapabilityRequest(id="request:no-contract", capability="example.write", effect_class="write-remote")
-    context = InvocationContext(runtime_id="runtime")
-    with pytest.raises(ValueError, match="semantic|contract|required"):
-        module.prepare_invocation_specification(request, context, provider_descriptor=None, semantic_contract=None)
+    raw = _commit_request().model_dump(mode="python")
+    raw.pop("semantic_contract")
+    with pytest.raises(ValidationError, match="semantic_contract"):
+        InvocationSpecificationCommitRequest.model_validate(raw)
 
 
-@_xfail("DIS production: unknown provider-visible extensions must prevent specification capture")
 def test_dis_002_unknown_provider_visible_extension_fails_closed() -> None:
-    semantics = importlib.import_module("portable_runtime.core.provider_semantics")
-    request = CapabilityRequest(
-        id="request:unknown",
-        capability="example.write",
-        opaque_provider_extension={"meaning": "unclassified"},
-    )
-    contract = semantics.ProviderSemanticContract.example_action_critical()
+    request = _request(opaque_provider_extension={"meaning": "unclassified"})
     with pytest.raises(ValueError, match="unknown|unclassified|extension|provider-visible"):
-        semantics.project_provider_semantics(request, InvocationContext(runtime_id="runtime"), contract)
-
-
-@_xfail("DIS production: runtime-ephemeral authority must not define reusable semantic identity")
-def test_dis_003_runtime_ephemeral_changes_do_not_change_semantic_identity() -> None:
-    semantics = importlib.import_module("portable_runtime.core.provider_semantics")
-    contract = semantics.ProviderSemanticContract.example_action_critical()
-    first = CapabilityRequest(
-        id="request:one",
-        capability="example.write",
-        instruction="same operation",
-        lease_generation=1,
-        lease_owner="worker:a",
-        metadata={"authorization_refs": ["grant:old"]},
-    )
-    second = first.model_copy(
-        update={
-            "id": "request:two",
-            "lease_generation": 2,
-            "lease_owner": "worker:b",
-            "metadata": {"authorization_refs": ["grant:new"]},
-        }
-    )
-    a = semantics.project_provider_semantics(first, InvocationContext(runtime_id="runtime"), contract)
-    b = semantics.project_provider_semantics(second, InvocationContext(runtime_id="runtime"), contract)
-    assert a.identity == b.identity
-
-
-@_xfail("DIS production: declared provider-semantic changes must change canonical identity")
-def test_dis_004_semantic_change_changes_identity() -> None:
-    semantics = importlib.import_module("portable_runtime.core.provider_semantics")
-    contract = semantics.ProviderSemanticContract.example_action_critical()
-    first = CapabilityRequest(id="request:a", capability="example.write", instruction="write A")
-    second = CapabilityRequest(id="request:b", capability="example.write", instruction="write B")
-    a = semantics.project_provider_semantics(first, InvocationContext(runtime_id="runtime"), contract)
-    b = semantics.project_provider_semantics(second, InvocationContext(runtime_id="runtime"), contract)
-    assert a.identity != b.identity
-
-
-@_xfail("DIS production: semantic-contract drift cannot reinterpret the same specification identity")
-def test_dis_005_contract_drift_changes_identity() -> None:
-    semantics = importlib.import_module("portable_runtime.core.provider_semantics")
-    request = CapabilityRequest(id="request:contract", capability="example.write", instruction="same")
-    v1 = semantics.ProviderSemanticContract.example_action_critical(version="1")
-    v2 = semantics.ProviderSemanticContract.example_action_critical(version="2")
-    a = semantics.project_provider_semantics(request, InvocationContext(runtime_id="runtime"), v1)
-    b = semantics.project_provider_semantics(request, InvocationContext(runtime_id="runtime"), v2)
-    assert a.contract_digest != b.contract_digest
-    assert a.identity != b.identity
-
-
-@_xfail("DIS production: provider-id string alone is insufficient replay binding")
-def test_dis_006_provider_binding_must_be_stronger_than_provider_id() -> None:
-    module = importlib.import_module("portable_runtime.workflows.invocation_specification")
-    descriptor = ProviderDescriptor(id="provider:a", name="a", version="1", capabilities=["example.write"])
-    with pytest.raises(ValueError, match="provider|binding|stable|identity"):
-        module.provider_replay_binding(descriptor, semantic_contract_digest="semantic:v1", binding_id=None)
-
-
-@_xfail("DIS production: retry-eligible side effect specification retains exact idempotency identity")
-def test_dis_007_side_effect_spec_requires_idempotency_identity() -> None:
-    module = importlib.import_module("portable_runtime.workflows.invocation_specification")
-    fixture = module.InvocationSpecificationAuditFixture.example()
-    with pytest.raises(ValueError, match="idempotency|replay|identity"):
-        fixture.capture(effect_semantics="idempotent", idempotency_key=None)
-
-
-@_xfail("DIS production: identical semantic/provenance input deterministically replays same spec")
-def test_dis_008_same_input_replays_same_specification() -> None:
-    module = importlib.import_module("portable_runtime.workflows.invocation_specification")
-    fixture = module.InvocationSpecificationAuditFixture.example()
-    first = fixture.commit()
-    second = fixture.commit()
-    assert first == second
-    assert first.id == second.id
-
-
-@_xfail("DIS production: same specification identity cannot be rebound to changed immutable semantics")
-def test_dis_009_specification_rebound_is_rejected() -> None:
-    module = importlib.import_module("portable_runtime.workflows.invocation_specification")
-    fixture = module.InvocationSpecificationAuditFixture.example()
-    first = fixture.commit(instruction="operation A")
-    with pytest.raises(ValueError, match="rebound|identity|semantics|immutable"):
-        fixture.force_same_identity_commit(identity=first.id, instruction="operation B")
-
-
-@_xfail("DIS production: Memory specification authority is store-owned")
-def test_dis_010_memory_commit_owns_authority_and_direct_event_append_fails() -> None:
-    module = importlib.import_module("portable_runtime.workflows.invocation_specification")
-    store = InMemoryStateStore()
-    fixture = module.InvocationSpecificationAuditFixture.for_store(store)
-    spec = fixture.commit()
-    assert spec is not None
-    with pytest.raises(ValueError, match="commit_invocation_specification|authority|direct"):
-        store.append_event(fixture.forged_event_for(spec))
-
-
-@_xfail("DIS production: SQLite specification survives close/reopen and replays deterministically")
-def test_dis_011_sqlite_close_reopen_replays_same_specification(tmp_path) -> None:
-    module = importlib.import_module("portable_runtime.workflows.invocation_specification")
-    path = tmp_path / "invocation-spec.sqlite"
-    first_store = SQLiteStateStore(str(path))
-    fixture = module.InvocationSpecificationAuditFixture.for_store(first_store)
-    first = fixture.commit()
-    first_store.close()
-    second_store = SQLiteStateStore(str(path))
-    replay = module.InvocationSpecificationAuditFixture.for_store(second_store).replay(first.id)
-    assert replay == first
-    second_store.close()
-
-
-@_xfail("P5: serialized invocation specification authority remains fail closed")
-def test_dis_012_serialized_specification_import_is_unsupported() -> None:
-    module = importlib.import_module("portable_runtime.workflows.invocation_specification")
-    store = InMemoryStateStore()
-    event = module.InvocationSpecificationAuditFixture.example().forged_serialized_event()
-    with pytest.raises(ValueError, match="P5|import|unsupported|invocation specification"):
-        store.import_state({"event": [event]})
-
-
-@_xfail("DIS production: initial capture binds exact source request identity")
-def test_dis_013_specification_binds_source_request_and_rejects_request_ref_only_reconstruction() -> None:
-    module = importlib.import_module("portable_runtime.workflows.invocation_specification")
-    fixture = module.InvocationSpecificationAuditFixture.example(source_request_id="request:source")
-    spec = fixture.commit()
-    assert spec.source_request_ref == "request:source"
-    with pytest.raises(ValueError, match="historical|request_ref|insufficient|specification"):
-        module.reconstruct_from_request_ref_only("request:source")
-
-
-@_xfail("DIS production: specification capture remains non-executing authority")
-def test_dis_014_specification_capture_creates_no_execution_authority() -> None:
-    module = importlib.import_module("portable_runtime.workflows.invocation_specification")
-    fixture = module.InvocationSpecificationAuditFixture.example()
-    spec = fixture.commit()
-    assert spec is not None
-    assert fixture.qualifications == 0
-    assert fixture.authorizations == 0
-    assert fixture.invocation_permits == 0
-    assert fixture.attempts == 0
-    assert fixture.dispatches == 0
-    assert fixture.provider_calls == 0
-
-
-@_xfail("DIS integration blocker: action-critical dispatch must bind exact invocation_spec_ref")
-def test_dis_015_dispatch_requires_exact_specification_binding() -> None:
-    module = importlib.import_module("portable_runtime.workflows.invocation_specification")
-    result = module.InvocationSpecificationAuditFixture.dispatch_without_spec_binding()
-    assert result.status in {"blocked", "unavailable"}
-    assert "invocation_spec" in result.reason
-
-
-@_xfail("DIS production: historical request/dispatch history cannot be backfilled into authoritative spec")
-def test_dis_016_historical_specification_backfill_remains_forbidden() -> None:
-    module = importlib.import_module("portable_runtime.workflows.invocation_specification")
-    with pytest.raises(ValueError, match="historical|backfill|unsupported|authoritative"):
-        module.backfill_historical_specification(
-            request_ref="request:old",
-            dispatch_ref="dispatch:old",
-            current_provider_binding="provider-binding:current",
+        build_invocation_specification(
+            request,
+            _context(),
+            _descriptor(),
+            _contract(),
+            provider_binding_id="configured-provider-a:v1",
         )
 
 
-@_xfail("DIS production: provider replay binding drift cannot silently replay old specification")
-def test_dis_017_provider_binding_drift_is_rejected() -> None:
-    module = importlib.import_module("portable_runtime.workflows.invocation_specification")
-    fixture = module.InvocationSpecificationAuditFixture.example(provider_binding="provider-binding:v1")
-    first = fixture.commit()
-    with pytest.raises(ValueError, match="provider|binding|drift|rebound"):
-        fixture.replay_with_provider_binding(first.id, "provider-binding:v2")
+def test_dis_003_runtime_authority_is_excluded_from_reusable_semantic_identity() -> None:
+    first = _request(
+        request_id="request:one",
+        instruction="same operation",
+        metadata={"authorization_refs": ["grant:old"]},
+        lease_generation=1,
+        lease_owner="worker:a",
+    )
+    second = _request(
+        request_id="request:two",
+        instruction="same operation",
+        metadata={"authorization_refs": ["grant:new"]},
+        lease_generation=2,
+        lease_owner="worker:b",
+    )
+    a = build_invocation_specification(
+        first, _context(), _descriptor(), _contract(), provider_binding_id="configured-provider-a:v1"
+    )
+    b = build_invocation_specification(
+        second, _context(), _descriptor(), _contract(), provider_binding_id="configured-provider-a:v1"
+    )
+    assert a.semantic_identity == b.semantic_identity
+    assert a.id != b.id  # source provenance remains a distinct durable fact
 
 
-@_xfail("DIS minimal production: no API may directly materialize authorized retry execution")
-def test_dis_018_retry_materialization_remains_absent() -> None:
-    module = importlib.import_module("portable_runtime.workflows.invocation_specification")
-    assert not hasattr(module, "materialize_authorized_retry")
-    assert not hasattr(module, "consume_recovery_application")
-    assert not hasattr(module, "issue_retry_permit")
+def test_dis_004_semantic_change_changes_identity() -> None:
+    a = build_invocation_specification(
+        _request(request_id="request:a", instruction="operation A"),
+        _context(),
+        _descriptor(),
+        _contract(),
+        provider_binding_id="configured-provider-a:v1",
+    )
+    b = build_invocation_specification(
+        _request(request_id="request:b", instruction="operation B"),
+        _context(),
+        _descriptor(),
+        _contract(),
+        provider_binding_id="configured-provider-a:v1",
+    )
+    assert a.semantic_identity != b.semantic_identity
+
+
+def test_dis_005_contract_drift_changes_semantic_and_specification_identity() -> None:
+    request = _request()
+    a = build_invocation_specification(
+        request, _context(), _descriptor(), _contract(version="1"), provider_binding_id="configured-provider-a:v1"
+    )
+    b = build_invocation_specification(
+        request, _context(), _descriptor(), _contract(version="2"), provider_binding_id="configured-provider-a:v1"
+    )
+    assert a.semantic_contract_digest != b.semantic_contract_digest
+    assert a.semantic_identity != b.semantic_identity
+    assert a.id != b.id
+
+
+def test_dis_006_provider_binding_representation_is_stronger_than_provider_id() -> None:
+    with pytest.raises(ValueError, match="stronger than provider id"):
+        build_provider_replay_binding(
+            _descriptor(),
+            _contract(),
+            provider_binding_id="provider:a",
+        )
+    binding = build_provider_replay_binding(
+        _descriptor(),
+        _contract(),
+        provider_binding_id="configured-provider-a:v1",
+    )
+    assert binding.provider_binding_id != binding.provider_id
+    assert binding.binding_digest
+
+
+def test_dis_007_retry_eligible_spec_requires_exact_idempotency_identity() -> None:
+    descriptor = _descriptor(effect_semantics="idempotent")
+    with pytest.raises(ValueError, match="idempotency identity"):
+        build_invocation_specification(
+            _request(idempotency_key=None),
+            _context(),
+            descriptor,
+            _contract(),
+            provider_binding_id="configured-provider-a:v1",
+        )
+    spec = build_invocation_specification(
+        _request(idempotency_key="effect:key:a"),
+        _context(),
+        descriptor,
+        _contract(),
+        provider_binding_id="configured-provider-a:v1",
+    )
+    assert spec.idempotency_key == "effect:key:a"
+
+
+def test_dis_008_memory_same_input_replays_same_specification() -> None:
+    store = InvocationSpecificationInMemoryStateStore()
+    request = _commit_request()
+    first = store.commit_invocation_specification(request)
+    second = store.commit_invocation_specification(request)
+    assert second == first
+    assert second.id == first.id
+
+
+def test_dis_009_same_spec_identity_cannot_rebind_changed_semantics() -> None:
+    original = build_invocation_specification(
+        _request(instruction="operation A"),
+        _context(),
+        _descriptor(),
+        _contract(),
+        provider_binding_id="configured-provider-a:v1",
+    )
+    changed_projection = project_provider_semantics(
+        _request(instruction="operation B"),
+        _context(),
+        _contract(),
+    )
+    event_raw = invocation_specification_event(original).model_dump(mode="python")
+    spec_raw = event_raw["payload"]["specification"]
+    spec_raw["semantic_identity"] = changed_projection.identity
+    spec_raw["canonical_semantic_payload"] = changed_projection.canonical_payload
+    forged = Event.model_validate(event_raw)
+    with pytest.raises(ValueError, match="deterministic identity rebound"):
+        invocation_specification_from_event(forged)
+
+
+def test_dis_010_memory_store_owns_authority_and_direct_event_append_fails() -> None:
+    store = InvocationSpecificationInMemoryStateStore()
+    spec = build_invocation_specification(
+        _request(), _context(), _descriptor(), _contract(), provider_binding_id="configured-provider-a:v1"
+    )
+    with pytest.raises(ValueError, match="commit_invocation_specification"):
+        store.append_event(invocation_specification_event(spec))
+    committed = store.commit_invocation_specification(_commit_request())
+    assert store.get_invocation_specification(committed.id) == committed
+
+
+def test_dis_011_sqlite_close_reopen_replays_same_specification(tmp_path) -> None:
+    path = tmp_path / "invocation-spec.sqlite"
+    request = _commit_request()
+    first_store = InvocationSpecificationSQLiteStateStore(path)
+    first = first_store.commit_invocation_specification(request)
+    first_store.close()
+
+    second_store = InvocationSpecificationSQLiteStateStore(path)
+    assert second_store.get_invocation_specification(first.id) == first
+    assert second_store.commit_invocation_specification(request) == first
+    second_store.close()
+
+
+def test_dis_012_serialized_specification_import_is_closed() -> None:
+    store = InvocationSpecificationInMemoryStateStore()
+    spec = build_invocation_specification(
+        _request(), _context(), _descriptor(), _contract(), provider_binding_id="configured-provider-a:v1"
+    )
+    event = invocation_specification_event(spec)
+    with pytest.raises(ValueError, match="P5.*unsupported"):
+        store.import_state({"event": [event.model_dump(mode="json")]})
+
+
+def test_dis_013_specification_binds_exact_source_request() -> None:
+    spec = build_invocation_specification(
+        _request(request_id="request:source"),
+        _context(),
+        _descriptor(),
+        _contract(),
+        provider_binding_id="configured-provider-a:v1",
+    )
+    assert spec.source_request_ref == "request:source"
+
+
+def test_dis_014_specification_capture_is_non_executing() -> None:
+    store = InvocationSpecificationInMemoryStateStore()
+    spec = store.commit_invocation_specification(_commit_request())
+    state = store.export_state()
+    assert spec is not None
+    assert len(state["event"]) == 1
+    assert state["attempt"] == []
+    assert state["action"] == []
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason="dispatch integration blocker: action-critical dispatch does not yet bind invocation_spec_ref",
+)
+def test_dis_015_dispatch_requires_exact_specification_binding() -> None:
+    source = inspect.getsource(GovernanceDispatchCommitter.commit)
+    assert "invocation_spec_ref" in source
+
+
+def test_dis_016_historical_specification_backfill_is_permanently_closed() -> None:
+    with pytest.raises(ValueError, match="historical.*backfill.*unsupported"):
+        reject_historical_specification_backfill(
+            request_ref="request:old",
+            dispatch_ref="dispatch:old",
+        )
+
+
+def test_dis_017_provider_binding_drift_cannot_replay_old_specification_identity() -> None:
+    descriptor = _descriptor()
+    contract = _contract()
+    original = build_invocation_specification(
+        _request(),
+        _context(),
+        descriptor,
+        contract,
+        provider_binding_id="configured-provider-a:v1",
+    )
+    drifted_binding = build_provider_replay_binding(
+        descriptor,
+        contract,
+        provider_binding_id="configured-provider-a:v2",
+    )
+    event_raw = invocation_specification_event(original).model_dump(mode="python")
+    event_raw["payload"]["specification"]["provider_binding"] = drifted_binding.model_dump(mode="python")
+    forged = Event.model_validate(event_raw)
+    with pytest.raises(ValueError, match="deterministic identity rebound"):
+        invocation_specification_from_event(forged)
+
+
+def test_dis_018_retry_materialization_api_remains_absent() -> None:
+    from portable_runtime.workflows import invocation_specification
+
+    assert not hasattr(invocation_specification, "materialize_authorized_retry")
+    assert not hasattr(invocation_specification, "consume_recovery_application")
+    assert not hasattr(invocation_specification, "issue_retry_permit")
+
+
+def test_dis_integrity_semantic_payload_recomputes_semantic_identity_at_decode_boundary() -> None:
+    original = build_invocation_specification(
+        _request(), _context(), _descriptor(), _contract(), provider_binding_id="configured-provider-a:v1"
+    )
+    raw = invocation_specification_event(original).model_dump(mode="python")
+    canonical = json.loads(raw["payload"]["specification"]["canonical_semantic_payload"])
+    canonical["request"]["instruction"] = "tampered operation"
+    raw["payload"]["specification"]["canonical_semantic_payload"] = _canonical_json(canonical)
+    forged = Event.model_validate(raw)
+    with pytest.raises(ValueError, match="projection identity mismatch"):
+        invocation_specification_from_event(forged)
+
+
+def test_dis_integrity_projection_spec_and_binding_contracts_must_be_one_chain() -> None:
+    descriptor = _descriptor()
+    contract_a = _contract(version="1")
+    contract_b = _contract(version="2")
+    projection_b = project_provider_semantics(_request(), _context(), contract_b)
+    binding_a = build_provider_replay_binding(
+        descriptor,
+        contract_a,
+        provider_binding_id="configured-provider-a:v1",
+    )
+    with pytest.raises(ValueError, match="semantic contract.*provider replay binding"):
+        DurableInvocationSpecification(
+            id="invocation_spec:forged",
+            semantic_identity=projection_b.identity,
+            canonical_semantic_payload=projection_b.canonical_payload,
+            semantic_contract_digest=projection_b.contract_digest,
+            provider_binding=binding_a,
+            source_request_ref="request:source",
+            source_work_ref="work:a",
+            source_run_ref="run:a",
+            effect_semantics="pure",
+        )
+
+
+def test_dis_integrity_projection_provider_must_match_provider_binding_provider() -> None:
+    contract_a = _contract()
+    binding_a = build_provider_replay_binding(
+        _descriptor(),
+        contract_a,
+        provider_binding_id="configured-provider-a:v1",
+    )
+    payload = {
+        "schema": "provider-semantic-projection-v1",
+        "provider_id": "provider:b",
+        "contract_digest": contract_a.digest,
+    }
+    canonical = _canonical_json(payload)
+    with pytest.raises(ValueError, match="semantic provider.*provider replay binding"):
+        DurableInvocationSpecification(
+            id="invocation_spec:forged",
+            semantic_identity=_projection_identity(canonical),
+            canonical_semantic_payload=canonical,
+            semantic_contract_digest=contract_a.digest,
+            provider_binding=binding_a,
+            source_request_ref="request:source",
+            effect_semantics="pure",
+        )
