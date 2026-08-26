@@ -4,6 +4,16 @@ runtime_protocol = "2.0"
 provider_protocol = "1"
 control_plane_schema = "official-1.0.0"
 
+[contracts.ownership]
+current = "canonical-ownership-v1"
+semantic_path = "contracts/semantics/core/ownership-v1.md"
+public = false
+
+[contracts.responsibility_separation]
+current = "responsibility-separation-v1"
+semantic_path = "contracts/semantics/core/responsibility-separation-v1.md"
+public = false
+
 [contracts.distinction_governance]
 current = "distinction-governance-1.0"
 semantic_path = "contracts/semantics/governance/distinction-governance-v1.md"
@@ -35,6 +45,7 @@ public_result = true
 [contracts.resolved_experience_use_snapshot]
 current = "resolved-experience-use-snapshot-v1"
 schema_path = "contracts/schemas/experience/resolved-experience-use-snapshot-v1.schema.json"
+semantic_path = "contracts/semantics/experience/experience-use-v1.md"
 public_result = true
 
 [contracts.historical_experience_use]

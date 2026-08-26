@@ -7,7 +7,35 @@ Owner: `portable-runtime/contracts`
 
 The current repository is semantically self-contained. `contracts/` is the only canonical owner for product semantics consumed by runtime code, public APIs, SDKs, conformance tests and operator tooling.
 
-External papers, repositories, proofs and historical commits may be cited in historical discussion outside the normative contract surface, but they MUST NOT be required to determine legal runtime state, legal transition, public wire meaning, authority, replay identity, current qualification, or compatibility.
+External papers, repositories, proofs and historical commits may be cited in historical or research discussion outside the normative contract surface, but they MUST NOT be required to determine legal runtime state, legal transition, public wire meaning, authority, replay identity, current qualification, or compatibility.
+
+## Canonical precedence
+
+When two artifacts disagree, precedence is:
+
+1. `contracts/` semantic contracts;
+2. `contracts/` structural schemas;
+3. `contracts/` canonicalization rules;
+4. `contracts/` conformance vectors;
+5. Python reference implementation;
+6. HTTP/public adapters;
+7. TypeScript client and workflow helpers;
+8. Responsibility Inspector.
+
+Therefore:
+
+```text
+PythonReferenceBehavior conflicts with CanonicalContract
+-> Python bug
+
+TypeScriptBehavior conflicts with CanonicalContract
+-> TypeScript conformance bug
+
+InspectorInterpretation conflicts with CanonicalContract
+-> Inspector bug
+```
+
+`contracts/` defines semantics. Python is the reference execution oracle for those semantics and is itself subject to the contracts; Python source code is not a second semantic definition owner.
 
 ## Normative dependency direction
 

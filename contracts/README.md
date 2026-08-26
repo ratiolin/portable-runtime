@@ -2,11 +2,26 @@
 
 `contracts/` is the sole canonical semantic and interoperability owner for `portable-runtime`.
 
-No external repository, document set, commit SHA, theorem repository, or research note is required to interpret the runtime's supported product semantics. Historical research may motivate a contract, but it has no normative authority over this repository unless its semantics are explicitly adopted into this directory.
+No external repository, document set, commit SHA, theorem repository, or research note is required to interpret the runtime's supported product semantics. Historical or research material may motivate a contract, but it has no normative authority over this repository unless its semantics are explicitly adopted into this directory.
 
-## Ownership
+## Canonical precedence
 
-The ownership chain is:
+The conflict order is:
+
+```text
+semantic contracts
+> structural schemas
+> canonicalization rules
+> conformance vectors
+> Python reference implementation
+> HTTP adapters
+> TypeScript client / workflow helpers
+> Responsibility Inspector
+```
+
+A lower layer that conflicts with a higher layer is defective. Python is the reference execution oracle subject to `contracts/`; it is not a second semantic definition owner.
+
+## Ownership chain
 
 ```text
 portable-runtime/contracts
@@ -52,6 +67,8 @@ The following separations are canonical:
 - current-use admission != execution authority;
 - existing adopted assignment use != classification of reality.
 
+The complete cross-layer separation set is owned by `semantics/core/responsibility-separation-v1.md`.
+
 ## Public authority ceiling
 
 Public contracts may expose read-only views of authority-bearing runtime objects, but clients cannot mint or reconstruct authority from those views. In particular, `InvocationPermit` and `GovernanceUseRequirement` remain runtime-internal. Public surfaces expose `InvocationPermitView` and `GovernanceUseAdmissionView` only.
@@ -60,4 +77,4 @@ Public contracts may expose read-only views of authority-bearing runtime objects
 
 `distinction-governance-1.0`, Control Plane `official-1.0.0`, runtime protocol `2.0`, provider protocol `1`, and the existing persisted/event tokens remain compatible unless a versioned contract in this directory explicitly declares a breaking change.
 
-See `catalog.toml` for the machine-readable contract index.
+See `catalog.toml` for the machine-readable contract index and `semantics/core/ownership-v1.md` for the ownership rule.
