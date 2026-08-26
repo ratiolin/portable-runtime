@@ -9,6 +9,7 @@ backfill.
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -43,6 +44,7 @@ from portable_runtime.governance.use_admission import (
     GovernanceUseRequirement,
 )
 from portable_runtime.stores.memory import InMemoryStateStore
+from portable_runtime.stores.sqlite import SQLiteStateStore
 from portable_runtime.workflows.invocation_specification import InvocationSpecificationCommitRequest
 
 
@@ -323,7 +325,7 @@ def test_pt_015_legacy_dispatch_remains_non_upgradable() -> None:
         provider_execution_binding_from_dispatch(_legacy_dispatch())
 
 
-def test_pt_016_binding_bearing_dispatch_authority_import_is_closed() -> None:
+def test_pt_016_binding_bearing_dispatch_authority_import_is_closed(tmp_path: Path) -> None:
     source, _registry, _provider, event = _bound_dispatch("016")
     exported = source.export_state()
     assert any(
@@ -331,9 +333,62 @@ def test_pt_016_binding_bearing_dispatch_authority_import_is_closed() -> None:
         for raw in exported["event"]
         if isinstance(raw, dict) and isinstance(raw.get("payload"), dict)
     )
-    target = InMemoryStateStore()
+
+    memory = InMemoryStateStore()
+    memory_before = memory.export_state()
     with pytest.raises(ValueError, match="provider execution-binding|P5|import|unsupported"):
-        target.import_state({"event": [event.model_dump(mode="json")]})
+        memory.import_state({"event": [event.model_dump(mode="json")]})
+    assert memory.export_state() == memory_before
+
+    sqlite_path = tmp_path / "pt-016.db"
+    sqlite = SQLiteStateStore(sqlite_path)
+    sqlite_before = sqlite.export_state()
+    try:
+        with pytest.raises(ValueError, match="provider execution-binding|P5|import|unsupported"):
+            sqlite.import_state({"event": [event.model_dump(mode="json")]})
+        assert sqlite.export_state() == sqlite_before
+    finally:
+        sqlite.close()
+    reopened = SQLiteStateStore(sqlite_path)
+    try:
+        assert reopened.export_state() == sqlite_before
+    finally:
+        reopened.close()
+
+    legacy = _legacy_dispatch()
+    legacy_memory = InMemoryStateStore()
+    legacy_memory.import_state({"event": [legacy.model_dump(mode="json")]})
+    assert legacy_memory.get_event(legacy.id) is not None
+    legacy_sqlite = SQLiteStateStore(tmp_path / "pt-016-legacy.db")
+    try:
+        legacy_sqlite.import_state({"event": [legacy.model_dump(mode="json")]})
+        assert legacy_sqlite.get_event(legacy.id) is not None
+    finally:
+        legacy_sqlite.close()
+
+    malformed_payload = dict(event.payload)
+    malformed_payload.pop("provider_execution_binding_ref", None)
+    malformed = event.model_copy(
+        update={
+            "id": "dispatch_pt_016_embedded_only",
+            "payload": malformed_payload,
+        }
+    )
+    malformed_memory = InMemoryStateStore()
+    malformed_before = malformed_memory.export_state()
+    with pytest.raises(ValueError, match="provider execution-binding|P5|import|unsupported"):
+        malformed_memory.import_state({"event": [malformed.model_dump(mode="json")]})
+    assert malformed_memory.export_state() == malformed_before
+
+    malformed_sqlite_path = tmp_path / "pt-016-malformed.db"
+    malformed_sqlite = SQLiteStateStore(malformed_sqlite_path)
+    malformed_sqlite_before = malformed_sqlite.export_state()
+    try:
+        with pytest.raises(ValueError, match="provider execution-binding|P5|import|unsupported"):
+            malformed_sqlite.import_state({"event": [malformed.model_dump(mode="json")]})
+        assert malformed_sqlite.export_state() == malformed_sqlite_before
+    finally:
+        malformed_sqlite.close()
 
 
 def test_pt_017_reality_exit_without_durable_binding_is_unknowable() -> None:
