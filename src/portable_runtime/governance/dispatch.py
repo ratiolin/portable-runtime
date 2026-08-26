@@ -11,6 +11,9 @@ from typing import Any, Literal, cast
 from portable_runtime.core.capabilities import CapabilityRequest
 from portable_runtime.core.models import Event
 from portable_runtime.core.qualification import InvocationPermit
+from portable_runtime.core.reconciliation_repeatability import (
+    ReconciliationRepeatabilityAuthority,
+)
 from portable_runtime.governance.provider_execution_binding import ProviderExecutionBinding
 from portable_runtime.governance.use_admission import (
     GovernanceUseAdmission,
@@ -45,6 +48,7 @@ class DispatchCommitDecision:
     reason: str = ""
     current_snapshot_digest: str | None = None
     provider_execution_binding_ref: str | None = None
+    reconciliation_repeatability_authority_ref: str | None = None
 
 
 class DispatchLinearizationError(RuntimeError):
@@ -86,7 +90,12 @@ def _dispatch_linearized_write(store: Any) -> Iterator[None]:
 
 @contextmanager
 def _provider_binding_dispatch_authority(store: Any, *, bound: bool) -> Iterator[None]:
-    """Open the narrow store-owned append gate for a B-aware dispatch fact."""
+    """Open the narrow store-owned append gate for a B-aware dispatch fact.
+
+    Every valid C-aware dispatch is also B-aware because C is structurally bound
+    to the exact ProviderExecutionBinding. The existing B gate therefore also
+    fences direct append and P5 import of valid C authority-bearing dispatches.
+    """
 
     if not bound:
         yield
@@ -104,12 +113,11 @@ def _provider_binding_dispatch_authority(store: Any, *, bound: bool) -> Iterator
 
 
 def dispatch_commit_identity_from_payload(payload: dict[str, Any]) -> str:
-    """Reconstruct one dispatch identity with exact legacy/B compatibility.
+    """Reconstruct one dispatch identity with exact legacy/B/C compatibility.
 
-    Absence of ``provider_execution_binding_ref`` preserves the historical
-    dispatch identity byte-for-byte. Presence of the ref makes it part of the
-    new B-aware identity. A malformed present ref is never interpreted as the
-    legacy case.
+    Absence of B/C refs preserves earlier deterministic identities byte-for-byte.
+    Presence of either ref makes that authority identity part of the new dispatch
+    identity. A malformed present ref is never interpreted as an older case.
     """
 
     identity: dict[str, Any] = {
@@ -126,6 +134,11 @@ def dispatch_commit_identity_from_payload(payload: dict[str, Any]) -> str:
         if not isinstance(binding_ref, str) or not binding_ref.strip():
             raise ValueError("dispatch provider execution binding ref is malformed")
         identity["provider_execution_binding_ref"] = binding_ref
+    if "reconciliation_repeatability_authority_ref" in payload:
+        repeatability_ref = payload.get("reconciliation_repeatability_authority_ref")
+        if not isinstance(repeatability_ref, str) or not repeatability_ref.strip():
+            raise ValueError("dispatch reconciliation repeatability authority ref is malformed")
+        identity["reconciliation_repeatability_authority_ref"] = repeatability_ref
     raw = json.dumps(identity, sort_keys=True, separators=(",", ":"))
     return f"dispatch_{hashlib.sha256(raw.encode()).hexdigest()}"
 
@@ -135,6 +148,7 @@ def _dispatch_commit_ref(
     permit: InvocationPermit,
     attempt_id: str | None,
     provider_execution_binding_ref: str | None = None,
+    reconciliation_repeatability_authority_ref: str | None = None,
 ) -> str:
     payload: dict[str, Any] = {
         "schema": DISPATCH_COMMIT_SCHEMA,
@@ -147,6 +161,10 @@ def _dispatch_commit_ref(
     }
     if provider_execution_binding_ref is not None:
         payload["provider_execution_binding_ref"] = provider_execution_binding_ref
+    if reconciliation_repeatability_authority_ref is not None:
+        payload["reconciliation_repeatability_authority_ref"] = (
+            reconciliation_repeatability_authority_ref
+        )
     return dispatch_commit_identity_from_payload(payload)
 
 
@@ -171,8 +189,10 @@ class GovernanceDispatchCommitter:
     from ProviderRegistry. That lookup is task-local provenance only; inside
     this dispatch linearization the registry is re-entered with
     ``expected_provider`` so same-id replacement between lookup and dispatch
-    fails closed. The resulting execution binding is durable provenance only
-    and grants no provider capability.
+    fails closed. B is durable provider-target provenance. When the exact
+    registry registration also carries an explicit repeat-safe reconciliation
+    contract, C is instantiated for this request-id and made durable in the same
+    dispatch commitment. Neither B nor C grants provider capability.
     """
 
     def __init__(self, store: Any) -> None:
@@ -244,16 +264,33 @@ class GovernanceDispatchCommitter:
                         provider_registry, expected_provider = consumed
 
                 execution_binding: ProviderExecutionBinding | None = None
+                repeatability_authority: ReconciliationRepeatabilityAuthority | None = None
                 if provider_registry is not None:
-                    capture = getattr(provider_registry, "capture_execution_target", None)
-                    if not callable(capture):
-                        raise DispatchLinearizationError(
-                            "authoritative provider registry lacks coherent execution-target capture"
-                        )
-                    captured_provider, execution_binding = capture(
-                        permit.provider_id,
-                        expected_provider=expected_provider,
+                    capture_with_repeatability = getattr(
+                        provider_registry,
+                        "capture_reconciliation_execution_target",
+                        None,
                     )
+                    if callable(capture_with_repeatability):
+                        (
+                            captured_provider,
+                            execution_binding,
+                            repeatability_authority,
+                        ) = capture_with_repeatability(
+                            permit.provider_id,
+                            subject_identity=request.id,
+                            expected_provider=expected_provider,
+                        )
+                    else:
+                        capture = getattr(provider_registry, "capture_execution_target", None)
+                        if not callable(capture):
+                            raise DispatchLinearizationError(
+                                "authoritative provider registry lacks coherent execution-target capture"
+                            )
+                        captured_provider, execution_binding = capture(
+                            permit.provider_id,
+                            expected_provider=expected_provider,
+                        )
                     if expected_provider is not None and captured_provider is not expected_provider:
                         raise DispatchLinearizationError(
                             "configured provider changed between lookup and dispatch"
@@ -262,13 +299,31 @@ class GovernanceDispatchCommitter:
                         raise DispatchLinearizationError(
                             "provider execution binding does not match InvocationPermit provider"
                         )
+                    if repeatability_authority is not None:
+                        if (
+                            repeatability_authority.provider_execution_binding_ref
+                            != execution_binding.id
+                        ):
+                            raise DispatchLinearizationError(
+                                "reconciliation repeatability authority does not match execution binding"
+                            )
+                        if repeatability_authority.subject_identity != request.id:
+                            raise DispatchLinearizationError(
+                                "reconciliation repeatability authority does not match dispatch request"
+                            )
 
                 binding_ref = execution_binding.id if execution_binding is not None else None
+                repeatability_ref = (
+                    repeatability_authority.id
+                    if repeatability_authority is not None
+                    else None
+                )
                 commit_ref = _dispatch_commit_ref(
                     request,
                     permit,
                     attempt_id,
                     binding_ref,
+                    repeatability_ref,
                 )
                 event_payload: dict[str, Any] = {
                     "schema": DISPATCH_COMMIT_SCHEMA,
@@ -285,6 +340,13 @@ class GovernanceDispatchCommitter:
                 if execution_binding is not None:
                     event_payload["provider_execution_binding_ref"] = execution_binding.id
                     event_payload["provider_execution_binding"] = execution_binding.model_dump(mode="json")
+                if repeatability_authority is not None:
+                    event_payload["reconciliation_repeatability_authority_ref"] = (
+                        repeatability_authority.id
+                    )
+                    event_payload["reconciliation_repeatability_authority"] = (
+                        repeatability_authority.model_dump(mode="json")
+                    )
                 event = Event(
                     id=commit_ref,
                     type=DISPATCH_COMMIT_EVENT,
@@ -320,6 +382,10 @@ class GovernanceDispatchCommitter:
                     )
                     if execution_binding is not None:
                         metadata["provider_execution_binding_ref"] = execution_binding.id
+                    if repeatability_authority is not None:
+                        metadata["reconciliation_repeatability_authority_ref"] = (
+                            repeatability_authority.id
+                        )
                     self.store.save_attempt(
                         attempt.model_copy(update={"metadata": metadata})
                     )
@@ -335,6 +401,7 @@ class GovernanceDispatchCommitter:
                     reason="governed dispatch commitment linearized",
                     current_snapshot_digest=current.snapshot_digest,
                     provider_execution_binding_ref=binding_ref,
+                    reconciliation_repeatability_authority_ref=repeatability_ref,
                 )
         except Exception as exc:
             return DispatchCommitDecision(

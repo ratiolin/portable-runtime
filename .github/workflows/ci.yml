@@ -76,6 +76,7 @@ jobs:
           tests/conformance/test_recovery_terminal_closure_design.py
           tests/conformance/test_recovery_observation_authority.py
           tests/conformance/test_provider_execution_binding.py
+          tests/conformance/test_reconciliation_repeatability_authority.py
           tests/audit/test_b4_p2_objective_bridge_design.py
           tests/audit/test_b4_p3_recovery_disposition_design.py
           tests/audit/test_b4_p4_recovery_application_design.py
