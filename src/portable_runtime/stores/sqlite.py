@@ -543,6 +543,9 @@ class SQLiteStateStore:
         ]
     def append_event(self, value: Event) -> None:
         from portable_runtime.governance.outcome_impact_commit import OUTCOME_IMPACT_AUTHORITY_EVENT_TYPES
+        from portable_runtime.governance.provider_execution_binding import (
+            dispatch_has_provider_execution_binding_authority,
+        )
 
         if value.type in OUTCOME_IMPACT_AUTHORITY_EVENT_TYPES and self._outcome_impact_commit_depth <= 0:
             raise ValueError("Outcome impact authority events require commit_outcome_impact_judgment")
@@ -553,9 +556,7 @@ class SQLiteStateStore:
         if value.type == "RecoveryApplicationRecorded" and self._recovery_application_commit_depth <= 0:
             raise ValueError("RecoveryApplication events require commit_recovery_application")
         if (
-            value.type == "InvocationDispatchCommitted"
-            and isinstance(value.payload, dict)
-            and "provider_execution_binding_ref" in value.payload
+            dispatch_has_provider_execution_binding_authority(value)
             and self._provider_execution_binding_dispatch_commit_depth <= 0
         ):
             raise ValueError(
@@ -1057,6 +1058,9 @@ class SQLiteStateStore:
                 from portable_runtime.governance.outcome_impact_commit import (
                     OUTCOME_IMPACT_AUTHORITY_EVENT_TYPES,
                 )
+                from portable_runtime.governance.provider_execution_binding import (
+                    dispatch_has_provider_execution_binding_authority,
+                )
 
                 if any(
                     getattr(event, "type", "") in OUTCOME_IMPACT_AUTHORITY_EVENT_TYPES
@@ -1073,6 +1077,14 @@ class SQLiteStateStore:
                     raise ValueError(
                         "P5 RecoveryApplication authority import is unsupported; "
                         "durable application authority must be created by commit_recovery_application"
+                    )
+                if any(
+                    dispatch_has_provider_execution_binding_authority(event)
+                    for event in prepared.get("event", ())
+                ):
+                    raise ValueError(
+                        "P5 provider execution-binding dispatch authority import is unsupported; "
+                        "durable execution-binding authority must be created by governed dispatch commit"
                     )
                 from portable_runtime.protocol.validation import (
                     assert_valid_state_graph,
