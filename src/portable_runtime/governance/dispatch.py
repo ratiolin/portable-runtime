@@ -167,11 +167,12 @@ def dispatch_recovery_mode(step: Any, attempt: Any) -> DispatchRecoveryMode:
 class GovernanceDispatchCommitter:
     """Linearize one governed dispatch claim against canonical governance.
 
-    When an authoritative ProviderRegistry is supplied, the registry must
-    coherently re-capture the exact provider object already selected by the
-    Boundary together with its configured execution binding. Same-id registry
-    replacement between provider lookup and dispatch therefore fails closed.
-    The binding is provenance only and grants no provider capability.
+    The normal RealityBoundary path first resolves the live provider object
+    from ProviderRegistry. That lookup is task-local provenance only; inside
+    this dispatch linearization the registry is re-entered with
+    ``expected_provider`` so same-id replacement between lookup and dispatch
+    fails closed. The resulting execution binding is durable provenance only
+    and grants no provider capability.
     """
 
     def __init__(self, store: Any) -> None:
@@ -234,6 +235,13 @@ class GovernanceDispatchCommitter:
                         reason="dispatch governance judgment does not match InvocationPermit",
                         current_snapshot_digest=current.snapshot_digest,
                     )
+
+                if provider_registry is None:
+                    from portable_runtime.core.registry import consume_execution_target_lookup
+
+                    consumed = consume_execution_target_lookup(permit.provider_id)
+                    if consumed is not None:
+                        provider_registry, expected_provider = consumed
 
                 execution_binding: ProviderExecutionBinding | None = None
                 if provider_registry is not None:
