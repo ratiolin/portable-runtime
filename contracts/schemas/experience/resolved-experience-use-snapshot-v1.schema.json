@@ -1,0 +1,16 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "portable-runtime://contracts/resolved-experience-use-snapshot-v1",
+  "title": "ResolvedExperienceUseSnapshotV1",
+  "type": "object",
+  "additionalProperties": true,
+  "required": ["schema", "projection_refs"],
+  "properties": {
+    "schema": {"const": "resolved-experience-use-snapshot-v1"},
+    "projection_refs": {"type": "array", "items": {"type": "string"}},
+    "projections": {"type": "array", "items": {"type": "object"}},
+    "subject_versions": {"type": "object"},
+    "environment_bindings": {"type": "object"},
+    "use_context": {"type": "object"}
+  }
+}
