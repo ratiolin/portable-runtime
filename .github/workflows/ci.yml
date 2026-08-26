@@ -86,6 +86,7 @@ jobs:
           tests/audit/test_b4_recovery_observation_application_binding_design.py
           tests/audit/test_b4_reconciliation_repeatability_design.py
           tests/audit/test_b4_configured_provider_reconciliation_target_design.py
+          tests/audit/test_b4_reconciliation_substrate_production_freeze.py
           tests/conformance/test_recovery_application_authority.py
           tests/conformance/test_recovery_disposition_counterexamples.py
           tests/conformance/test_recovery_disposition_preparation.py
