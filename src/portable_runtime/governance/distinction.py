@@ -5,7 +5,7 @@ from dataclasses import dataclass, field, replace
 from typing import Literal
 
 DISTINCTION_GOVERNANCE_CONTRACT_VERSION = "distinction-governance-1.0"
-DISTINCTION_GOVERNANCE_SOURCE_COMMIT = "ef9e490987ed47ebef3ac455851109304f24a97c"
+DISTINCTION_GOVERNANCE_CONTRACT_ID = "distinction-governance"
 
 QUALIFICATIONS = frozenset({"candidate", "qualified", "disqualified"})
 ACTIVATIONS = frozenset({"active", "suspended"})
