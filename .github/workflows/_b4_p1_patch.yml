@@ -1,0 +1,28 @@
+name: B4 P1 patch
+
+on:
+  push:
+    branches:
+      - feat/recovery-observation-authority-impl
+    paths:
+      - .github/workflows/_b4_p1_patch.yml
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: feat/recovery-observation-authority-impl
+      - name: Apply semantic patch
+        run: python .github/b4_p1_patch.py
+      - name: Commit semantic patch
+        run: |
+          git config user.name "Xiongwei Lin"
+          git config user.email "80614539+xiongweilin@users.noreply.github.com"
+          git add src tests docs
+          git commit -m "B4-P1: add durable recovery observation authority"
+          git push origin HEAD:feat/recovery-observation-authority-impl
