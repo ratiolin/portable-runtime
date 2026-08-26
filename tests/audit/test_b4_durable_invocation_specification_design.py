@@ -97,7 +97,7 @@ def test_invocation_spec_audit_runtime_does_not_consume_specification_authority(
 
 def test_invocation_spec_audit_qualification_metadata_contains_authority_transport() -> None:
     qualification = importlib.import_module("portable_runtime.core.qualification")
-    ref_keys = dict(getattr(qualification, "_REF_KEYS"))
+    ref_keys = dict(qualification._REF_KEYS)
     assert {
         "authorization_refs",
         "evidence_refs",
