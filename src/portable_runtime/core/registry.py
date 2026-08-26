@@ -9,6 +9,15 @@ from contextlib import suppress
 from dataclasses import dataclass
 
 from portable_runtime.core.capabilities import ProviderDescriptor, ProviderHealth
+from portable_runtime.core.reconciliation_repeatability import (
+    ReconciliationRepeatabilityAuthority,
+    ReconciliationRepeatabilityConfiguration,
+    ReconciliationRepeatabilityContract,
+    ReconciliationRepeatabilityEligibility,
+    build_reconciliation_repeatability_authority,
+    build_reconciliation_repeatability_contract,
+    evaluate_reconciliation_repeatability,
+)
 from portable_runtime.governance.provider_execution_binding import (
     ProviderExecutionBinding,
     build_provider_execution_binding,
@@ -52,12 +61,21 @@ class ProviderRegistry:
     each registration. Omitting them creates a registration-incarnation
     identity that is exact for this registration but intentionally cannot be
     reconstructed from a future registry by provider id or descriptor alone.
+
+    Optional reconciliation repeatability configuration is a separate
+    responsibility domain. It is bound to the exact ProviderExecutionBinding at
+    registration and does not modify ProviderDescriptor execution semantics.
+    Only an explicit repeat-safe configured contract can later be instantiated
+    as exact request-id historical repeatability authority at governed dispatch.
     """
 
     def __init__(self) -> None:
         self._providers: dict[str, CapabilityProvider] = {}
         self._enabled: dict[str, bool] = {}
         self._execution_bindings: dict[str, ProviderExecutionBinding] = {}
+        self._reconciliation_repeatability_contracts: dict[
+            str, ReconciliationRepeatabilityContract
+        ] = {}
         self._lock = threading.RLock()
 
     def register(
@@ -67,6 +85,7 @@ class ProviderRegistry:
         *,
         configured_execution_identity: str | None = None,
         authoritative_configuration_ref: str | None = None,
+        reconciliation_repeatability: ReconciliationRepeatabilityConfiguration | None = None,
     ) -> ProviderDescriptor:
         # Back-compat: test harness calls register(descriptor, provider); support both forms.
         if _maybe_provider is not None:
@@ -90,6 +109,11 @@ class ProviderRegistry:
                 configured_execution_identity=configured_execution_identity,
                 authoritative_configuration_ref=authoritative_configuration_ref,
             )
+            repeatability_contract = (
+                build_reconciliation_repeatability_contract(binding, reconciliation_repeatability)
+                if reconciliation_repeatability is not None
+                else None
+            )
             with suppress(Exception):
                 from portable_runtime.core.boundary import _CIRCUITS
 
@@ -97,6 +121,8 @@ class ProviderRegistry:
             self._providers[descriptor.id] = provider
             self._enabled[descriptor.id] = descriptor.enabled
             self._execution_bindings[descriptor.id] = binding
+            if repeatability_contract is not None:
+                self._reconciliation_repeatability_contracts[descriptor.id] = repeatability_contract
             return self._descriptor(descriptor.id)
 
     def unregister(self, provider_id: str) -> None:
@@ -104,6 +130,7 @@ class ProviderRegistry:
             self._providers.pop(provider_id, None)
             self._enabled.pop(provider_id, None)
             self._execution_bindings.pop(provider_id, None)
+            self._reconciliation_repeatability_contracts.pop(provider_id, None)
 
     def enable(self, provider_id: str) -> ProviderDescriptor:
         with self._lock:
@@ -159,6 +186,43 @@ class ProviderRegistry:
                 raise ValueError("provider execution binding/provider id mismatch")
             return provider, binding
 
+    def capture_reconciliation_execution_target(
+        self,
+        provider_id: str,
+        *,
+        subject_identity: str,
+        expected_provider: CapabilityProvider | None = None,
+    ) -> tuple[
+        CapabilityProvider,
+        ProviderExecutionBinding,
+        ReconciliationRepeatabilityAuthority | None,
+    ]:
+        """Coherently capture B and, when positive, exact-subject C authority.
+
+        A missing, unknown, or non-repeat-safe configured contract produces no
+        positive repeatability authority. The dispatch remains a valid B-bound
+        historical execution fact, but automatic reconciliation repetition is
+        ineligible until exact C authority exists.
+        """
+
+        with self._lock:
+            provider, binding = self.capture_execution_target(
+                provider_id,
+                expected_provider=expected_provider,
+            )
+            contract = self._reconciliation_repeatability_contracts.get(provider_id)
+            if contract is None or contract.repeatability_mode != "repeat-safe":
+                return provider, binding, None
+            if contract.provider_execution_binding_ref != binding.id:
+                raise ValueError(
+                    "configured reconciliation repeatability contract does not match execution binding"
+                )
+            authority = build_reconciliation_repeatability_authority(
+                contract,
+                subject_identity=subject_identity,
+            )
+            return provider, binding, authority
+
     def execution_binding(
         self,
         provider_id: str,
@@ -171,6 +235,28 @@ class ProviderRegistry:
             provider_id,
             expected_provider=expected_provider,
         )[1]
+
+    def reconciliation_repeatability_contract(
+        self,
+        provider_id: str,
+        *,
+        expected_provider: CapabilityProvider | None = None,
+    ) -> ReconciliationRepeatabilityContract | None:
+        """Return current configured C contract after exact B validation."""
+
+        with self._lock:
+            _, binding = self.capture_execution_target(
+                provider_id,
+                expected_provider=expected_provider,
+            )
+            contract = self._reconciliation_repeatability_contracts.get(provider_id)
+            if contract is None:
+                return None
+            if contract.provider_execution_binding_ref != binding.id:
+                raise ValueError(
+                    "configured reconciliation repeatability contract drifted from execution binding"
+                )
+            return contract
 
     def resolve_execution_binding(
         self,
@@ -188,6 +274,40 @@ class ProviderRegistry:
             if current != historical:
                 return None
             return provider
+
+    def reconciliation_repeatability_eligibility(
+        self,
+        historical_authority: ReconciliationRepeatabilityAuthority | None,
+        historical_binding: ProviderExecutionBinding | None,
+        *,
+        required_subject_identity: str,
+    ) -> ReconciliationRepeatabilityEligibility:
+        """Evaluate C against the current exact registry configuration, read-only."""
+
+        with self._lock:
+            if historical_binding is None:
+                return evaluate_reconciliation_repeatability(
+                    historical_authority,
+                    historical_binding=None,
+                    current_contract=None,
+                    required_subject_identity=required_subject_identity,
+                )
+            current_provider = self.resolve_execution_binding(historical_binding)
+            if current_provider is None:
+                return ReconciliationRepeatabilityEligibility(
+                    "ineligible",
+                    False,
+                    "exact historical configured-provider execution target is unavailable",
+                )
+            contract = self._reconciliation_repeatability_contracts.get(
+                historical_binding.provider_id
+            )
+            return evaluate_reconciliation_repeatability(
+                historical_authority,
+                historical_binding=historical_binding,
+                current_contract=contract,
+                required_subject_identity=required_subject_identity,
+            )
 
     def list_descriptors(self) -> builtins.list[ProviderDescriptor]:
         with self._lock:
