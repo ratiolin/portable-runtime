@@ -527,6 +527,18 @@ class InMemoryStateStore:
                 if model_type is None:
                     continue
                 prepared[kind] = [cast(BaseModel, model_type.model_validate(raw)) for raw in values]
+            from portable_runtime.governance.outcome_impact_commit import (
+                OUTCOME_IMPACT_AUTHORITY_EVENT_TYPES,
+            )
+
+            if any(
+                getattr(event, "type", "") in OUTCOME_IMPACT_AUTHORITY_EVENT_TYPES
+                for event in prepared.get("event", ())
+            ):
+                raise ValueError(
+                    "B3 outcome impact authority history import is unsupported; "
+                    "durable impact authority must be created by commit_outcome_impact_judgment"
+                )
             candidate = {
                 kind: [value.model_dump(mode="json") for value in values.values()]
                 for kind, values in self._records.items()

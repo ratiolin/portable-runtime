@@ -945,6 +945,18 @@ class SQLiteStateStore:
                         raw for raw in candidate.get(kind, [])
                         if isinstance(raw, dict) and raw.get("id") not in incoming_ids
                     ] + [value.model_dump(mode="json") for value in prepared[kind]]
+                from portable_runtime.governance.outcome_impact_commit import (
+                    OUTCOME_IMPACT_AUTHORITY_EVENT_TYPES,
+                )
+
+                if any(
+                    getattr(event, "type", "") in OUTCOME_IMPACT_AUTHORITY_EVENT_TYPES
+                    for event in prepared.get("event", ())
+                ):
+                    raise ValueError(
+                        "B3 outcome impact authority history import is unsupported; "
+                        "durable impact authority must be created by commit_outcome_impact_judgment"
+                    )
                 from portable_runtime.protocol.validation import (
                     assert_valid_state_graph,
                     assert_valid_state_transition,
