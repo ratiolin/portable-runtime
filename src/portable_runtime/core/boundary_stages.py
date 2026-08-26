@@ -243,6 +243,9 @@ def precommit_execution_records(
                 request_ref=request.id,
                 status="running",
             )
+            attempt = attempt.model_copy(
+                update={"metadata": {**attempt.metadata, "action_ref": action.id}}
+            )
             if hasattr(store, "transaction"):
                 with store.transaction():
                     store.save_step(step)

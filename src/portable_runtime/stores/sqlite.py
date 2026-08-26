@@ -148,6 +148,9 @@ class SQLiteStateStore:
         self.path = _safe_db_path(path)
         self._lock = threading.RLock()
         self._terminal_commit_depth = 0
+        self._outcome_impact_commit_depth = 0
+        self._recovery_observation_commit_depth = 0
+        self._recovery_disposition_commit_depth = 0
         self._connection = sqlite3.connect(_safe_db_path(path), check_same_thread=False, isolation_level=None)  # NOSONAR  # noqa: E501
         self._connection.row_factory = sqlite3.Row
         with self._lock:
@@ -243,6 +246,137 @@ class SQLiteStateStore:
                     self._rollback(self._connection.cursor())
                 raise
         return run
+
+    def commit_verified_outcome(self, request: Any) -> OutcomeRecord:
+        """Atomically commit one verification-authorized confirmed Outcome."""
+        from portable_runtime.records.verified_outcome_commit import (
+            prepare_verified_outcome_commit,
+            same_verified_outcome_semantics,
+        )
+
+        with self._lock:
+            owns_transaction = not self._connection.in_transaction
+            if owns_transaction:
+                self._connection.execute("BEGIN IMMEDIATE")
+            try:
+                prepared = prepare_verified_outcome_commit(self, request)
+                existing = self.get_record(prepared.outcome.id)
+                if existing is not None:
+                    if not same_verified_outcome_semantics(existing, prepared.outcome):
+                        raise ValueError("verified-outcome deterministic identity rebound")
+                    for event in prepared.events:
+                        persisted = self.get_event(event.id)
+                        if persisted is None or not same_verified_outcome_semantics(persisted, event):
+                            raise ValueError("verified-outcome authority event graph incomplete")
+                    if not isinstance(existing, OutcomeRecord):
+                        raise ValueError("verified-outcome identity does not resolve to OutcomeRecord")
+                    if owns_transaction:
+                        self._connection.execute("COMMIT")
+                    return existing
+                self._save("record", prepared.outcome)
+                for event in prepared.events:
+                    self.append_event(event)
+                if owns_transaction:
+                    self._connection.execute("COMMIT")
+                return prepared.outcome
+            except Exception:
+                if owns_transaction:
+                    self._rollback(self._connection.cursor())
+                raise
+
+    def commit_outcome_impact_judgment(self, request: Any, impact_policy: Any, disposition_policy: Any) -> Any:
+        """Writer-serialized commit/replay of one durable Outcome governance judgment."""
+        from portable_runtime.governance.outcome_impact_commit import (
+            committed_outcome_impact,
+            prepare_outcome_impact_commit,
+        )
+
+        with self._lock:
+            owns_transaction = not self._connection.in_transaction
+            if owns_transaction:
+                self._connection.execute("BEGIN IMMEDIATE")
+            try:
+                prepared = prepare_outcome_impact_commit(self, request, impact_policy, disposition_policy)
+                if not prepared.replayed:
+                    self._outcome_impact_commit_depth += 1
+                    try:
+                        for event in prepared.events:
+                            self.append_event(event)
+                    finally:
+                        self._outcome_impact_commit_depth -= 1
+                if owns_transaction:
+                    self._connection.execute("COMMIT")
+                return committed_outcome_impact(prepared)
+            except Exception:
+                if owns_transaction:
+                    self._rollback(self._connection.cursor())
+                raise
+
+    def commit_recovery_observation(self, request: Any) -> Any:
+        """Writer-serialized commit/replay of one recovery observation."""
+        from portable_runtime.workflows.recovery_observation import (
+            prepare_recovery_observation_commit,
+            recovery_observation_from_event,
+            same_recovery_observation_semantics,
+        )
+
+        with self._lock:
+            owns_transaction = not self._connection.in_transaction
+            if owns_transaction:
+                self._connection.execute("BEGIN IMMEDIATE")
+            try:
+                prepared = prepare_recovery_observation_commit(self, request)
+                existing = self.get_event(prepared.event.id)
+                if existing is not None:
+                    if not same_recovery_observation_semantics(
+                        existing,
+                        prepared.event,
+                    ):
+                        raise ValueError("RecoveryObservation identity rebound")
+                    observation = recovery_observation_from_event(existing)
+                    if owns_transaction:
+                        self._connection.execute("COMMIT")
+                    return observation
+                self._recovery_observation_commit_depth += 1
+                try:
+                    self.append_event(prepared.event)
+                finally:
+                    self._recovery_observation_commit_depth -= 1
+                if owns_transaction:
+                    self._connection.execute("COMMIT")
+                return prepared.observation
+            except Exception:
+                if owns_transaction:
+                    self._rollback(self._connection.cursor())
+                raise
+
+    def commit_recovery_disposition(self, request: Any, policy: Any) -> Any:
+        """Writer-serialized commit/replay of one exact-basis recovery disposition."""
+        from portable_runtime.workflows.recovery_disposition_commit import (
+            prepare_recovery_disposition_commit,
+        )
+
+        with self._lock:
+            owns_transaction = not self._connection.in_transaction
+            if owns_transaction:
+                self._connection.execute("BEGIN IMMEDIATE")
+            try:
+                plan = prepare_recovery_disposition_commit(self, request, policy)
+                if not plan.replayed:
+                    if plan.event is None:
+                        raise ValueError("RecoveryDisposition commit plan is missing its durable event")
+                    self._recovery_disposition_commit_depth += 1
+                    try:
+                        self.append_event(plan.event)
+                    finally:
+                        self._recovery_disposition_commit_depth -= 1
+                if owns_transaction:
+                    self._connection.execute("COMMIT")
+                return plan.disposition
+            except Exception:
+                if owns_transaction:
+                    self._rollback(self._connection.cursor())
+                raise
 
     def _validate_candidate_write(self, kind: str, value: Any) -> None:
         """Validate semantic writes against the complete current graph."""
@@ -341,6 +475,7 @@ class SQLiteStateStore:
     def save_decision(self, value: Decision) -> None: self._save_checked("decision", value)
     def get_decision(self, decision_id: str) -> Decision | None: return self._get("decision", Decision, decision_id)
     def save_action(self, value: Action) -> None: self._save_checked("action", value)
+    def get_action(self, action_id: str) -> Action | None: return self._get("action", Action, action_id)
     def save_outcome(self, value: Outcome) -> None: self._save_checked("outcome", value)
     def save_knowledge(self, value: KnowledgeItem) -> None: self._save_checked("knowledge", value)
     def get_knowledge(self, knowledge_id: str) -> KnowledgeItem | None:
@@ -381,6 +516,14 @@ class SQLiteStateStore:
             if status is None or value.lifecycle_status == status
         ]
     def append_event(self, value: Event) -> None:
+        from portable_runtime.governance.outcome_impact_commit import OUTCOME_IMPACT_AUTHORITY_EVENT_TYPES
+
+        if value.type in OUTCOME_IMPACT_AUTHORITY_EVENT_TYPES and self._outcome_impact_commit_depth <= 0:
+            raise ValueError("Outcome impact authority events require commit_outcome_impact_judgment")
+        if value.type == "RecoveryObservationRecorded" and self._recovery_observation_commit_depth <= 0:
+            raise ValueError("RecoveryObservation events require commit_recovery_observation")
+        if value.type == "RecoveryDispositionRecorded" and self._recovery_disposition_commit_depth <= 0:
+            raise ValueError("RecoveryDisposition events require commit_recovery_disposition")
         existing = self._get("event", Event, value.id)
         if existing is not None:
             try:
@@ -874,6 +1017,18 @@ class SQLiteStateStore:
                         raw for raw in candidate.get(kind, [])
                         if isinstance(raw, dict) and raw.get("id") not in incoming_ids
                     ] + [value.model_dump(mode="json") for value in prepared[kind]]
+                from portable_runtime.governance.outcome_impact_commit import (
+                    OUTCOME_IMPACT_AUTHORITY_EVENT_TYPES,
+                )
+
+                if any(
+                    getattr(event, "type", "") in OUTCOME_IMPACT_AUTHORITY_EVENT_TYPES
+                    for event in prepared.get("event", ())
+                ):
+                    raise ValueError(
+                        "B3 outcome impact authority history import is unsupported; "
+                        "durable impact authority must be created by commit_outcome_impact_judgment"
+                    )
                 from portable_runtime.protocol.validation import (
                     assert_valid_state_graph,
                     assert_valid_state_transition,
@@ -881,6 +1036,11 @@ class SQLiteStateStore:
 
                 assert_valid_state_transition(current, candidate, prepared)
                 assert_valid_state_graph(candidate)
+                from portable_runtime.records.verified_outcome_replay import (
+                    validate_verified_outcome_authority_graph,
+                )
+
+                validate_verified_outcome_authority_graph(candidate)
                 for kind, prepared_values in prepared.items():
                     for value in prepared_values:
                         self._connection.execute(

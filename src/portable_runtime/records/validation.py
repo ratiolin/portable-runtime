@@ -33,13 +33,18 @@ def validate_canonical_write(record: BaseRecord) -> list[str]:
     protocol.
     """
 
+    errors: list[str] = []
     extra = getattr(record, "model_extra", None) or {}
     if extra:
-        return [
+        errors.append(
             "canonical record writes forbid undeclared fields: "
             + ", ".join(sorted(str(key) for key in extra))
-        ]
-    return []
+        )
+    if record.record_type == "Outcome" and record.lifecycle_status == "confirmed":
+        errors.append(
+            "confirmed Outcome requires verified-outcome authority commit"
+        )
+    return errors
 
 
 def validate_record(record: BaseRecord) -> list[str]:

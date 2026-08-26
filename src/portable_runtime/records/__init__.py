@@ -22,6 +22,7 @@ from .qualification_transition import (
     build_qualification_transition_event,
     commit_qualification_transition,
 )
+from .verified_outcome import VerifiedOutcomeAuthority
 
 __all__ = [
     "BaseRecord",
@@ -42,4 +43,5 @@ __all__ = [
     "QUALIFICATION_TRANSITION_EVENT_TYPE",
     "build_qualification_transition_event",
     "commit_qualification_transition",
+    "VerifiedOutcomeAuthority",
 ]

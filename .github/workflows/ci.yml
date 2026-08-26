@@ -60,6 +60,27 @@ jobs:
           uv run pytest -q
           tests/conformance/test_boundary_architecture.py
           tests/conformance/test_execution_outcome_separation.py
+          tests/conformance/test_verified_outcome_authority.py
+          tests/conformance/test_verified_outcome_commit.py
+          tests/conformance/test_verified_outcome_import_replay.py
+          tests/conformance/test_verified_outcome_import_integration.py
+          tests/conformance/test_bound_verification_evidence.py
+          tests/conformance/test_action_read_seam.py
+          tests/conformance/test_outcome_governance_impact_design.py
+          tests/conformance/test_outcome_confirmed_trigger_resolution.py
+          tests/conformance/test_outcome_governance_applicability.py
+          tests/conformance/test_outcome_impact_judgment.py
+          tests/conformance/test_outcome_impact_commit.py
+          tests/conformance/test_outcome_governance_impact_lifecycle.py
+          tests/conformance/test_outcome_impact_import_guard.py
+          tests/conformance/test_recovery_terminal_closure_design.py
+          tests/conformance/test_recovery_observation_authority.py
+          tests/audit/test_b4_p2_objective_bridge_design.py
+          tests/audit/test_b4_p3_recovery_disposition_design.py
+          tests/audit/test_b4_p4_recovery_application_design.py
+          tests/conformance/test_recovery_disposition_counterexamples.py
+          tests/conformance/test_recovery_disposition_preparation.py
+          tests/conformance/test_recovery_disposition_commit.py
           tests/conformance/test_responsibility_separation_contracts.py
           tests/conformance/test_distinction_governance.py
           tests/conformance/test_distinction_governance_persistence.py
