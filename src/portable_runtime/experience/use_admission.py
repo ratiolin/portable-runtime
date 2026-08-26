@@ -24,6 +24,8 @@ ExperienceUseStatus = Literal[
     "stale",
     "unavailable",
 ]
+
+EXPERIENCE_USE_ADMISSION_CONTRACT_VERSION = "experience-use-admission-v1"
 _NegativeApplicability = Literal["current", "outside", "unknown"]
 
 _NOISE_KEYS = frozenset({"created_at", "updated_at"})
@@ -172,6 +174,7 @@ class ExperienceUseAdmission:
     requirement_digest: str
     snapshot_digest: str
     resolved_snapshot: ResolvedExperienceUseSnapshot
+    admission_contract_version: str = EXPERIENCE_USE_ADMISSION_CONTRACT_VERSION
     reasons: tuple[str, ...] = ()
 
     @property
@@ -746,11 +749,13 @@ class ExperienceUseAdmissionEvaluator:
             requirement_digest=requirement_digest,
             snapshot_digest=hashlib.sha256(semantic_json.encode("utf-8")).hexdigest(),
             resolved_snapshot=snapshot,
+            admission_contract_version=EXPERIENCE_USE_ADMISSION_CONTRACT_VERSION,
             reasons=tuple(sorted(set(reasons))),
         )
 
 
 __all__ = [
+    "EXPERIENCE_USE_ADMISSION_CONTRACT_VERSION",
     "ExperienceUseAdmission",
     "ExperienceUseAdmissionEvaluator",
     "ExperienceUseRequirement",

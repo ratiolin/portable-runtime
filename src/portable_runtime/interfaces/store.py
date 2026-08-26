@@ -17,6 +17,10 @@ from portable_runtime.core.models import (
     StepAttempt,
     Work,
 )
+from portable_runtime.experience.historical_use import (
+    HistoricalExperienceUse,
+    HistoricalExperienceUseCommitRequest,
+)
 from portable_runtime.records.knowledge import KnowledgeProjection
 from portable_runtime.records.models import BaseRecord, OutcomeRecord
 from portable_runtime.records.relations import RecordRelation
@@ -85,6 +89,9 @@ class StateStore(Protocol):
     # callers cannot append the corresponding authority events directly.
     def commit_terminal(self, work: Work, run: Run, verification_refs: list[str]) -> Run: ...
     def commit_verified_outcome(self, request: VerifiedOutcomeCommitRequest) -> OutcomeRecord: ...
+    def commit_historical_experience_use(
+        self, request: HistoricalExperienceUseCommitRequest
+    ) -> HistoricalExperienceUse: ...
     def commit_recovery_observation(self, request: Any) -> Any: ...
     def commit_recovery_disposition(self, request: Any, policy: Any) -> Any: ...
     def commit_recovery_application(self, request: Any) -> Any: ...

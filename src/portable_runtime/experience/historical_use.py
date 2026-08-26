@@ -79,6 +79,7 @@ class PreparedHistoricalExperienceUseCommit:
 class HistoricalExperienceUseStoreReader(Protocol):
     def get_record(self, record_id: str) -> object | None: ...
     def get_event(self, event_id: str) -> Event | None: ...
+    def get_knowledge_projection(self, projection_id: str) -> object | None: ...
     def export_state(self) -> dict[str, list[dict[str, object]]]: ...
 
 
@@ -147,6 +148,23 @@ def _validate_task_domain_judgment(judgment: Assertion) -> None:
             "Historical Experience Use requires Assertion metadata.semantic_role="
             f"{DOMAIN_JUDGMENT_SEMANTIC_ROLE!r}"
         )
+
+
+def _validate_role_separation_from_current_projections(
+    store: HistoricalExperienceUseStoreReader,
+    judgment: Assertion,
+    requirement: ExperienceUseRequirement,
+) -> None:
+    for projection_ref in requirement.projection_refs:
+        projection = store.get_knowledge_projection(projection_ref)
+        if projection is None:
+            continue
+        for field in ("epistemic_judgment_refs", "current_assertion_refs"):
+            refs = getattr(projection, field, ())
+            if judgment.id in refs:
+                raise ValueError(
+                    "task/domain judgment cannot be an assertion or epistemic judgment that qualifies selected experience"
+                )
 
 
 def _validate_role_separation(judgment: Assertion, admission: ExperienceUseAdmission) -> None:
@@ -302,6 +320,8 @@ def prepare_historical_experience_use_commit(
 
     event_id = historical_experience_use_event_id(request.judgment.id, request.judgment.version)
     existing_event = store.get_event(event_id)
+    if existing_event is None:
+        _validate_role_separation_from_current_projections(store, request.judgment, request.requirement)
     existing_record = store.get_record(request.judgment.id)
 
     if existing_event is not None:
