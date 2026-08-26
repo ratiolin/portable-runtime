@@ -36,6 +36,8 @@ These identifiers intentionally describe different compatibility surfaces:
 
 `Runtime protocol 2.0` covers the portable runtime's state, bundle, HTTP, and CLI compatibility surfaces. The external provider protocol is a separate adapter boundary: provider manifests and stdio-JSONL messages remain at protocol version `1`. A protocol-v1 provider can therefore be consumed by a Runtime-protocol-2.0 deployment; changing one axis does not imply changing the other.
 
+Canonical Framework semantics are owned by `xiongweilin/ratio/责任拓扑`; this repository does not keep local canonical copies. Machine-readable adopted source pins are recorded in [`semantic-sources.toml`](semantic-sources.toml), with the runtime-specific relationship documented in [`docs/distinction-governance-implementation.md`](docs/distinction-governance-implementation.md).
+
 ## Highlights (R1.1–R2.0)
 
 - **Execution Integrity (R1.1):** `Step / StepAttempt / Checkpoint / Compensation` with `CAS / Lease+Fencing / idempotency` and `effect semantics` (`pure / idempotent / deduplicatable / reconcilable / irreversible-opaque → unknown`) — crash after provider no silent double-execution.
@@ -115,8 +117,8 @@ Cross-cutting: `append-only history / provenance / versioning / authorization / 
 - **Workflow** – orchestrates `context.invoke(capability, ...)` and `context.require("purpose-identified")`; built-ins: `generic_task`, `incident_repair`, `daily_scan`, `knowledge_consolidation` + `ProcedureProfile` gates.
 
 See [docs/architecture.md](docs/architecture.md),
-[docs/responsibility-record-plane.md](docs/responsibility-record-plane.md),
-[docs/action-responsibility-practice.md](docs/action-responsibility-practice.md),
+[semantic-sources.toml](semantic-sources.toml),
+[docs/distinction-governance-implementation.md](docs/distinction-governance-implementation.md),
 [docs/formal-kernel-relationship.md](docs/formal-kernel-relationship.md),
 [docs/responsibility-separation-contracts.md](docs/responsibility-separation-contracts.md),
 [docs/provider-api.md](docs/provider-api.md),
