@@ -1,0 +1,38 @@
+name: EUA-D integration runner v2
+
+on:
+  push:
+    branches:
+      - feat/historical-experience-use
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: feat/historical-experience-use
+          fetch-depth: 0
+      - name: Apply production and tests only
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import textwrap
+          source = Path('.github/workflows/eua-d-apply.yml').read_text(encoding='utf-8')
+          start = source.index("          python - <<'PY'\n") + len("          python - <<'PY'\n")
+          end = source.index("\n          PY\n", start)
+          body = textwrap.dedent(source[start:end])
+          Path('/tmp/eua_d_apply.py').write_text(body, encoding='utf-8')
+          PY
+          python /tmp/eua_d_apply.py
+          git restore --source=HEAD -- .github/workflows/ci.yml .github/workflows/eua-d-apply.yml .github/workflows/eua-d-run.yml .github/workflows/eua-d-run-v2.yml
+          git config user.name "EUA-D integration"
+          git config user.email "80614539+xiongweilin@users.noreply.github.com"
+          git add -A
+          git diff --cached --check
+          git commit -m "EUA-D: integrate store-owned historical use [eua-d-patched]"
+          git push origin HEAD:feat/historical-experience-use
