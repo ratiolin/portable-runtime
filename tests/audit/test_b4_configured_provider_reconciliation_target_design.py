@@ -1,293 +1,358 @@
-"""B4 configured-provider reconciliation target audit.
+"""B4 configured-provider execution-binding production graduation.
 
-Audit only. This file authorizes no provider-target production/schema, dispatch
-change, registry authority, provider call, repeatability production,
-application-binding production, Runtime consumption, retry, DIS-015, PVP-007,
-historical backfill, or P5 import authority.
+PT-001…017 are no longer design fixtures. They exercise the real
+ProviderRegistry, governed dispatch, store authority fence, legacy compatibility,
+and historical target resolution APIs. This file authorizes no reconciliation
+repeatability, consumer, provider call, retry, DIS-015, PVP-007, or historical
+backfill.
 """
 
 from __future__ import annotations
 
-import importlib
-import importlib.util
-import inspect
+from typing import Any
 
 import pytest
 
-from portable_runtime.core.boundary import RealityBoundary
-from portable_runtime.core.capabilities import ProviderDescriptor
+from portable_runtime.core.capabilities import (
+    CapabilityRequest,
+    CapabilityResult,
+    InvocationContext,
+    ProviderDescriptor,
+    ProviderHealth,
+)
+from portable_runtime.core.models import Event
 from portable_runtime.core.provider_semantics import ProviderReplayBinding
+from portable_runtime.core.qualification import InvocationPermit
 from portable_runtime.core.registry import ProviderRegistry
-from portable_runtime.governance import dispatch as dispatch_module
-from portable_runtime.governance.dispatch import GovernanceDispatchCommitter
+from portable_runtime.governance.dispatch import (
+    DISPATCH_COMMIT_EVENT,
+    DISPATCH_COMMIT_SCHEMA,
+    GovernanceDispatchCommitter,
+    dispatch_commit_identity_from_payload,
+)
+from portable_runtime.governance.distinction import DistinctionState, UseContext
+from portable_runtime.governance.persistence import InMemoryDistinctionGovernancePersistence
+from portable_runtime.governance.provider_execution_binding import (
+    ProviderExecutionBinding,
+    classify_historical_target_capture,
+    provider_execution_binding_from_dispatch,
+    reject_historical_execution_binding_backfill,
+)
+from portable_runtime.governance.use_admission import (
+    GovernanceUseAdmission,
+    GovernanceUseRequirement,
+)
+from portable_runtime.stores.memory import InMemoryStateStore
 from portable_runtime.workflows.invocation_specification import InvocationSpecificationCommitRequest
 
 
-def _xfail(reason: str) -> pytest.MarkDecorator:
-    return pytest.mark.xfail(strict=True, reason=reason)
-
-
-class _ReplacementProvider:
-    def __init__(self, marker: str) -> None:
-        self.marker = marker
-        self.descriptor = ProviderDescriptor(
-            id="provider:target-audit",
-            name=f"provider-{marker}",
+class _Provider:
+    def __init__(self, marker: str = "v1") -> None:
+        self._descriptor = ProviderDescriptor(
+            id="provider:target-production",
+            name="target-production",
             version=marker,
-            capabilities=["deploy.apply"],
-            effect_semantics="reconcilable",
-            side_effect_class="reconcilable",
+            capabilities=["test.read"],
+            effect_semantics="pure",
+            side_effect_class="pure",
+            reversibility="reversible",
         )
 
-    async def health(self):  # type: ignore[no-untyped-def]
-        raise NotImplementedError
+    @property
+    def descriptor(self) -> ProviderDescriptor:
+        return self._descriptor
 
-    async def invoke(self, request, context):  # type: ignore[no-untyped-def]
-        raise NotImplementedError
+    def drift(self) -> None:
+        self._descriptor = self._descriptor.model_copy(update={"version": "drifted"})
+
+    async def health(self) -> ProviderHealth:
+        return ProviderHealth(provider_id=self.descriptor.id, available=True)
+
+    async def invoke(
+        self,
+        request: CapabilityRequest,
+        context: InvocationContext,
+    ) -> CapabilityResult:
+        del context
+        return CapabilityResult(
+            request_id=request.id,
+            provider_id=self.descriptor.id,
+            status="succeeded",
+        )
 
     async def cancel(self, request_id: str) -> None:
-        return None
+        del request_id
 
-    async def reconcile(self, request_id: str):  # type: ignore[no-untyped-def]
-        raise NotImplementedError
-
-
-def test_pt_audit_dispatch_payload_has_provider_id_but_no_execution_binding() -> None:
-    source = inspect.getsource(GovernanceDispatchCommitter.commit)
-    assert '"provider_id": permit.provider_id' in source
-    assert "provider_execution_binding" not in source
-    assert "configured_provider" not in source
+    async def reconcile(self, request_id: str) -> CapabilityResult | None:
+        del request_id
+        raise AssertionError("B binding is non-executing")
 
 
-def test_pt_audit_dispatch_identity_has_no_execution_binding() -> None:
-    source = inspect.getsource(dispatch_module._dispatch_commit_ref)
-    assert '"provider_id": permit.provider_id' in source
-    assert "provider_execution_binding" not in source
-    assert "configured_provider" not in source
-
-
-def test_pt_audit_registry_get_is_current_live_object_resolution() -> None:
-    registry = ProviderRegistry()
-    first = _ReplacementProvider("v1")
-    registry.register(first)  # type: ignore[arg-type]
-    assert registry.get(first.descriptor.id) is first
-
-
-def test_pt_audit_registry_allows_same_id_replacement_after_unregister() -> None:
-    registry = ProviderRegistry()
-    first = _ReplacementProvider("v1")
-    second = _ReplacementProvider("v2")
-    registry.register(first)  # type: ignore[arg-type]
-    registry.unregister(first.descriptor.id)
-    registry.register(second)  # type: ignore[arg-type]
-    assert registry.get(second.descriptor.id) is second
-    assert first is not second
-
-
-def test_pt_audit_reality_boundary_reconcile_resolves_current_provider_id() -> None:
-    source = inspect.getsource(RealityBoundary.reconcile)
-    assert "registry.get(provider_id)" in source
-    assert "provider_execution_binding" not in source
-    assert "configured_provider" not in source
-
-
-def test_pt_audit_local_provider_replay_binding_disclaims_registry_authority() -> None:
-    doc = inspect.getdoc(ProviderReplayBinding) or ""
-    assert "not proof" in doc.lower()
-    assert "authoritative configured provider instance" in doc.lower()
-
-
-def test_pt_audit_invocation_spec_binding_id_is_capture_caller_input() -> None:
-    fields = set(InvocationSpecificationCommitRequest.model_fields)
-    assert "provider_binding_id" in fields
-    assert "provider_execution_binding_ref" not in fields
-
-
-def test_pt_audit_provider_descriptor_has_no_execution_binding_authority() -> None:
-    fields = set(ProviderDescriptor.model_fields)
-    assert "provider_execution_binding" not in fields
-    assert "configured_execution_identity" not in fields
-    assert "execution_binding_digest" not in fields
-
-
-def test_pt_audit_no_provider_execution_binding_production_module_exists() -> None:
-    assert importlib.util.find_spec("portable_runtime.governance.provider_execution_binding") is None
-
-
-@_xfail("B4 PT-001: provider_id is not historical configured-provider execution identity")
-def test_pt_001_provider_id_is_not_historical_execution_identity() -> None:
-    module = importlib.import_module("portable_runtime.governance.provider_execution_binding")
-    with pytest.raises(ValueError, match="provider.*id|execution.*identity|binding"):
-        module.ProviderExecutionBinding.from_provider_id("provider:a")
-
-
-@_xfail("B4 PT-002: current registry object is not historical target authority")
-def test_pt_002_current_registry_object_is_not_historical_authority() -> None:
-    module = importlib.import_module("portable_runtime.governance.provider_execution_binding")
-    registry = ProviderRegistry()
-    current = _ReplacementProvider("current")
-    registry.register(current)  # type: ignore[arg-type]
-    with pytest.raises(ValueError, match="historical|authority|binding"):
-        module.binding_from_current_registry(registry, current.descriptor.id)
-
-
-@_xfail("B4 PT-003: same-id provider replacement cannot satisfy historical binding")
-def test_pt_003_same_id_replacement_fails_closed() -> None:
-    module = importlib.import_module("portable_runtime.governance.provider_execution_binding")
-    source = module.ProviderExecutionBinding.example(
-        provider_id="provider:a",
-        configured_execution_identity="configured:source",
+def _register(
+    registry: ProviderRegistry,
+    provider: _Provider,
+    suffix: str,
+) -> ProviderExecutionBinding:
+    registry.register(
+        provider,
+        configured_execution_identity=f"configured:target:{suffix}",
+        authoritative_configuration_ref=f"provider-config:target:{suffix}",
     )
-    replacement = module.ProviderExecutionBinding.example(
-        provider_id="provider:a",
-        configured_execution_identity="configured:replacement",
+    return registry.execution_binding(provider.descriptor.id, expected_provider=provider)
+
+
+def _state() -> DistinctionState:
+    return DistinctionState(
+        qualification="qualified",
+        activation="active",
+        scope=frozenset({"a"}),
+        partition=(frozenset({"a"}),),
+        version=1,
     )
-    with pytest.raises(ValueError, match="mismatch|binding|identity|replacement"):
-        module.assert_same_historical_target(source, replacement)
 
 
-@_xfail("B4 PT-004: descriptor equality alone is not configured execution identity")
-def test_pt_004_descriptor_equality_is_not_execution_identity() -> None:
-    module = importlib.import_module("portable_runtime.governance.provider_execution_binding")
-    descriptor = ProviderDescriptor(
-        id="provider:a",
-        name="same",
-        version="1",
-        capabilities=["deploy.apply"],
+def _requirement(_request: CapabilityRequest) -> GovernanceUseRequirement:
+    return GovernanceUseRequirement(
+        scheme_id="d",
+        use_context=UseContext("ctx", frozenset({"a"})),
     )
-    with pytest.raises(ValueError, match="configured|execution|authority|binding"):
-        module.ProviderExecutionBinding.from_descriptor(descriptor)
 
 
-@_xfail("B4 PT-005: local ProviderReplayBinding representation is not execution authority")
-def test_pt_005_provider_replay_binding_cannot_be_promoted_to_execution_authority() -> None:
-    module = importlib.import_module("portable_runtime.governance.provider_execution_binding")
-    with pytest.raises(ValueError, match="replay|execution|authority"):
-        module.promote_provider_replay_binding("provider_replay_binding:declared")
+def _bound_dispatch(suffix: str) -> tuple[InMemoryStateStore, ProviderRegistry, _Provider, Event]:
+    store = InMemoryStateStore()
+    InMemoryDistinctionGovernancePersistence(store).seed_state("d", _state())
+    provider = _Provider()
+    registry = ProviderRegistry()
+    binding = _register(registry, provider, suffix)
+    request = CapabilityRequest(
+        id=f"request:pt:{suffix}",
+        capability="test.read",
+        idempotency_key=f"idem:pt:{suffix}",
+    )
+    admission = GovernanceUseAdmission(store).evaluate(request, _requirement)
+    assert admission.status == "allowed"
+    assert admission.requirement_digest is not None
+    assert admission.snapshot_digest is not None
+    permit = InvocationPermit.issue(
+        request,
+        provider_id=provider.descriptor.id,
+        qualification_digest="",
+        lease_generation=0,
+        governance_applicable=True,
+        governance_requirement_digest=admission.requirement_digest,
+        governance_snapshot_digest=admission.snapshot_digest,
+    )
+    decision = GovernanceDispatchCommitter(store).commit(
+        request,
+        permit,
+        _requirement,
+        attempt_id=None,
+        provider_registry=registry,
+        expected_provider=provider,
+    )
+    assert decision.status == "committed"
+    assert decision.commit_ref is not None
+    assert decision.provider_execution_binding_ref == binding.id
+    event = store.get_event(decision.commit_ref)
+    assert event is not None
+    return store, registry, provider, event
 
 
-@_xfail("B4 PT-006: caller cannot manufacture configured-provider execution binding")
-def test_pt_006_caller_cannot_supply_execution_binding_string() -> None:
-    module = importlib.import_module("portable_runtime.governance.provider_execution_binding")
-    fields = set(module.ProviderExecutionBindingCommitRequest.model_fields)
-    assert "configured_execution_identity" not in fields
-    assert "binding_digest" not in fields
+def _legacy_dispatch() -> Event:
+    payload = {
+        "schema": DISPATCH_COMMIT_SCHEMA,
+        "request_id": "request:pt:legacy",
+        "provider_id": "provider:target-production",
+        "attempt_ref": None,
+        "invocation_permit_digest": "permit:legacy",
+        "qualification_digest": "",
+        "governance_requirement_digest": "requirement:legacy",
+        "governance_snapshot_digest": "snapshot:legacy",
+        "lease_generation": 0,
+        "linearization_domain": "authoritative-state-store",
+    }
+    return Event(
+        id=dispatch_commit_identity_from_payload(payload),
+        type=DISPATCH_COMMIT_EVENT,
+        subject_ref="request:pt:legacy",
+        payload=payload,
+    )
 
 
-@_xfail("B4 PT-007: binding must originate from authoritative configured-provider path")
-def test_pt_007_binding_origin_is_authoritative_configuration_path() -> None:
-    module = importlib.import_module("portable_runtime.governance.provider_execution_binding")
-    fixture = module.ProviderExecutionBindingAuditFixture.example()
-    binding = fixture.capture_from_authoritative_selection()
-    assert binding.authoritative_configuration_ref == fixture.configuration_ref
-    assert binding.provider_id == fixture.provider_id
-
-
-@_xfail("B4 PT-008: historical binding cannot be backfilled from current registry/configuration")
-def test_pt_008_historical_backfill_from_current_registry_is_closed() -> None:
-    module = importlib.import_module("portable_runtime.governance.provider_execution_binding")
-    with pytest.raises(ValueError, match="historical|backfill|current|authority"):
-        module.backfill_historical_execution_binding(
-            dispatch_ref="dispatch:legacy",
-            provider_id="provider:a",
-            current_configuration_ref="provider-config:current",
+def test_pt_001_provider_id_is_not_configured_execution_identity() -> None:
+    provider = _Provider()
+    registry = ProviderRegistry()
+    with pytest.raises(ValueError, match="stronger than provider id"):
+        registry.register(
+            provider,
+            configured_execution_identity=provider.descriptor.id,
+            authoritative_configuration_ref="provider-config:pt:001",
         )
 
 
-@_xfail("B4 PT-009: configured execution binding drift under same provider_id is detectable")
-def test_pt_009_same_provider_id_binding_drift_is_detected() -> None:
-    module = importlib.import_module("portable_runtime.governance.provider_execution_binding")
-    source = module.ProviderExecutionBinding.example(
-        provider_id="provider:a",
-        configured_execution_identity="configured:source",
+def test_pt_002_current_registry_state_cannot_backfill_legacy_dispatch() -> None:
+    registry = ProviderRegistry()
+    provider = _Provider()
+    _register(registry, provider, "002")
+    with pytest.raises(ValueError, match="legacy|backfill"):
+        provider_execution_binding_from_dispatch(_legacy_dispatch())
+
+
+def test_pt_003_same_id_replacement_does_not_resolve_historical_binding() -> None:
+    registry = ProviderRegistry()
+    first = _Provider("v1")
+    historical = _register(registry, first, "first")
+    registry.unregister(first.descriptor.id)
+    replacement = _Provider("v2")
+    _register(registry, replacement, "replacement")
+    assert registry.resolve_execution_binding(historical) is None
+
+
+def test_pt_004_descriptor_equality_does_not_create_same_execution_identity() -> None:
+    first_registry = ProviderRegistry()
+    second_registry = ProviderRegistry()
+    first = _Provider("same")
+    second = _Provider("same")
+    first_registry.register(first)
+    second_registry.register(second)
+    assert first.descriptor == second.descriptor
+    assert first_registry.execution_binding(first.descriptor.id) != second_registry.execution_binding(
+        second.descriptor.id
     )
-    current = module.ProviderExecutionBinding.example(
-        provider_id="provider:a",
-        configured_execution_identity="configured:changed",
+
+
+def test_pt_005_provider_replay_binding_remains_representation_not_execution_authority() -> None:
+    fields = set(ProviderReplayBinding.model_fields)
+    assert "provider_binding_id" in fields
+    assert "configured_execution_identity" not in fields
+    assert "authoritative_configuration_ref" not in fields
+    doc = ProviderReplayBinding.__doc__ or ""
+    assert "not proof" in doc.lower()
+
+
+def test_pt_006_direct_binding_bearing_dispatch_append_is_rejected() -> None:
+    _source, registry, provider, source_event = _bound_dispatch("006")
+    binding = registry.execution_binding(provider.descriptor.id, expected_provider=provider)
+    payload = dict(source_event.payload)
+    payload["request_id"] = "request:pt:forged"
+    payload["provider_execution_binding_ref"] = binding.id
+    forged = Event(
+        id=dispatch_commit_identity_from_payload(payload),
+        type=DISPATCH_COMMIT_EVENT,
+        subject_ref="request:pt:forged",
+        payload=payload,
     )
-    eligibility = module.resolve_historical_reconciliation_target(source, current)
-    assert eligibility.allowed is False
-    assert "mismatch" in eligibility.reason.lower() or "drift" in eligibility.reason.lower()
+    with pytest.raises(ValueError, match="governed dispatch commit"):
+        InMemoryStateStore().append_event(forged)
 
 
-@_xfail("B4 PT-010: exact historical binding with no current resolver is unavailable, not retargeted")
-def test_pt_010_missing_current_target_is_unavailable() -> None:
-    module = importlib.import_module("portable_runtime.governance.provider_execution_binding")
-    source = module.ProviderExecutionBinding.example(
-        provider_id="provider:a",
-        configured_execution_identity="configured:source",
+def test_pt_007_binding_origin_is_registry_capture_and_governed_dispatch() -> None:
+    _store, registry, provider, event = _bound_dispatch("007")
+    captured_provider, binding = registry.capture_execution_target(
+        provider.descriptor.id,
+        expected_provider=provider,
     )
-    result = module.resolve_historical_reconciliation_target(source, current_binding=None)
-    assert result.allowed is False
-    assert result.status == "unavailable"
-    assert result.retargeted is False
+    assert captured_provider is provider
+    assert binding.authoritative_configuration_ref == "provider-config:target:007"
+    assert event.payload["provider_execution_binding_ref"] == binding.id
+    assert provider_execution_binding_from_dispatch(event) == binding
 
 
-@_xfail("B4 PT-011: same-id but mismatched current provider fails closed")
-def test_pt_011_mismatched_current_provider_fails_closed() -> None:
-    module = importlib.import_module("portable_runtime.governance.provider_execution_binding")
-    source = module.ProviderExecutionBinding.example(
-        provider_id="provider:a",
-        configured_execution_identity="configured:source",
-    )
-    current = module.ProviderExecutionBinding.example(
-        provider_id="provider:a",
-        configured_execution_identity="configured:other",
-    )
-    with pytest.raises(ValueError, match="target|mismatch|identity|binding"):
-        module.require_exact_historical_target(source, current)
+def test_pt_008_historical_backfill_from_current_state_is_closed() -> None:
+    with pytest.raises(ValueError, match="historical|backfill|unsupported"):
+        reject_historical_execution_binding_backfill(
+            "dispatch:legacy",
+            "provider:target-production",
+        )
 
 
-@_xfail("B4 PT-012: execution binding identity alone does not authorize provider.reconcile")
+def test_pt_009_descriptor_drift_is_detected_under_same_provider_id() -> None:
+    registry = ProviderRegistry()
+    provider = _Provider()
+    _register(registry, provider, "009")
+    provider.drift()
+    with pytest.raises(ValueError, match="descriptor drift"):
+        registry.execution_binding(provider.descriptor.id, expected_provider=provider)
+
+
+def test_pt_010_missing_current_target_is_unavailable_not_retargeted() -> None:
+    registry = ProviderRegistry()
+    provider = _Provider()
+    historical = _register(registry, provider, "010")
+    registry.unregister(provider.descriptor.id)
+    assert registry.resolve_execution_binding(historical) is None
+
+
+def test_pt_011_same_id_mismatched_current_binding_fails_closed() -> None:
+    registry = ProviderRegistry()
+    source = _Provider("source")
+    historical = _register(registry, source, "011-source")
+    registry.unregister(source.descriptor.id)
+    current = _Provider("current")
+    _register(registry, current, "011-current")
+    assert registry.resolve_execution_binding(historical) is None
+
+
 def test_pt_012_execution_binding_does_not_authorize_reconcile() -> None:
-    module = importlib.import_module("portable_runtime.governance.provider_execution_binding")
-    binding = module.ProviderExecutionBinding.example()
+    registry = ProviderRegistry()
+    provider = _Provider()
+    binding = _register(registry, provider, "012")
     assert not hasattr(binding, "reconcile")
     assert not hasattr(binding, "consume_recovery_application")
 
 
-@_xfail("B4 PT-013: execution binding does not authorize provider.invoke or business retry")
 def test_pt_013_execution_binding_does_not_authorize_invoke_or_retry() -> None:
-    module = importlib.import_module("portable_runtime.governance.provider_execution_binding")
-    binding = module.ProviderExecutionBinding.example()
+    registry = ProviderRegistry()
+    provider = _Provider()
+    binding = _register(registry, provider, "013")
     assert not hasattr(binding, "invoke")
     assert not hasattr(binding, "retry")
     assert not hasattr(binding, "materialize_capability_request")
 
 
-@_xfail("B4 PT-014: execution binding does not imply reconciliation repeatability")
 def test_pt_014_execution_binding_does_not_imply_repeatability() -> None:
-    module = importlib.import_module("portable_runtime.governance.provider_execution_binding")
-    binding = module.ProviderExecutionBinding.example()
+    registry = ProviderRegistry()
+    provider = _Provider()
+    binding = _register(registry, provider, "014")
     assert not hasattr(binding, "repeat_safe")
     assert not hasattr(binding, "reconciliation_repeatability_contract")
 
 
-@_xfail("B4 PT-015: legacy dispatch without original binding remains non-upgradable")
 def test_pt_015_legacy_dispatch_remains_non_upgradable() -> None:
-    module = importlib.import_module("portable_runtime.governance.provider_execution_binding")
-    with pytest.raises(ValueError, match="legacy|historical|binding|unsupported"):
-        module.execution_binding_from_dispatch(
-            dispatch_ref="dispatch:legacy-provider-id-only",
-            allow_backfill=False,
-        )
+    with pytest.raises(ValueError, match="legacy|backfill|unsupported"):
+        provider_execution_binding_from_dispatch(_legacy_dispatch())
 
 
-@_xfail("B4 PT-016: serialized/import provider execution-binding authority remains P5-closed")
-def test_pt_016_serialized_binding_import_is_closed() -> None:
-    module = importlib.import_module("portable_runtime.governance.provider_execution_binding")
-    with pytest.raises(ValueError, match="import|serialized|P5|unsupported"):
-        module.import_provider_execution_binding_authority(
-            {"provider_id": "provider:a", "configured_execution_identity": "configured:a"}
-        )
+def test_pt_016_binding_bearing_dispatch_authority_import_is_closed() -> None:
+    source, _registry, _provider, event = _bound_dispatch("016")
+    exported = source.export_state()
+    assert any(
+        raw.get("id") == event.id and "provider_execution_binding_ref" in raw.get("payload", {})
+        for raw in exported["event"]
+        if isinstance(raw, dict) and isinstance(raw.get("payload"), dict)
+    )
+    target = InMemoryStateStore()
+    with pytest.raises(ValueError, match="provider execution-binding|P5|import|unsupported"):
+        target.import_state({"event": [event.model_dump(mode="json")]})
 
 
-@_xfail("B4 PT-017: reality exit without durable exact binding makes historical target unknowable")
-def test_pt_017_reality_exit_without_durable_binding_blocks_automated_reconciliation() -> None:
-    module = importlib.import_module("portable_runtime.governance.provider_execution_binding")
-    state = module.classify_historical_target_capture(
+def test_pt_017_reality_exit_without_durable_binding_is_unknowable() -> None:
+    state = classify_historical_target_capture(
         reality_exit_may_have_occurred=True,
         durable_execution_binding_ref=None,
     )
     assert state.target_status == "unknowable"
     assert state.automated_reconciliation_allowed is False
+
+
+def test_pt_separation_invocation_spec_binding_id_is_not_execution_binding_authority() -> None:
+    fields = set(InvocationSpecificationCommitRequest.model_fields)
+    assert "provider_binding_id" in fields
+    assert "provider_execution_binding_ref" not in fields
+
+
+def test_pt_separation_provider_descriptor_does_not_carry_execution_authority() -> None:
+    fields = set(ProviderDescriptor.model_fields)
+    assert "provider_execution_binding" not in fields
+    assert "configured_execution_identity" not in fields
+    assert "execution_binding_digest" not in fields
