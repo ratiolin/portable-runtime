@@ -137,6 +137,7 @@ def _proof(
     suffix: str,
     result: str = "pass",
     extra_source_refs: tuple[str, ...] = (),
+    include_action_source: bool = True,
     metadata_updates: dict[str, Any] | None = None,
 ) -> EvidenceArtifact:
     metadata: dict[str, Any] = {
@@ -157,10 +158,13 @@ def _proof(
     }
     if metadata_updates:
         metadata.update(metadata_updates)
+    source_refs = [*extra_source_refs]
+    if include_action_source:
+        source_refs.insert(0, graph.action.id)
     proof = EvidenceArtifact(
         id=f"evidence_p2_{suffix}",
         kind="task-objective-proof",
-        source_refs=[graph.action.id, *extra_source_refs],
+        source_refs=source_refs,
         metadata=metadata,
     )
     store.save_record(proof)
@@ -210,9 +214,8 @@ def test_p2_audit_observation_citation_cannot_replace_existing_action_binding() 
         graph,
         suffix="missing-action-source",
         extra_source_refs=(observation.id,),
+        include_action_source=False,
     )
-    proof = proof.model_copy(update={"source_refs": [observation.id]})
-    store.save_record(proof)
 
     with pytest.raises(ValueError, match="exact Action"):
         store.commit_verified_outcome(_request(graph, (proof.id,)))
