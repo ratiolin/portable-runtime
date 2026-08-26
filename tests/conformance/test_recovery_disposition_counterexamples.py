@@ -438,7 +438,6 @@ def test_p3c_007_direct_recovery_disposition_event_append_is_denied(
         )
 
 
-@_xfail("B4-P3 production: disposition commit remains non-self-executing")
 def test_p3c_008_recovery_disposition_module_has_no_execution_or_terminal_authority() -> None:
     module = importlib.import_module("portable_runtime.workflows.recovery_disposition")
     source = inspect.getsource(module)
@@ -457,7 +456,6 @@ def test_p3c_008_recovery_disposition_module_has_no_execution_or_terminal_author
         assert token not in source
 
 
-@_xfail("B4-P3 production: caller cannot declare recovery classification")
 def test_p3c_a01_commit_request_does_not_accept_caller_recovery_mode() -> None:
     module = importlib.import_module("portable_runtime.workflows.recovery_disposition")
     fields = set(module.RecoveryDispositionCommitRequest.__dataclass_fields__)
