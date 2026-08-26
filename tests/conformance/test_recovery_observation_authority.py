@@ -1,4 +1,4 @@
-"""F1-B4 P0 counterexamples for durable RecoveryObservation authority."""
+"""F1-B4 P1 conformance for durable RecoveryObservation authority."""
 
 from __future__ import annotations
 
@@ -125,7 +125,13 @@ def _seed_dispatch_graph(store: Any, suffix: str) -> dict[str, str]:
     }
 
 
-def _request(module: Any, *, dispatch_ref: str, instance_ref: str, status: str = "reported-succeeded") -> Any:
+def _request(
+    module: Any,
+    *,
+    dispatch_ref: str,
+    instance_ref: str,
+    status: str = "reported-succeeded",
+) -> Any:
     return module.RecoveryObservationCommitRequest(
         observation_instance_ref=instance_ref,
         dispatch_commit_ref=dispatch_ref,
@@ -241,7 +247,10 @@ def test_b4_p1_004_wrong_action_binding_fails_closed(
                     instance_ref="observation-instance:forged-action",
                 )
             )
-        assert not any(event.type == "RecoveryObservationRecorded" for event in store.list_events())
+        assert not any(
+            event.type == "RecoveryObservationRecorded"
+            for event in store.list_events()
+        )
 
 
 @pytest.mark.parametrize("backend", ["memory", "sqlite"])
@@ -295,16 +304,19 @@ def test_b4_p1_006_same_instance_cannot_be_rebound_to_new_report(
 
 
 class _RuntimeReconcileProvider:
-    descriptor = ProviderDescriptor(
-        id="provider:reconcile",
-        name="reconcile",
-        version="1",
-        capabilities=["deploy.apply"],
-        effect_semantics="reconcilable",
-        side_effect_class="reconcilable",
-    )
+    def __init__(self) -> None:
+        self.reconcile_calls = 0
+        self.descriptor = ProviderDescriptor(
+            id="provider:reconcile",
+            name="reconcile",
+            version="1",
+            capabilities=["deploy.apply"],
+            effect_semantics="reconcilable",
+            side_effect_class="reconcilable",
+        )
 
     async def reconcile(self, request_id: str) -> CapabilityResult:
+        self.reconcile_calls += 1
         return CapabilityResult(
             request_id=request_id,
             provider_id=self.descriptor.id,
@@ -314,38 +326,37 @@ class _RuntimeReconcileProvider:
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("backend", ["memory", "sqlite"])
-async def test_b4_p1_007_runtime_reconcile_records_new_non_objective_observation(
+async def test_b4_p1_007_legacy_runtime_reconcile_cannot_create_new_observation(
     backend: str,
     tmp_path: Path,
 ) -> None:
     with _store(backend, tmp_path, f"runtime-reconcile-{backend}") as store:
         graph = _seed_dispatch_graph(store, f"runtime-reconcile-{backend}")
         registry = ProviderRegistry()
-        registry.register(_RuntimeReconcileProvider())  # type: ignore[arg-type]
+        provider = _RuntimeReconcileProvider()
+        registry.register(provider)  # type: ignore[arg-type]
         runtime = Runtime(store=store, registry=registry)
 
+        before = [
+            event.id
+            for event in store.list_events()
+            if event.type == "RecoveryObservationRecorded"
+        ]
         first = await runtime.reconcile(graph["step_id"])
         second = await runtime.reconcile(graph["step_id"])
 
         assert first is not None and second is not None
-        assert first.status == "succeeded" and second.status == "succeeded"
-        assert (
-            first.metadata["recovery_observation_ref"]
-            != second.metadata["recovery_observation_ref"]
-        )
-        observations = [
-            event
-            for event in store.list_events(graph["dispatch_ref"])
+        assert first.status == "unknown" and second.status == "unknown"
+        assert first.error is not None and second.error is not None
+        assert first.error["code"] == "AuthoritativeReconciliationRequired"
+        assert second.error["code"] == "AuthoritativeReconciliationRequired"
+        assert provider.reconcile_calls == 0
+        after = [
+            event.id
+            for event in store.list_events()
             if event.type == "RecoveryObservationRecorded"
         ]
-        assert len(observations) == 2
-        assert {event.payload["reported_status"] for event in observations} == {
-            "reported-succeeded"
-        }
-        assert all(
-            event.payload["authoritative_outcome"] is False
-            for event in observations
-        )
+        assert after == before
         assert store.list_records("Outcome") == []
         assert store.get_work(graph["work_id"]).status != "completed"
         assert store.get_run(graph["run_id"]).status != "succeeded"
