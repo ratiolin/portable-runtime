@@ -43,8 +43,9 @@ const workflow = fs.readFileSync(workflowUrl, "utf8");
 for (const marker of ["evaluateExperience", "bindHistoricalUse", "Execution remains a separate"]) {
   if (!workflow.includes(marker)) throw new Error(`workflow responsibility cut missing: ${marker}`);
 }
-const forbiddenShortcut = ["useKnowledge", "DecideAndExecute"].join("And");
-if (workflow.includes(forbiddenShortcut)) throw new Error("combined decision/execution shortcut is forbidden");
+if (workflow.includes("useKnowledgeAndDecideAndExecute(")) {
+  throw new Error("combined decision/execution shortcut is forbidden");
+}
 
 const client = fs.readFileSync(clientUrl, "utf8");
 const types = fs.readFileSync(typesUrl, "utf8");
@@ -53,8 +54,8 @@ for (const authorityName of ["GovernanceUseRequirement", "InvocationPermit"]) {
     throw new Error(`TypeScript must not define authority object ${authorityName}`);
   }
 }
-if (!client.includes("ContractVersionMismatch") && !types.includes("ContractVersionMismatch")) {
-  throw new Error("typed contract-version failure surface is missing");
+for (const marker of ["ContractVersionMismatch", "portable-runtime-contracts-v1", "portable-runtime/contracts"]) {
+  if (!client.includes(marker)) throw new Error(`contract negotiation fail-closed marker missing: ${marker}`);
 }
 
 console.log(JSON.stringify({ verified: required, authority: "non-authoritative-consumer" }));
