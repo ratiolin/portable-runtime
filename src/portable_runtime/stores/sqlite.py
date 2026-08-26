@@ -150,6 +150,7 @@ class SQLiteStateStore:
         self._terminal_commit_depth = 0
         self._outcome_impact_commit_depth = 0
         self._recovery_observation_commit_depth = 0
+        self._recovery_disposition_commit_depth = 0
         self._connection = sqlite3.connect(_safe_db_path(path), check_same_thread=False, isolation_level=None)  # NOSONAR  # noqa: E501
         self._connection.row_factory = sqlite3.Row
         with self._lock:
@@ -349,6 +350,34 @@ class SQLiteStateStore:
                     self._rollback(self._connection.cursor())
                 raise
 
+    def commit_recovery_disposition(self, request: Any, policy: Any) -> Any:
+        """Writer-serialized commit/replay of one exact-basis recovery disposition."""
+        from portable_runtime.workflows.recovery_disposition_commit import (
+            prepare_recovery_disposition_commit,
+        )
+
+        with self._lock:
+            owns_transaction = not self._connection.in_transaction
+            if owns_transaction:
+                self._connection.execute("BEGIN IMMEDIATE")
+            try:
+                plan = prepare_recovery_disposition_commit(self, request, policy)
+                if not plan.replayed:
+                    if plan.event is None:
+                        raise ValueError("RecoveryDisposition commit plan is missing its durable event")
+                    self._recovery_disposition_commit_depth += 1
+                    try:
+                        self.append_event(plan.event)
+                    finally:
+                        self._recovery_disposition_commit_depth -= 1
+                if owns_transaction:
+                    self._connection.execute("COMMIT")
+                return plan.disposition
+            except Exception:
+                if owns_transaction:
+                    self._rollback(self._connection.cursor())
+                raise
+
     def _validate_candidate_write(self, kind: str, value: Any) -> None:
         """Validate semantic writes against the complete current graph."""
         from portable_runtime.protocol.validation import assert_valid_candidate_write
@@ -493,6 +522,8 @@ class SQLiteStateStore:
             raise ValueError("Outcome impact authority events require commit_outcome_impact_judgment")
         if value.type == "RecoveryObservationRecorded" and self._recovery_observation_commit_depth <= 0:
             raise ValueError("RecoveryObservation events require commit_recovery_observation")
+        if value.type == "RecoveryDispositionRecorded" and self._recovery_disposition_commit_depth <= 0:
+            raise ValueError("RecoveryDisposition events require commit_recovery_disposition")
         existing = self._get("event", Event, value.id)
         if existing is not None:
             try:
