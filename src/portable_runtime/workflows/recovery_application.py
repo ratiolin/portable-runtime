@@ -229,7 +229,7 @@ def recovery_application_from_event(event: Event) -> RecoveryApplication:
         source_provider_id=_required_string(payload.get("source_provider_id"), "source_provider_id"),
         source_run_ref=_required_string(payload.get("source_run_ref"), "source_run_ref"),
         source_work_ref=_required_string(payload.get("source_work_ref"), "source_work_ref"),
-        idempotency_key=cast(str | None, idempotency_key),
+        idempotency_key=idempotency_key,
     )
 
 
