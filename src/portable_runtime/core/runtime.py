@@ -186,6 +186,15 @@ class Runtime:
         last = sorted(attempts, key=lambda a: a.attempt_no)[-1]
         if not last.request_ref or not last.provider_id:
             return None
+
+        # Compatibility projection only: a durable dispatch with no exact
+        # reconciliation responsibility selected remains locally unknown.
+        if step.status != "unknown":
+            with contextlib.suppress(Exception):
+                self.store.save_step(
+                    step.model_copy(update={"status": "unknown", "updated_at": utcnow()})
+                )
+
         return CapabilityResult(
             request_id=last.request_ref,
             provider_id=last.provider_id,
