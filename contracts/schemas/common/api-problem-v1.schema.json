@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "portable-runtime://contracts/api-problem-v1",
+  "title": "ApiProblemV1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "code", "message"],
+  "properties": {
+    "schema": {"const": "api-problem-v1"},
+    "code": {"type": "string", "minLength": 1},
+    "message": {"type": "string", "minLength": 1},
+    "details": {"type": "object"},
+    "retryable": {"type": "boolean", "default": false}
+  }
+}
