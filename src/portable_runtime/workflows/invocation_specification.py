@@ -205,7 +205,17 @@ def invocation_specification_from_event(event: Event) -> DurableInvocationSpecif
         raise ValueError("InvocationSpecification event/specification identity mismatch")
     if specification.source_request_ref != event.subject_ref:
         raise ValueError("InvocationSpecification event/source request binding mismatch")
-    expected = f"invocation_spec_{_digest(_specification_identity_payload(semantic_identity=specification.semantic_identity, semantic_contract_digest=specification.semantic_contract_digest, provider_binding=specification.provider_binding, source_request_ref=specification.source_request_ref, source_work_ref=specification.source_work_ref, source_run_ref=specification.source_run_ref, idempotency_key=specification.idempotency_key, effect_semantics=specification.effect_semantics))}"
+    identity_payload = _specification_identity_payload(
+        semantic_identity=specification.semantic_identity,
+        semantic_contract_digest=specification.semantic_contract_digest,
+        provider_binding=specification.provider_binding,
+        source_request_ref=specification.source_request_ref,
+        source_work_ref=specification.source_work_ref,
+        source_run_ref=specification.source_run_ref,
+        idempotency_key=specification.idempotency_key,
+        effect_semantics=specification.effect_semantics,
+    )
+    expected = f"invocation_spec_{_digest(identity_payload)}"
     if specification.id != expected:
         raise ValueError("InvocationSpecification deterministic identity rebound")
     return specification
