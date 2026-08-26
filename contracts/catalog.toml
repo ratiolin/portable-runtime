@@ -1,0 +1,71 @@
+catalog_version = "portable-runtime-contracts-v1"
+owner = "portable-runtime/contracts"
+runtime_protocol = "2.0"
+provider_protocol = "1"
+control_plane_schema = "official-1.0.0"
+
+[contracts.distinction_governance]
+current = "distinction-governance-1.0"
+semantic_path = "contracts/semantics/governance/distinction-governance-v1.md"
+public = false
+
+[contracts.responsibility_records]
+current = "responsibility-record-plane-1.0"
+semantic_path = "contracts/semantics/records/responsibility-record-plane-v1.md"
+public_read = true
+public_write = "authority-gated"
+
+[contracts.action_responsibility]
+current = "action-responsibility-1.0"
+semantic_path = "contracts/semantics/action/action-responsibility-v1.md"
+public = false
+
+[contracts.experience_use_requirement]
+current = "experience-use-requirement-v1"
+schema_path = "contracts/schemas/experience/experience-use-requirement-v1.schema.json"
+semantic_path = "contracts/semantics/experience/experience-use-v1.md"
+public_input = true
+
+[contracts.experience_use_admission]
+current = "experience-use-admission-v1"
+schema_path = "contracts/schemas/experience/experience-use-admission-v1.schema.json"
+semantic_path = "contracts/semantics/experience/experience-use-v1.md"
+public_result = true
+
+[contracts.resolved_experience_use_snapshot]
+current = "resolved-experience-use-snapshot-v1"
+schema_path = "contracts/schemas/experience/resolved-experience-use-snapshot-v1.schema.json"
+public_result = true
+
+[contracts.historical_experience_use]
+current = "historical-experience-use-v1"
+schema_path = "contracts/schemas/experience/historical-experience-use-v1.schema.json"
+semantic_path = "contracts/semantics/experience/experience-use-v1.md"
+public_read = true
+public_command = "historical-experience-use-commit-v1"
+supported_historical = ["historical-experience-use-v1"]
+
+[contracts.api_problem]
+current = "api-problem-v1"
+schema_path = "contracts/schemas/common/api-problem-v1.schema.json"
+semantic_path = "contracts/errors/api-problem-v1.md"
+
+[views.governance_use_admission]
+current = "governance-use-admission-view-v1"
+authority_bearing = false
+
+[views.invocation_permit]
+current = "invocation-permit-view-v1"
+authority_bearing = false
+
+[views.invocation_dispatch_committed]
+current = "invocation-dispatch-committed-view-v1"
+authority_bearing = false
+
+[views.confirmed_outcome]
+current = "confirmed-outcome-view-v1"
+authority_bearing = false
+
+[views.recovery]
+current = "recovery-view-v1"
+authority_bearing = false
