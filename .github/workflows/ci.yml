@@ -81,6 +81,7 @@ jobs:
           tests/audit/test_b4_durable_invocation_specification_design.py
           tests/audit/test_b4_provider_visible_request_partition_design.py
           tests/audit/test_b4_retry_exact_provider_pin_design.py
+          tests/audit/test_b4_durable_invocation_specification_production_freeze.py
           tests/conformance/test_recovery_application_authority.py
           tests/conformance/test_recovery_disposition_counterexamples.py
           tests/conformance/test_recovery_disposition_preparation.py
