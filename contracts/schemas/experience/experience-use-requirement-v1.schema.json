@@ -1,0 +1,16 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "portable-runtime://contracts/experience-use-requirement-v1",
+  "title": "ExperienceUseRequirementV1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "projection_refs", "use_scope", "subject_version_refs", "environment_bindings", "use_context"],
+  "properties": {
+    "schema": {"const": "experience-use-requirement-v1"},
+    "projection_refs": {"type": "array", "items": {"type": "string", "minLength": 1}, "uniqueItems": true},
+    "use_scope": {"type": "object"},
+    "subject_version_refs": {"type": "array", "items": {"type": "string", "minLength": 1}, "uniqueItems": true},
+    "environment_bindings": {"type": "object", "additionalProperties": {"type": "string"}},
+    "use_context": {"type": "object"}
+  }
+}

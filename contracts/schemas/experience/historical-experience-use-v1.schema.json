@@ -1,0 +1,18 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "portable-runtime://contracts/historical-experience-use-v1",
+  "title": "HistoricalExperienceUseV1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["id", "judgment_ref", "judgment_version", "requirement_digest", "snapshot_digest", "snapshot_semantic_json", "selected_projection_refs", "admission_contract_version"],
+  "properties": {
+    "id": {"type": "string", "minLength": 1},
+    "judgment_ref": {"type": "string", "minLength": 1},
+    "judgment_version": {"type": "integer", "minimum": 1},
+    "requirement_digest": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "snapshot_digest": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "snapshot_semantic_json": {"type": "string"},
+    "selected_projection_refs": {"type": "array", "items": {"type": "string"}},
+    "admission_contract_version": {"const": "experience-use-admission-v1"}
+  }
+}

@@ -1,0 +1,16 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "portable-runtime://contracts/experience-use-admission-v1",
+  "title": "ExperienceUseAdmissionV1",
+  "type": "object",
+  "additionalProperties": true,
+  "required": ["admission_contract_version", "status", "requirement_digest", "snapshot_digest", "reasons"],
+  "properties": {
+    "admission_contract_version": {"const": "experience-use-admission-v1"},
+    "status": {"enum": ["not-applicable", "allowed", "blocked", "stale", "unavailable"]},
+    "requirement_digest": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "snapshot_digest": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "resolved_snapshot": {"type": ["object", "null"]},
+    "reasons": {"type": "array", "items": {"type": "string"}}
+  }
+}

@@ -1,0 +1,127 @@
+{
+  "schema": "portable-runtime-conformance-vectors-v1",
+  "contract_family": "experience-v1",
+  "vectors": [
+    {
+      "id": "EU-001",
+      "contract": "experience-use-requirement-v1",
+      "given": {"projection_refs": ["projection-b", "projection-a"]},
+      "operation": {"kind": "canonicalize-requirement"},
+      "expect": {"projection_refs": ["projection-a", "projection-b"]},
+      "forbidden": ["create_decision", "create_authorization", "create_invocation_permit", "provider_invocation"]
+    },
+    {
+      "id": "EU-002",
+      "contract": "experience-use-requirement-v1",
+      "given": {
+        "projection_refs": ["projection-b", "projection-a"],
+        "use_scope": {},
+        "subject_version_refs": [],
+        "environment_bindings": {},
+        "use_context": {"语言": "中文", "地点": "東京"}
+      },
+      "operation": {"kind": "digest-requirement"},
+      "expect": {
+        "canonical_json": "{\"environment_bindings\":{},\"projection_refs\":[\"projection-a\",\"projection-b\"],\"schema\":\"experience-use-requirement-v1\",\"subject_version_refs\":[],\"use_context\":{\"\\u5730\\u70b9\":\"\\u6771\\u4eac\",\"\\u8bed\\u8a00\":\"\\u4e2d\\u6587\"},\"use_scope\":{}}",
+        "sha256": "3c1ed9883f948d54347e975daeb87cb148c3cac2aa74800a37c50538c10a0196"
+      },
+      "forbidden": ["create_decision", "create_authorization", "create_invocation_permit", "provider_invocation"]
+    },
+    {
+      "id": "EU-003",
+      "contract": "experience-use-admission-v1",
+      "given": {"projection_refs": []},
+      "operation": {"kind": "evaluate-current-use"},
+      "expect": {"status": "not-applicable", "durable_delta": []},
+      "forbidden": ["create_decision", "create_authorization", "create_invocation_permit", "provider_invocation"]
+    },
+    {
+      "id": "EU-004",
+      "contract": "experience-use-admission-v1",
+      "given": {"projection_refs": ["missing-projection"]},
+      "operation": {"kind": "evaluate-current-use"},
+      "expect": {"status": "unavailable", "durable_delta": []},
+      "forbidden": ["create_decision", "create_authorization", "create_invocation_permit", "provider_invocation"]
+    },
+    {
+      "id": "EU-005",
+      "contract": "experience-use-admission-v1",
+      "given": {"projection_state": "applicable-contradiction"},
+      "operation": {"kind": "evaluate-current-use"},
+      "expect": {"status": "blocked", "durable_delta": []},
+      "forbidden": ["create_decision", "create_authorization", "create_invocation_permit", "provider_invocation"]
+    },
+    {
+      "id": "EU-006",
+      "contract": "experience-use-admission-v1",
+      "given": {"subject_or_environment": "drifted"},
+      "operation": {"kind": "evaluate-current-use"},
+      "expect": {"status": "stale", "durable_delta": []},
+      "forbidden": ["create_decision", "create_authorization", "create_invocation_permit", "provider_invocation"]
+    },
+    {
+      "id": "EU-007",
+      "contract": "experience-use-admission-v1",
+      "given": {"admission": "allowed"},
+      "operation": {"kind": "interpret"},
+      "expect": {"implies_judgment_supported": false},
+      "forbidden": ["create_decision"]
+    },
+    {
+      "id": "EU-008",
+      "contract": "experience-use-admission-v1",
+      "given": {"admission": "allowed"},
+      "operation": {"kind": "interpret"},
+      "expect": {"implies_execution_authority": false},
+      "forbidden": ["create_authorization", "create_invocation_permit", "provider_invocation"]
+    },
+    {
+      "id": "HU-001",
+      "contract": "historical-experience-use-v1",
+      "given": {"judgment": "new", "digests": "exact"},
+      "operation": {"kind": "commit-historical-use"},
+      "expect": {"result": "committed", "durable_delta": ["judgment", "HistoricalExperienceUseRecorded"]},
+      "forbidden": ["create_authorization", "create_invocation_permit", "provider_invocation"]
+    },
+    {
+      "id": "HU-002",
+      "contract": "historical-experience-use-v1",
+      "given": {"judgment": "same-identity", "semantics": "exact-replay"},
+      "operation": {"kind": "commit-historical-use"},
+      "expect": {"result": "replayed", "durable_delta": [], "durable_identity": "preserved"},
+      "forbidden": ["duplicate_history", "create_authorization", "provider_invocation"]
+    },
+    {
+      "id": "HU-003",
+      "contract": "historical-experience-use-v1",
+      "given": {"judgment": "same-identity", "semantics": "changed"},
+      "operation": {"kind": "commit-historical-use"},
+      "expect": {"error_code": "HistoricalUseIdentityRebound", "durable_delta": []},
+      "forbidden": ["rewrite_history", "provider_invocation"]
+    },
+    {
+      "id": "HU-004",
+      "contract": "historical-experience-use-v1",
+      "given": {"historical_binding": "committed", "current_knowledge": "drifted"},
+      "operation": {"kind": "read-historical-use"},
+      "expect": {"historical_snapshot": "unchanged"},
+      "forbidden": ["rewrite_history"]
+    },
+    {
+      "id": "HU-005",
+      "contract": "historical-experience-use-v1",
+      "given": {"judgment": "already-consumed-without-binding"},
+      "operation": {"kind": "retroactive-backfill"},
+      "expect": {"error_code": "HistoricalUseSelfQualificationForbidden", "durable_delta": []},
+      "forbidden": ["backfill_history", "create_authorization", "provider_invocation"]
+    },
+    {
+      "id": "HU-006",
+      "contract": "historical-experience-use-v1",
+      "given": {"consuming_judgment": "also-proposed-qualifier"},
+      "operation": {"kind": "commit-historical-use"},
+      "expect": {"result": "rejected", "durable_delta": []},
+      "forbidden": ["self_qualify_experience", "create_authorization", "provider_invocation"]
+    }
+  ]
+}
