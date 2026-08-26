@@ -20,7 +20,7 @@ def _seed_official(
     store: InMemoryStateStore,
     *,
     projection_id: str = "eua_projection",
-    counterexample: bool = False,
+    negative_mode: str = "none",
 ) -> dict[str, object]:
     claim = Assertion(
         id=f"{projection_id}_claim",
@@ -76,16 +76,53 @@ def _seed_official(
 
     challenge: Assertion | None = None
     counterexample_refs: list[str] = []
-    if counterexample:
+    if negative_mode != "none":
+        challenge_kwargs: dict[str, object] = {}
+        if negative_mode == "outside":
+            challenge_kwargs = {
+                "scope": {"domain": "shipping"},
+                "environment_versions": {"runtime": "v1", "model": "m1"},
+                "metadata": {"subject_version_refs": [scope.id]},
+            }
+        elif negative_mode == "applicable":
+            challenge_kwargs = {
+                "scope": {"domain": "payments"},
+                "environment_versions": {"runtime": "v1", "model": "m1"},
+                "metadata": {"subject_version_refs": [scope.id]},
+            }
+        elif negative_mode != "unknown":
+            raise ValueError(f"unsupported negative_mode {negative_mode!r}")
+
         challenge = Assertion(
             id=f"{projection_id}_counterexample",
             kind="challenge",
             statement="known counterexample",
             lifecycle_status="current",
             epistemic_status="supported",
+            **challenge_kwargs,
         )
         store.save_record(challenge)
         counterexample_refs.append(challenge.id)
+        if negative_mode in {"applicable", "unknown"}:
+            relation_scope = {"domain": "payments"} if negative_mode == "applicable" else None
+            relation_metadata = (
+                {
+                    "subject_version_refs": [scope.id],
+                    "environment_bindings": {"runtime": "v1", "model": "m1"},
+                }
+                if negative_mode == "applicable"
+                else {}
+            )
+            store.save_relation(
+                RecordRelation(
+                    id=f"{projection_id}_contradiction",
+                    relation_type="contradicts",
+                    subject_ref=challenge.id,
+                    object_ref=claim.id,
+                    scope=relation_scope,
+                    metadata=relation_metadata,
+                )
+            )
 
     grant = create_grant_for_approval(
         principal_ref="human:eua-owner",
@@ -160,13 +197,14 @@ def test_eua_b_allowed_is_read_only_and_freezes_exact_resolved_graph() -> None:
     assert payload["relations"]
 
 
-def test_eua_001_official_projection_is_not_usable_outside_exact_scope() -> None:
+def test_eua_001_official_projection_outside_declared_use_scope_is_blocked() -> None:
     store = InMemoryStateStore()
     seeded = _seed_official(store)
     admission = ExperienceUseAdmissionEvaluator(store).evaluate(
         _requirement(seeded, use_scope={"domain": "shipping"})
     )
-    assert admission.status == "not-applicable"
+    assert admission.status == "blocked"
+    assert any(reason.startswith("scope-mismatch:") for reason in admission.reasons)
 
 
 def test_eua_002_retrieval_hit_does_not_upgrade_candidate_projection() -> None:
@@ -179,10 +217,11 @@ def test_eua_002_retrieval_hit_does_not_upgrade_candidate_projection() -> None:
             use_context={"retrieval_score": 1.0},
         )
     )
-    assert admission.status == "unavailable"
+    assert admission.status == "blocked"
+    assert any("non-usable-lifecycle" in reason for reason in admission.reasons)
 
 
-def test_eua_003_evidence_without_canonical_projection_is_not_usable_experience() -> None:
+def test_eua_003_evidence_without_canonical_projection_is_unavailable() -> None:
     store = InMemoryStateStore()
     store.save_record(EvidenceArtifact(id="orphan_evidence", kind="check"))
     admission = ExperienceUseAdmissionEvaluator(store).evaluate(
@@ -264,22 +303,63 @@ def test_eua_007_same_projection_id_new_canonical_fact_changes_snapshot_digest()
     assert old_payload == first.resolved_snapshot.materialize()
 
 
-def test_eua_008_caller_cannot_omit_canonical_counterexample_from_use_snapshot() -> None:
+def test_eua_008_outside_counterexample_is_visible_but_does_not_block() -> None:
     store = InMemoryStateStore()
-    seeded = _seed_official(store, counterexample=True)
+    seeded = _seed_official(store, negative_mode="outside")
     requirement = _requirement(seeded)
     assert not hasattr(requirement, "counterexample_refs")
 
     admission = ExperienceUseAdmissionEvaluator(store).evaluate(requirement)
 
-    assert admission.status == "blocked"
+    assert admission.status == "allowed"
     payload = admission.resolved_snapshot.materialize()
     challenge = seeded["challenge"]
     assert isinstance(challenge, Assertion)
     assert challenge.id in {item["ref"] for item in payload["resolved_objects"]}
+    assert f"negative-fact-outside-use:{challenge.id}" in admission.reasons
 
 
-def test_eua_009_open_revalidation_relation_blocks_current_use_as_stale() -> None:
+def test_eua_b_applicable_counterexample_bound_to_current_assertion_blocks() -> None:
+    store = InMemoryStateStore()
+    seeded = _seed_official(store, negative_mode="applicable")
+
+    admission = ExperienceUseAdmissionEvaluator(store).evaluate(_requirement(seeded))
+
+    assert admission.status == "blocked"
+    challenge = seeded["challenge"]
+    assert isinstance(challenge, Assertion)
+    assert any(
+        reason.startswith("applicable-contradiction:") and reason.endswith(f":{challenge.id}")
+        for reason in admission.reasons
+    )
+
+
+def test_eua_b_negative_fact_with_unknown_applicability_fails_closed_unavailable() -> None:
+    store = InMemoryStateStore()
+    seeded = _seed_official(store, negative_mode="unknown")
+
+    admission = ExperienceUseAdmissionEvaluator(store).evaluate(_requirement(seeded))
+
+    assert admission.status == "unavailable"
+    assert any(reason.startswith("negative-applicability-unknown:") for reason in admission.reasons)
+
+
+def test_eua_b_unresolved_negative_fact_is_unavailable_not_blocked() -> None:
+    store = InMemoryStateStore()
+    seeded = _seed_official(store)
+    projection = seeded["projection"]
+    assert isinstance(projection, KnowledgeProjection)
+    store.save_knowledge_projection(
+        projection.model_copy(update={"counterexample_refs": ["external:missing-counterexample"]})
+    )
+
+    admission = ExperienceUseAdmissionEvaluator(store).evaluate(_requirement(seeded))
+
+    assert admission.status == "unavailable"
+    assert any(reason.startswith("unresolved:counterexample:") for reason in admission.reasons)
+
+
+def test_eua_009_open_revalidation_relation_marks_current_use_stale() -> None:
     store = InMemoryStateStore()
     seeded = _seed_official(store)
     projection = seeded["projection"]
@@ -301,7 +381,7 @@ def test_eua_009_open_revalidation_relation_blocks_current_use_as_stale() -> Non
     assert any(reason.startswith("requires-revalidation:") for reason in admission.reasons)
 
 
-def test_eua_010_deprecated_or_archived_projection_is_not_usable() -> None:
+def test_eua_010_deprecated_or_archived_projection_is_blocked() -> None:
     store = InMemoryStateStore()
     seeded = _seed_official(store)
     projection = seeded["projection"]
@@ -310,13 +390,97 @@ def test_eua_010_deprecated_or_archived_projection_is_not_usable() -> None:
 
     admission = ExperienceUseAdmissionEvaluator(store).evaluate(_requirement(seeded))
 
-    assert admission.status == "stale"
+    assert admission.status == "blocked"
 
 
-def test_eua_b_empty_selection_is_not_applicable() -> None:
+def test_eua_b_empty_selection_alone_is_not_applicable() -> None:
     store = InMemoryStateStore()
     admission = ExperienceUseAdmissionEvaluator(store).evaluate(ExperienceUseRequirement())
     assert admission.status == "not-applicable"
+    assert admission.allowed is False
+
+
+def test_eua_b_projection_refs_are_exact_reliance_set_with_and_semantics() -> None:
+    store = InMemoryStateStore()
+    allowed_seed = _seed_official(store, projection_id="eua_allowed")
+    blocked_seed = _seed_official(
+        store,
+        projection_id="eua_blocked",
+        negative_mode="applicable",
+    )
+    allowed_projection = allowed_seed["projection"]
+    blocked_projection = blocked_seed["projection"]
+    allowed_scope = allowed_seed["scope"]
+    blocked_scope = blocked_seed["scope"]
+    assert isinstance(allowed_projection, KnowledgeProjection)
+    assert isinstance(blocked_projection, KnowledgeProjection)
+    assert isinstance(allowed_scope, ChangeObjectRecord)
+    assert isinstance(blocked_scope, ChangeObjectRecord)
+
+    requirement = ExperienceUseRequirement(
+        projection_refs=(allowed_projection.id, blocked_projection.id),
+        use_scope={"domain": "payments", "task": "refund-review"},
+        subject_version_refs=(allowed_scope.id, blocked_scope.id),
+        environment_bindings={"runtime": "v1", "model": "m1"},
+        use_context={"judgment_context": "refund-review"},
+    )
+    admission = ExperienceUseAdmissionEvaluator(store).evaluate(requirement)
+
+    assert admission.status == "blocked"
+    payload = admission.resolved_snapshot.materialize()
+    assert {item["id"] for item in payload["projections"]} == {
+        allowed_projection.id,
+        blocked_projection.id,
+    }
+    assert not hasattr(requirement, "top_k")
+    assert not hasattr(requirement, "fallback")
+    assert not hasattr(requirement, "retrieval_score")
+
+
+def test_eua_b_resolved_snapshot_never_substitutes_for_allowed_status() -> None:
+    store = InMemoryStateStore()
+    seeded = _seed_official(store)
+    evaluator = ExperienceUseAdmissionEvaluator(store)
+
+    blocked = evaluator.evaluate(_requirement(seeded, use_scope={"domain": "shipping"}))
+    stale = evaluator.evaluate(
+        _requirement(seeded, environment_bindings={"runtime": "v1", "model": "m2"})
+    )
+    unavailable = evaluator.evaluate(
+        ExperienceUseRequirement(projection_refs=("missing_projection",))
+    )
+
+    assert {blocked.status, stale.status, unavailable.status} == {
+        "blocked",
+        "stale",
+        "unavailable",
+    }
+    for admission in (blocked, stale, unavailable):
+        assert admission.snapshot_digest
+        assert admission.resolved_snapshot.materialize()["schema"] == "resolved-experience-use-snapshot-v1"
+        assert admission.allowed is False
+
+
+def test_eua_b_resolved_blocker_is_not_downgraded_to_unavailable_by_another_missing_projection() -> None:
+    store = InMemoryStateStore()
+    blocked_seed = _seed_official(store, negative_mode="applicable")
+    projection = blocked_seed["projection"]
+    scope = blocked_seed["scope"]
+    assert isinstance(projection, KnowledgeProjection)
+    assert isinstance(scope, ChangeObjectRecord)
+
+    admission = ExperienceUseAdmissionEvaluator(store).evaluate(
+        ExperienceUseRequirement(
+            projection_refs=(projection.id, "missing_projection"),
+            use_scope={"domain": "payments"},
+            subject_version_refs=(scope.id,),
+            environment_bindings={"runtime": "v1", "model": "m1"},
+        )
+    )
+
+    assert admission.status == "blocked"
+    assert any(reason.startswith("projection-unavailable:") for reason in admission.reasons)
+    assert any(reason.startswith("applicable-contradiction:") for reason in admission.reasons)
 
 
 def test_eua_b_requirement_and_snapshot_are_stable_and_immutable() -> None:
@@ -343,7 +507,7 @@ def test_eua_b_requirement_and_snapshot_are_stable_and_immutable() -> None:
     assert first.snapshot_digest == evaluator.evaluate(requirement_a).snapshot_digest
 
 
-def test_eua_b_evaluator_requires_only_read_snapshot_surface() -> None:
+def test_eua_b_evaluator_calls_exactly_one_read_snapshot_surface() -> None:
     store = InMemoryStateStore()
     seeded = _seed_official(store)
     exported = store.export_state()
