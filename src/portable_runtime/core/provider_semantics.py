@@ -1,6 +1,6 @@
 """Explicit provider-visible operation semantics for durable invocation capture.
 
-This module is deliberately non-executing.  A semantic contract classifies
+This module is deliberately non-executing. A semantic contract classifies
 which request/context values define reusable provider operation meaning; it
 never grants qualification, authorization, retry permission, or provider
 execution authority.
@@ -18,10 +18,6 @@ from portable_runtime.core.capabilities import CapabilityRequest, InvocationCont
 
 SemanticValueType = Literal["str", "int", "float", "bool", "json"]
 
-# These fields may be transported to execution code but are never reusable
-# operation authority.  A provider integration that really treats one of
-# these values as business semantics is not compatible with this exact-replay
-# substrate and must use a different, explicitly reviewed contract design.
 _FORBIDDEN_REQUEST_SEMANTIC_FIELDS = frozenset(
     {
         "id",
@@ -45,9 +41,6 @@ _FORBIDDEN_CONTEXT_SEMANTIC_FIELDS = frozenset(
     }
 )
 
-# Metadata keys that are known control-plane / qualification transport.  They
-# may be present without becoming semantic identity.  Unknown metadata is not
-# silently dropped: it must be declared as a typed semantic extension below.
 _NON_SEMANTIC_REQUEST_METADATA = frozenset(
     {
         "authorization_refs",
@@ -91,6 +84,30 @@ def _canonical_json(value: Any) -> str:
 def _sha256(value: Any) -> str:
     raw = value if isinstance(value, str) else _canonical_json(value)
     return hashlib.sha256(raw.encode()).hexdigest()
+
+
+def _projection_identity(canonical_payload: str) -> str:
+    return f"provider_semantics_{_sha256(canonical_payload)}"
+
+
+def _binding_digest(
+    *,
+    provider_id: str,
+    provider_version: str,
+    provider_binding_id: str,
+    semantic_contract_digest: str,
+    descriptor_digest: str,
+) -> str:
+    return _sha256(
+        {
+            "schema": "provider-replay-binding-v1",
+            "provider_id": provider_id,
+            "provider_version": provider_version,
+            "provider_binding_id": provider_binding_id,
+            "semantic_contract_digest": semantic_contract_digest,
+            "descriptor_digest": descriptor_digest,
+        }
+    )
 
 
 def _validate_typed_value(name: str, value: Any, declared: SemanticValueType) -> None:
@@ -180,6 +197,15 @@ class ProviderSemanticProjection(BaseModel):
     contract_digest: str
     canonical_payload: str
 
+    @model_validator(mode="after")
+    def _validate_integrity(self) -> ProviderSemanticProjection:
+        if self.identity != _projection_identity(self.canonical_payload):
+            raise ValueError("provider semantic projection identity mismatch")
+        payload = self.payload()
+        if payload.get("contract_digest") != self.contract_digest:
+            raise ValueError("provider semantic projection contract digest mismatch")
+        return self
+
     def payload(self) -> dict[str, Any]:
         value = json.loads(self.canonical_payload)
         if not isinstance(value, dict):
@@ -196,9 +222,7 @@ def _semantic_extensions(
 ) -> dict[str, Any]:
     unknown = set(metadata) - allowed_nonsemantic - set(declared)
     if unknown:
-        raise ValueError(
-            f"unclassified provider-visible {owner} metadata: {sorted(unknown)}"
-        )
+        raise ValueError(f"unclassified provider-visible {owner} metadata: {sorted(unknown)}")
     result: dict[str, Any] = {}
     for key, value_type in declared.items():
         if key not in metadata:
@@ -236,22 +260,12 @@ def project_provider_semantics(
     context: InvocationContext,
     contract: ProviderSemanticContract,
 ) -> ProviderSemanticProjection:
-    """Project only explicitly classified reusable provider operation meaning.
-
-    Unknown request/context extension values fail closed.  Known qualification
-    and runtime metadata is intentionally excluded from the canonical payload.
-    """
+    """Project only explicitly classified reusable provider operation meaning."""
 
     request_values = request.model_dump(mode="json", exclude_none=False)
     context_values = context.model_dump(mode="json", exclude_none=False)
-    semantic_request = {
-        field: request_values.get(field)
-        for field in contract.request_semantic_fields
-    }
-    semantic_context = {
-        field: context_values.get(field)
-        for field in contract.context_semantic_fields
-    }
+    semantic_request = {field: request_values.get(field) for field in contract.request_semantic_fields}
+    semantic_context = {field: context_values.get(field) for field in contract.context_semantic_fields}
     semantic_request_metadata = _semantic_extensions(
         owner="request",
         metadata=dict(request.metadata or {}),
@@ -288,7 +302,7 @@ def project_provider_semantics(
     }
     canonical = _canonical_json(payload)
     return ProviderSemanticProjection(
-        identity=f"provider_semantics_{_sha256(canonical)}",
+        identity=_projection_identity(canonical),
         contract_digest=contract.digest,
         canonical_payload=canonical,
     )
@@ -306,6 +320,21 @@ class ProviderReplayBinding(BaseModel):
     descriptor_digest: str
     binding_digest: str
 
+    @model_validator(mode="after")
+    def _validate_integrity(self) -> ProviderReplayBinding:
+        expected = _binding_digest(
+            provider_id=self.provider_id,
+            provider_version=self.provider_version,
+            provider_binding_id=self.provider_binding_id,
+            semantic_contract_digest=self.semantic_contract_digest,
+            descriptor_digest=self.descriptor_digest,
+        )
+        if self.binding_digest != expected:
+            raise ValueError("provider replay binding digest mismatch")
+        if not self.provider_binding_id.strip() or self.provider_binding_id == self.provider_id:
+            raise ValueError("stable provider replay binding must be stronger than provider id")
+        return self
+
 
 def build_provider_replay_binding(
     descriptor: ProviderDescriptor,
@@ -313,12 +342,7 @@ def build_provider_replay_binding(
     *,
     provider_binding_id: str,
 ) -> ProviderReplayBinding:
-    """Bind provenance more strongly than a provider-id string.
-
-    ``provider_binding_id`` is an explicit configured stable identity.  It is
-    intentionally not inferred from the mutable registry and may not collapse
-    to the provider id itself.
-    """
+    """Bind provenance more strongly than a provider-id string."""
 
     stable_binding = provider_binding_id.strip()
     if not stable_binding or stable_binding == descriptor.id:
@@ -344,19 +368,17 @@ def build_provider_replay_binding(
         "trust_boundary": descriptor.trust_boundary,
     }
     descriptor_digest = _sha256(descriptor_payload)
-    binding_payload = {
-        "schema": "provider-replay-binding-v1",
-        "provider_id": descriptor.id,
-        "provider_version": descriptor.version,
-        "provider_binding_id": stable_binding,
-        "semantic_contract_digest": contract.digest,
-        "descriptor_digest": descriptor_digest,
-    }
     return ProviderReplayBinding(
         provider_id=descriptor.id,
         provider_version=descriptor.version,
         provider_binding_id=stable_binding,
         semantic_contract_digest=contract.digest,
         descriptor_digest=descriptor_digest,
-        binding_digest=_sha256(binding_payload),
+        binding_digest=_binding_digest(
+            provider_id=descriptor.id,
+            provider_version=descriptor.version,
+            provider_binding_id=stable_binding,
+            semantic_contract_digest=contract.digest,
+            descriptor_digest=descriptor_digest,
+        ),
     )
