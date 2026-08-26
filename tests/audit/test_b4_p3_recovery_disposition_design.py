@@ -70,7 +70,7 @@ def test_p3_audit_dispatch_recovery_mode_is_classification_not_disposition() -> 
             id=attempt.step_id,
             run_id="run:p3",
             step_key="effect",
-            effect_semantics="external-side-effect",
+            effect_semantics="irreversible-opaque",
         ),
         attempt,
     ) == "unknown"
