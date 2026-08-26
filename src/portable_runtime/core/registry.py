@@ -83,7 +83,8 @@ class ProviderRegistry:
                 incarnation = uuid.uuid4().hex
                 configured_execution_identity = f"provider-registration:{descriptor.id}:{incarnation}"
                 authoritative_configuration_ref = f"runtime-registration:{incarnation}"
-            assert authoritative_configuration_ref is not None
+            if authoritative_configuration_ref is None:
+                raise ValueError("provider registration configuration ref is unavailable")
             binding = build_provider_execution_binding(
                 descriptor,
                 configured_execution_identity=configured_execution_identity,
