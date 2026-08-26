@@ -27,6 +27,10 @@ def _request(graph: dict[str, Any], observation_ref: str) -> RecoveryDisposition
     )
 
 
+def _store_for(backend: str, path: Path) -> Any:
+    return InMemoryStateStore() if backend == "memory" else SQLiteStateStore(path)
+
+
 def test_p3b_sqlite_exact_basis_replays_after_store_reopen(tmp_path: Path) -> None:
     path = tmp_path / "p3b-reopen.db"
     first_store = SQLiteStateStore(path)
@@ -58,11 +62,7 @@ def test_p3b_policy_failure_leaves_no_disposition_event(
     backend: str,
     tmp_path: Path,
 ) -> None:
-    store: Any
-    if backend == "memory":
-        store = InMemoryStateStore()
-    else:
-        store = SQLiteStateStore(tmp_path / "p3b-policy-failure.db")
+    store = _store_for(backend, tmp_path / "p3b-policy-failure.db")
     try:
         graph = _seed_subject(store, f"p3b-policy-failure-{backend}")
         observation = _observe(store, graph, instance_ref=f"obs:p3b:failure:{backend}")
@@ -88,11 +88,7 @@ def test_p3b_append_failure_rolls_back_disposition_event(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    store: Any
-    if backend == "memory":
-        store = InMemoryStateStore()
-    else:
-        store = SQLiteStateStore(tmp_path / "p3b-append-failure.db")
+    store = _store_for(backend, tmp_path / "p3b-append-failure.db")
     try:
         graph = _seed_subject(store, f"p3b-append-failure-{backend}")
         observation = _observe(store, graph, instance_ref=f"obs:p3b:append:{backend}")
@@ -120,11 +116,7 @@ def test_p3b_commit_does_not_create_follow_on_execution_state(
     backend: str,
     tmp_path: Path,
 ) -> None:
-    store: Any
-    if backend == "memory":
-        store = InMemoryStateStore()
-    else:
-        store = SQLiteStateStore(tmp_path / "p3b-non-executing.db")
+    store = _store_for(backend, tmp_path / "p3b-non-executing.db")
     try:
         graph = _seed_subject(store, f"p3b-non-executing-{backend}")
         observation = _observe(store, graph, instance_ref=f"obs:p3b:non-exec:{backend}")
