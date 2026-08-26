@@ -22,7 +22,12 @@ from portable_runtime.public_contracts.models import (
 
 
 def _problem(code: str, message: str, *, details: dict[str, Any] | None = None) -> dict[str, Any]:
-    return ApiProblemV1(code=code, message=message, details=details or {}).model_dump(mode="json")
+    return ApiProblemV1(
+        schema="api-problem-v1",
+        code=code,
+        message=message,
+        details=details or {},
+    ).model_dump(mode="json")
 
 
 def _require_local_mutation(request: Request) -> None:
