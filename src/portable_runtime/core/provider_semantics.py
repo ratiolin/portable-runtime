@@ -309,7 +309,12 @@ def project_provider_semantics(
 
 
 class ProviderReplayBinding(BaseModel):
-    """Stable local binding to the configured source-provider execution identity."""
+    """Deterministic representation of a declared source-provider replay binding.
+
+    The binding is locally self-validating but is not proof that
+    ``provider_binding_id`` names the authoritative configured provider instance.
+    That proof is deferred to execution/registry integration.
+    """
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
@@ -342,7 +347,7 @@ def build_provider_replay_binding(
     *,
     provider_binding_id: str,
 ) -> ProviderReplayBinding:
-    """Bind provenance more strongly than a provider-id string."""
+    """Build a stable replay-binding representation, not registry authority."""
 
     stable_binding = provider_binding_id.strip()
     if not stable_binding or stable_binding == descriptor.id:
