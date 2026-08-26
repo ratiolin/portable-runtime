@@ -178,7 +178,11 @@ def test_b4_p1_002_same_observation_instance_replay_is_idempotent(
         first = store.commit_recovery_observation(request)
         second = store.commit_recovery_observation(request)
         assert second.id == first.id
-        events = [event for event in store.list_events(graph["dispatch_ref"]) if event.type == "RecoveryObservationRecorded"]
+        events = [
+            event
+            for event in store.list_events(graph["dispatch_ref"])
+            if event.type == "RecoveryObservationRecorded"
+        ]
         assert [event.id for event in events] == [first.id]
 
 
@@ -192,13 +196,25 @@ def test_b4_p1_003_same_report_new_instance_is_new_recovery_fact(
     with _store(backend, tmp_path, f"new-instance-{backend}") as store:
         graph = _seed_dispatch_graph(store, f"new-instance-{backend}")
         first = store.commit_recovery_observation(
-            _request(module, dispatch_ref=graph["dispatch_ref"], instance_ref="observation-instance:one")
+            _request(
+                module,
+                dispatch_ref=graph["dispatch_ref"],
+                instance_ref="observation-instance:one",
+            )
         )
         second = store.commit_recovery_observation(
-            _request(module, dispatch_ref=graph["dispatch_ref"], instance_ref="observation-instance:two")
+            _request(
+                module,
+                dispatch_ref=graph["dispatch_ref"],
+                instance_ref="observation-instance:two",
+            )
         )
         assert second.id != first.id
-        events = [event for event in store.list_events(graph["dispatch_ref"]) if event.type == "RecoveryObservationRecorded"]
+        events = [
+            event
+            for event in store.list_events(graph["dispatch_ref"])
+            if event.type == "RecoveryObservationRecorded"
+        ]
         assert {event.id for event in events} == {first.id, second.id}
 
 
@@ -213,7 +229,11 @@ def test_b4_p1_004_wrong_action_binding_fails_closed(
         graph = _seed_dispatch_graph(store, f"wrong-action-{backend}")
         attempt = store.get_attempt(graph["attempt_id"])
         assert attempt is not None
-        store.save_attempt(attempt.model_copy(update={"metadata": {**attempt.metadata, "action_ref": "action:forged"}}))
+        store.save_attempt(
+            attempt.model_copy(
+                update={"metadata": {**attempt.metadata, "action_ref": "action:forged"}}
+            )
+        )
         with pytest.raises(ValueError, match="action|dispatch|binding"):
             store.commit_recovery_observation(
                 _request(
@@ -231,20 +251,22 @@ def test_b4_p1_005_direct_recovery_observation_event_append_is_denied(
     backend: str,
     tmp_path: Path,
 ) -> None:
-    with _store(backend, tmp_path, f"direct-event-{backend}") as store:
-        with pytest.raises(ValueError, match="RecoveryObservation|commit_recovery_observation"):
-            store.append_event(
-                Event(
-                    id=f"recovery_observation_forged_{backend}",
-                    type="RecoveryObservationRecorded",
-                    subject_ref="dispatch:forged",
-                    payload={
-                        "schema": "recovery-observation-v1",
-                        "reported_status": "reported-succeeded",
-                        "authoritative_outcome": False,
-                    },
-                )
+    with (
+        _store(backend, tmp_path, f"direct-event-{backend}") as store,
+        pytest.raises(ValueError, match="RecoveryObservation|commit_recovery_observation"),
+    ):
+        store.append_event(
+            Event(
+                id=f"recovery_observation_forged_{backend}",
+                type="RecoveryObservationRecorded",
+                subject_ref="dispatch:forged",
+                payload={
+                    "schema": "recovery-observation-v1",
+                    "reported_status": "reported-succeeded",
+                    "authoritative_outcome": False,
+                },
             )
+        )
 
 
 @pytest.mark.xfail(strict=True, reason="B4-P1: same observation instance rebound protection is not implemented")
