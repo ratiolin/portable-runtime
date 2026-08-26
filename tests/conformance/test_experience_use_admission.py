@@ -245,7 +245,11 @@ def test_eua_007_same_projection_id_different_semantics_changes_snapshot_digest(
 
     claim = seeded["claim"]
     assert isinstance(claim, Assertion)
-    store.save_record(claim.model_copy(update={"statement": "revised claim semantics"}))
+    store.save_record(
+        claim.model_copy(
+            update={"statement": "revised claim semantics", "version": claim.version + 1}
+        )
+    )
     second = evaluator.evaluate(requirement)
 
     assert first.status == second.status == "allowed"
