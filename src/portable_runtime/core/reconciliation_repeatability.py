@@ -26,7 +26,7 @@ from portable_runtime.governance.provider_execution_binding import (
 
 RECONCILIATION_REPEATABILITY_CONTRACT_SCHEMA = "reconciliation-repeatability-contract-v1"
 RECONCILIATION_REPEATABILITY_AUTHORITY_SCHEMA = "reconciliation-repeatability-authority-v1"
-RECONCILIATION_SUBJECT_MODEL = "request-id"
+RECONCILIATION_SUBJECT_MODEL: Literal["request-id"] = "request-id"
 DISPATCH_COMMIT_EVENT = "InvocationDispatchCommitted"
 
 RepeatabilityMode = Literal["repeat-safe", "non-repeat-safe", "unknown"]
