@@ -76,7 +76,7 @@ class LeaseExecutionError(StoreUnavailable):
 def _parse_utc(value: Any) -> datetime | None:
     """Parse a persisted timestamp as an aware UTC datetime.
 
-    ``None`` means no expiry.  Malformed timestamps raise instead of being
+    ``None`` means no expiry. Malformed timestamps raise instead of being
     treated as expired: an unknown lease state must not silently become
     acquirable.
     """
@@ -142,7 +142,6 @@ class SQLiteStateStore:
     )
     # authorization added dynamically via import_state handling
 
-
     def __init__(self, path: Path) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
         self.path = _safe_db_path(path)
@@ -152,6 +151,7 @@ class SQLiteStateStore:
         self._recovery_observation_commit_depth = 0
         self._recovery_disposition_commit_depth = 0
         self._recovery_application_commit_depth = 0
+        self._provider_execution_binding_dispatch_commit_depth = 0
         self._connection = sqlite3.connect(_safe_db_path(path), check_same_thread=False, isolation_level=None)  # NOSONAR  # noqa: E501
         self._connection.row_factory = sqlite3.Row
         with self._lock:
@@ -169,7 +169,7 @@ class SQLiteStateStore:
                 "expires_at TEXT, heartbeat_at TEXT)"
             )
             # Databases created by an earlier development build included a
-            # redundant NOT NULL ``version`` column.  Keep writes compatible
+            # redundant NOT NULL ``version`` column. Keep writes compatible
             # with those files while using the independent lease table as the
             # source of truth.
             self._lease_has_version_column = any(
@@ -329,10 +329,7 @@ class SQLiteStateStore:
                 prepared = prepare_recovery_observation_commit(self, request)
                 existing = self.get_event(prepared.event.id)
                 if existing is not None:
-                    if not same_recovery_observation_semantics(
-                        existing,
-                        prepared.event,
-                    ):
+                    if not same_recovery_observation_semantics(existing, prepared.event):
                         raise ValueError("RecoveryObservation identity rebound")
                     observation = recovery_observation_from_event(existing)
                     if owns_transaction:
@@ -447,7 +444,7 @@ class SQLiteStateStore:
 
     def save_run(self, value: Run) -> None: self._save_checked("run", value)
     def get_run(self, run_id: str) -> Run | None:
-        # The lease table is authoritative.  Overlay its current state so a
+        # The lease table is authoritative. Overlay its current state so a
         # stale run JSON mirror cannot make a caller believe an old owner is
         # still fencing the run.
         with self._lock:
@@ -555,6 +552,15 @@ class SQLiteStateStore:
             raise ValueError("RecoveryDisposition events require commit_recovery_disposition")
         if value.type == "RecoveryApplicationRecorded" and self._recovery_application_commit_depth <= 0:
             raise ValueError("RecoveryApplication events require commit_recovery_application")
+        if (
+            value.type == "InvocationDispatchCommitted"
+            and isinstance(value.payload, dict)
+            and "provider_execution_binding_ref" in value.payload
+            and self._provider_execution_binding_dispatch_commit_depth <= 0
+        ):
+            raise ValueError(
+                "provider execution-binding dispatch events require governed dispatch commit"
+            )
         existing = self._get("event", Event, value.id)
         if existing is not None:
             try:
@@ -600,7 +606,7 @@ class SQLiteStateStore:
         try:
             cursor.execute("ROLLBACK")
         except Exception:
-            # The original operation is the useful diagnostic.  A rollback
+            # The original operation is the useful diagnostic. A rollback
             # failure must never turn an already typed error back into False.
             pass
 
@@ -608,7 +614,7 @@ class SQLiteStateStore:
         """Atomically replace a JSON record only at the expected version.
 
         ``False`` means the predicate matched zero rows (a normal stale/missing
-        record conflict).  Any SQL/transaction failure raises
+        record conflict). Any SQL/transaction failure raises
         :class:`CASExecutionError`; there is intentionally no permissive
         insert/upsert fallback.
         """
@@ -1020,7 +1026,7 @@ class SQLiteStateStore:
     def import_state(self, state: dict[str, list[dict[str, object]]]) -> None:
         with self._lock:
             # A state import is a compare/validate/replace operation against a
-            # single locked database snapshot.  BEGIN IMMEDIATE prevents a
+            # single locked database snapshot. BEGIN IMMEDIATE prevents a
             # concurrent writer from changing the graph after validation but
             # before the replacement rows are committed.
             if "authorization" not in self._types:
@@ -1104,7 +1110,6 @@ class SQLiteStateStore:
     def import_bundle(self, bundle_path: Path, artifact_store: Any | None = None) -> dict[str, Any]:
         from .bundle import import_bundle as _import_bundle
         return _import_bundle(self, artifact_store, bundle_path)
-
 
 
 
