@@ -233,7 +233,7 @@ def test_b4_p1_004_wrong_action_binding_fails_closed(
                 update={"metadata": {**attempt.metadata, "action_ref": "action:forged"}}
             )
         )
-        with pytest.raises(ValueError, match="action|dispatch|binding"):
+        with pytest.raises(ValueError, match="(?i)action|dispatch|binding"):
             store.commit_recovery_observation(
                 _request(
                     module,
