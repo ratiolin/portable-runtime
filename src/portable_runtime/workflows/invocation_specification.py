@@ -1,7 +1,7 @@
 """Local durable, non-executing invocation specification authority.
 
 A DurableInvocationSpecification preserves reusable provider operation meaning,
-source provenance and replay identity.  It deliberately does not materialize a
+source provenance and replay identity. It deliberately does not materialize a
 fresh request, issue a permit, create an Attempt/dispatch, or invoke a provider.
 """
 
@@ -12,13 +12,14 @@ import json
 from dataclasses import dataclass
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, model_validator
 
 from portable_runtime.core.capabilities import CapabilityRequest, InvocationContext, ProviderDescriptor
 from portable_runtime.core.models import Event
 from portable_runtime.core.provider_semantics import (
     ProviderReplayBinding,
     ProviderSemanticContract,
+    ProviderSemanticProjection,
     build_provider_replay_binding,
     project_provider_semantics,
 )
@@ -65,6 +66,31 @@ class DurableInvocationSpecification(BaseModel):
     idempotency_key: str | None = None
     effect_semantics: str
 
+    @model_validator(mode="after")
+    def _validate_internal_integrity(self) -> DurableInvocationSpecification:
+        """Close semantic payload/contract/provider binding into one graph.
+
+        ProviderSemanticProjection owns the canonical-payload -> identity and
+        payload -> contract-digest rules. Reusing that validator here avoids a
+        second hash implementation at the durable specification boundary.
+        """
+
+        projection = ProviderSemanticProjection(
+            identity=self.semantic_identity,
+            contract_digest=self.semantic_contract_digest,
+            canonical_payload=self.canonical_semantic_payload,
+        )
+        if self.provider_binding.semantic_contract_digest != self.semantic_contract_digest:
+            raise ValueError(
+                "InvocationSpecification semantic contract does not match provider replay binding"
+            )
+        projection_provider = projection.payload().get("provider_id")
+        if projection_provider != self.provider_binding.provider_id:
+            raise ValueError(
+                "InvocationSpecification semantic provider does not match provider replay binding"
+            )
+        return self
+
 
 @dataclass(frozen=True)
 class InvocationSpecificationCommitPlan:
@@ -84,7 +110,7 @@ def _specification_identity_payload(
     idempotency_key: str | None,
     effect_semantics: str,
 ) -> dict[str, Any]:
-    # The semantic identity is content-addressed independently.  The durable
+    # The semantic identity is content-addressed independently. The durable
     # authority instance additionally binds exact source/replay provenance so
     # a different historical request cannot silently become the same fact.
     return {
@@ -171,6 +197,9 @@ def invocation_specification_from_event(event: Event) -> DurableInvocationSpecif
     raw = event.payload.get("specification")
     if not isinstance(raw, dict):
         raise ValueError("InvocationSpecification event is missing specification payload")
+    # DurableInvocationSpecification validation reuses ProviderSemanticProjection
+    # validation, so decode cannot accept a payload/identity/contract/provider
+    # combination whose individual hashes are valid but whose graph is not.
     specification = DurableInvocationSpecification.model_validate(raw)
     if specification.id != event.id:
         raise ValueError("InvocationSpecification event/specification identity mismatch")
