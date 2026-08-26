@@ -24,6 +24,23 @@ PROVIDER_EXECUTION_BINDING_SCHEMA = "provider-execution-binding-v1"
 DISPATCH_COMMIT_EVENT = "InvocationDispatchCommitted"
 
 
+def dispatch_has_provider_execution_binding_authority(event: Event) -> bool:
+    """Classify an input that attempts to carry B execution-binding authority.
+
+    The classification is deliberately broader than the current valid dispatch
+    serialization shape. A ref-only or embedded-binding-only dispatch still
+    attempts to carry B authority and must not bypass direct-append/P5 gates.
+    This predicate says nothing about graph validity or execution authority.
+    """
+
+    if event.type != DISPATCH_COMMIT_EVENT or not isinstance(event.payload, dict):
+        return False
+    return (
+        "provider_execution_binding_ref" in event.payload
+        or "provider_execution_binding" in event.payload
+    )
+
+
 def _canonical(value: object) -> str:
     return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False, default=str)
 
