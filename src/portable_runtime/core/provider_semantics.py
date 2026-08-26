@@ -74,7 +74,7 @@ _NON_SEMANTIC_REQUEST_METADATA = frozenset(
         "recovery_timing",
     }
 )
-_NON_SEMANTIC_CONTEXT_METADATA = frozenset()
+_NON_SEMANTIC_CONTEXT_METADATA: frozenset[str] = frozenset()
 
 
 def _canonical_json(value: Any) -> str:
