@@ -56,6 +56,7 @@ class InMemoryStateStore:
         self._terminal_commit_depth = 0
         self._outcome_impact_commit_depth = 0
         self._recovery_observation_commit_depth = 0
+        self._recovery_disposition_commit_depth = 0
 
     _SEMANTIC_KINDS = frozenset({"record", "relation", "authorization", "authorization_use", "knowledge_projection"})
 
@@ -169,6 +170,25 @@ class InMemoryStateStore:
             finally:
                 self._recovery_observation_commit_depth -= 1
             return prepared.observation
+
+    def commit_recovery_disposition(self, request: Any, policy: Any) -> Any:
+        """Atomically commit or replay one exact-basis recovery disposition."""
+        from portable_runtime.workflows.recovery_disposition_commit import (
+            prepare_recovery_disposition_commit,
+        )
+
+        with self.transaction():
+            plan = prepare_recovery_disposition_commit(self, request, policy)
+            if plan.replayed:
+                return plan.disposition
+            if plan.event is None:
+                raise ValueError("RecoveryDisposition commit plan is missing its durable event")
+            self._recovery_disposition_commit_depth += 1
+            try:
+                self.append_event(plan.event)
+            finally:
+                self._recovery_disposition_commit_depth -= 1
+            return plan.disposition
 
     def _validate_candidate_write(self, kind: str, value: BaseModel) -> None:
         """Validate semantic writes against the full current graph."""
@@ -287,6 +307,8 @@ class InMemoryStateStore:
             raise ValueError("Outcome impact authority events require commit_outcome_impact_judgment")
         if value.type == "RecoveryObservationRecorded" and self._recovery_observation_commit_depth <= 0:
             raise ValueError("RecoveryObservation events require commit_recovery_observation")
+        if value.type == "RecoveryDispositionRecorded" and self._recovery_disposition_commit_depth <= 0:
+            raise ValueError("RecoveryDisposition events require commit_recovery_disposition")
         with self._lock:
             existing = self._records.get("event", {}).get(value.id)
             if existing is not None:
@@ -598,4 +620,3 @@ class InMemoryStateStore:
                     self._records[kind][identifier] = (
                         self._snapshot(value) if kind in self._SEMANTIC_KINDS else value
                     )
-
