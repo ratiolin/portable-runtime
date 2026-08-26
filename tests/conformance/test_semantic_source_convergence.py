@@ -6,8 +6,8 @@ from portable_runtime.governance.assignment import (
     resolve_allowed,
 )
 from portable_runtime.governance.distinction import (
-    DISTINCTION_GOVERNANCE_CONTRACT_VERSION as runtime_contract,
-    DISTINCTION_GOVERNANCE_SOURCE_COMMIT as runtime_executable_baseline,
+    DISTINCTION_GOVERNANCE_CONTRACT_VERSION as RUNTIME_CONTRACT,
+    DISTINCTION_GOVERNANCE_SOURCE_COMMIT as RUNTIME_EXECUTABLE_BASELINE,
 )
 from portable_runtime.governance.semantic_sources import (
     ADOPTED_SEMANTIC_REVISION,
@@ -37,11 +37,11 @@ def test_manifest_matches_runtime_and_semantic_source_pins() -> None:
     assert framework["version"] == FRAMEWORK_VERSION
     assert framework["adopted_semantic_revision"] == ADOPTED_SEMANTIC_REVISION
     assert distinction["contract"] == DISTINCTION_GOVERNANCE_CONTRACT_VERSION
-    assert distinction["contract"] == runtime_contract
+    assert distinction["contract"] == RUNTIME_CONTRACT
     assert (
         distinction["executable_baseline_commit"]
         == DISTINCTION_GOVERNANCE_EXECUTABLE_BASELINE_COMMIT
-        == runtime_executable_baseline
+        == RUNTIME_EXECUTABLE_BASELINE
     )
     assert distinction["adopted_semantic_revision"] == ADOPTED_SEMANTIC_REVISION
 
