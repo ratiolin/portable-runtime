@@ -55,6 +55,7 @@ class InMemoryStateStore:
         self._lock = threading.RLock()
         self._terminal_commit_depth = 0
         self._outcome_impact_commit_depth = 0
+        self._recovery_observation_commit_depth = 0
 
     _SEMANTIC_KINDS = frozenset({"record", "relation", "authorization", "authorization_use", "knowledge_projection"})
 
@@ -146,6 +147,28 @@ class InMemoryStateStore:
             finally:
                 self._outcome_impact_commit_depth -= 1
             return committed_outcome_impact(prepared)
+
+    def commit_recovery_observation(self, request: Any) -> Any:
+        """Atomically commit or replay one recovery observation."""
+        from portable_runtime.workflows.recovery_observation import (
+            prepare_recovery_observation_commit,
+            recovery_observation_from_event,
+            same_recovery_observation_semantics,
+        )
+
+        with self.transaction():
+            prepared = prepare_recovery_observation_commit(self, request)
+            existing = self.get_event(prepared.event.id)
+            if existing is not None:
+                if not same_recovery_observation_semantics(existing, prepared.event):
+                    raise ValueError("RecoveryObservation identity rebound")
+                return recovery_observation_from_event(existing)
+            self._recovery_observation_commit_depth += 1
+            try:
+                self.append_event(prepared.event)
+            finally:
+                self._recovery_observation_commit_depth -= 1
+            return prepared.observation
 
     def _validate_candidate_write(self, kind: str, value: BaseModel) -> None:
         """Validate semantic writes against the full current graph."""
@@ -262,6 +285,8 @@ class InMemoryStateStore:
 
         if value.type in OUTCOME_IMPACT_AUTHORITY_EVENT_TYPES and self._outcome_impact_commit_depth <= 0:
             raise ValueError("Outcome impact authority events require commit_outcome_impact_judgment")
+        if value.type == "RecoveryObservationRecorded" and self._recovery_observation_commit_depth <= 0:
+            raise ValueError("RecoveryObservation events require commit_recovery_observation")
         with self._lock:
             existing = self._records.get("event", {}).get(value.id)
             if existing is not None:

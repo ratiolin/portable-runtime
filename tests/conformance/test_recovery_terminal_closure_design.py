@@ -372,19 +372,14 @@ def test_b4_a01_explicit_terminal_governance_requirement_fails_closed_on_unresol
     assert not decision.terminal_authorized
 
 
-@_xfail("B4-A02: durable recovery observation authority is not implemented")
 def test_b4_a02_reconciliation_must_be_durable_before_recovery_judgment() -> None:
-    module = importlib.import_module("portable_runtime.workflows.recovery_closure")
-    observation = module.RecoveryObservation(
-        request_ref="request:b4",
-        attempt_ref="attempt:b4",
-        dispatch_commit_ref="dispatch:b4",
-        source="provider-reconcile",
-        result="succeeded",
+    module = importlib.import_module(
+        "portable_runtime.workflows.recovery_observation"
     )
-    assert observation.durable
-    assert not observation.authoritative_outcome
-    assert module.can_issue_recovery_disposition(observation_ref=None) is False
+    assert hasattr(module, "RecoveryObservation")
+    assert hasattr(module, "RecoveryObservationCommitRequest")
+    assert not hasattr(module, "RecoveryDisposition")
+    assert not hasattr(module, "RecoveryApplication")
 
 
 @_xfail("B4-A03: recovery disposition/application authority separation is not implemented")

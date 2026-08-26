@@ -201,6 +201,60 @@ class Runtime:
             )
         result = await self.capabilities.reconcile(last.request_ref, last.provider_id)
         if result:
+            metadata = last.metadata if isinstance(last.metadata, dict) else {}
+            dispatch_commit_ref = metadata.get("dispatch_commit_ref")
+            if isinstance(dispatch_commit_ref, str) and dispatch_commit_ref:
+                from portable_runtime.workflows.recovery_observation import (
+                    RecoveryObservationCommitRequest,
+                    reported_status_from_capability_status,
+                )
+
+                commit_observation = getattr(
+                    self.store,
+                    "commit_recovery_observation",
+                    None,
+                )
+                try:
+                    if not callable(commit_observation):
+                        raise RuntimeError(
+                            "StateStore lacks commit_recovery_observation"
+                        )
+                    observation = commit_observation(
+                        RecoveryObservationCommitRequest(
+                            observation_instance_ref=new_id(
+                                "recovery_observation_instance"
+                            ),
+                            dispatch_commit_ref=dispatch_commit_ref,
+                            observation_source="provider-reconcile",
+                            reported_status=reported_status_from_capability_status(
+                                result.status
+                            ),
+                            provenance_refs=(last.provider_id,),
+                        )
+                    )
+                    result = result.model_copy(
+                        update={
+                            "metadata": {
+                                **result.metadata,
+                                "recovery_observation_ref": observation.id,
+                            }
+                        }
+                    )
+                except Exception as exc:
+                    step.status = "unknown"
+                    self.store.save_step(step)  # type: ignore
+                    return CapabilityResult(
+                        request_id=last.request_ref,
+                        provider_id=last.provider_id,
+                        status="unknown",
+                        message=(
+                            "reconciliation result could not be durably observed"
+                        ),
+                        error={
+                            "code": "RecoveryObservationCommitFailed",
+                            "reason": str(exc),
+                        },
+                    )
             if result.status == "unknown":
                 step.status = "unknown"
                 self.store.save_step(step)  # type: ignore

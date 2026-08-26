@@ -149,6 +149,7 @@ class SQLiteStateStore:
         self._lock = threading.RLock()
         self._terminal_commit_depth = 0
         self._outcome_impact_commit_depth = 0
+        self._recovery_observation_commit_depth = 0
         self._connection = sqlite3.connect(_safe_db_path(path), check_same_thread=False, isolation_level=None)  # NOSONAR  # noqa: E501
         self._connection.row_factory = sqlite3.Row
         with self._lock:
@@ -310,6 +311,44 @@ class SQLiteStateStore:
                     self._rollback(self._connection.cursor())
                 raise
 
+    def commit_recovery_observation(self, request: Any) -> Any:
+        """Writer-serialized commit/replay of one recovery observation."""
+        from portable_runtime.workflows.recovery_observation import (
+            prepare_recovery_observation_commit,
+            recovery_observation_from_event,
+            same_recovery_observation_semantics,
+        )
+
+        with self._lock:
+            owns_transaction = not self._connection.in_transaction
+            if owns_transaction:
+                self._connection.execute("BEGIN IMMEDIATE")
+            try:
+                prepared = prepare_recovery_observation_commit(self, request)
+                existing = self.get_event(prepared.event.id)
+                if existing is not None:
+                    if not same_recovery_observation_semantics(
+                        existing,
+                        prepared.event,
+                    ):
+                        raise ValueError("RecoveryObservation identity rebound")
+                    observation = recovery_observation_from_event(existing)
+                    if owns_transaction:
+                        self._connection.execute("COMMIT")
+                    return observation
+                self._recovery_observation_commit_depth += 1
+                try:
+                    self.append_event(prepared.event)
+                finally:
+                    self._recovery_observation_commit_depth -= 1
+                if owns_transaction:
+                    self._connection.execute("COMMIT")
+                return prepared.observation
+            except Exception:
+                if owns_transaction:
+                    self._rollback(self._connection.cursor())
+                raise
+
     def _validate_candidate_write(self, kind: str, value: Any) -> None:
         """Validate semantic writes against the complete current graph."""
         from portable_runtime.protocol.validation import assert_valid_candidate_write
@@ -452,6 +491,8 @@ class SQLiteStateStore:
 
         if value.type in OUTCOME_IMPACT_AUTHORITY_EVENT_TYPES and self._outcome_impact_commit_depth <= 0:
             raise ValueError("Outcome impact authority events require commit_outcome_impact_judgment")
+        if value.type == "RecoveryObservationRecorded" and self._recovery_observation_commit_depth <= 0:
+            raise ValueError("RecoveryObservation events require commit_recovery_observation")
         existing = self._get("event", Event, value.id)
         if existing is not None:
             try:

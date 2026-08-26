@@ -12,7 +12,10 @@ from typing import Any
 
 import pytest
 
+from portable_runtime.core.capabilities import CapabilityResult, ProviderDescriptor
 from portable_runtime.core.models import Action, Event, Run, Step, StepAttempt, Work
+from portable_runtime.core.registry import ProviderRegistry
+from portable_runtime.core.runtime import Runtime
 from portable_runtime.stores.memory import InMemoryStateStore
 from portable_runtime.stores.sqlite import SQLiteStateStore
 
@@ -132,7 +135,6 @@ def _request(module: Any, *, dispatch_ref: str, instance_ref: str, status: str =
     )
 
 
-@pytest.mark.xfail(strict=True, reason="B4-P1: durable RecoveryObservation is not implemented")
 @pytest.mark.parametrize("backend", ["memory", "sqlite"])
 def test_b4_p1_001_reported_success_becomes_durable_non_objective_observation(
     backend: str,
@@ -161,7 +163,6 @@ def test_b4_p1_001_reported_success_becomes_durable_non_objective_observation(
         assert store.get_run(graph["run_id"]).status != "succeeded"
 
 
-@pytest.mark.xfail(strict=True, reason="B4-P1: RecoveryObservation replay identity is not implemented")
 @pytest.mark.parametrize("backend", ["memory", "sqlite"])
 def test_b4_p1_002_same_observation_instance_replay_is_idempotent(
     backend: str,
@@ -186,7 +187,6 @@ def test_b4_p1_002_same_observation_instance_replay_is_idempotent(
         assert [event.id for event in events] == [first.id]
 
 
-@pytest.mark.xfail(strict=True, reason="B4-P1: observation instance identity is not implemented")
 @pytest.mark.parametrize("backend", ["memory", "sqlite"])
 def test_b4_p1_003_same_report_new_instance_is_new_recovery_fact(
     backend: str,
@@ -218,7 +218,6 @@ def test_b4_p1_003_same_report_new_instance_is_new_recovery_fact(
         assert {event.id for event in events} == {first.id, second.id}
 
 
-@pytest.mark.xfail(strict=True, reason="B4-P1: dispatch/action graph validation is not implemented")
 @pytest.mark.parametrize("backend", ["memory", "sqlite"])
 def test_b4_p1_004_wrong_action_binding_fails_closed(
     backend: str,
@@ -245,7 +244,6 @@ def test_b4_p1_004_wrong_action_binding_fails_closed(
         assert not any(event.type == "RecoveryObservationRecorded" for event in store.list_events())
 
 
-@pytest.mark.xfail(strict=True, reason="B4-P1: direct RecoveryObservation event bypass is not closed")
 @pytest.mark.parametrize("backend", ["memory", "sqlite"])
 def test_b4_p1_005_direct_recovery_observation_event_append_is_denied(
     backend: str,
@@ -269,7 +267,6 @@ def test_b4_p1_005_direct_recovery_observation_event_append_is_denied(
         )
 
 
-@pytest.mark.xfail(strict=True, reason="B4-P1: same observation instance rebound protection is not implemented")
 @pytest.mark.parametrize("backend", ["memory", "sqlite"])
 def test_b4_p1_006_same_instance_cannot_be_rebound_to_new_report(
     backend: str,
@@ -295,3 +292,60 @@ def test_b4_p1_006_same_instance_cannot_be_rebound_to_new_report(
                     status="reported-failed",
                 )
             )
+
+
+class _RuntimeReconcileProvider:
+    descriptor = ProviderDescriptor(
+        id="provider:reconcile",
+        name="reconcile",
+        version="1",
+        capabilities=["deploy.apply"],
+        effect_semantics="reconcilable",
+        side_effect_class="reconcilable",
+    )
+
+    async def reconcile(self, request_id: str) -> CapabilityResult:
+        return CapabilityResult(
+            request_id=request_id,
+            provider_id=self.descriptor.id,
+            status="succeeded",
+        )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("backend", ["memory", "sqlite"])
+async def test_b4_p1_007_runtime_reconcile_records_new_non_objective_observation(
+    backend: str,
+    tmp_path: Path,
+) -> None:
+    with _store(backend, tmp_path, f"runtime-reconcile-{backend}") as store:
+        graph = _seed_dispatch_graph(store, f"runtime-reconcile-{backend}")
+        registry = ProviderRegistry()
+        registry.register(_RuntimeReconcileProvider())  # type: ignore[arg-type]
+        runtime = Runtime(store=store, registry=registry)
+
+        first = await runtime.reconcile(graph["step_id"])
+        second = await runtime.reconcile(graph["step_id"])
+
+        assert first is not None and second is not None
+        assert first.status == "succeeded" and second.status == "succeeded"
+        assert (
+            first.metadata["recovery_observation_ref"]
+            != second.metadata["recovery_observation_ref"]
+        )
+        observations = [
+            event
+            for event in store.list_events(graph["dispatch_ref"])
+            if event.type == "RecoveryObservationRecorded"
+        ]
+        assert len(observations) == 2
+        assert {event.payload["reported_status"] for event in observations} == {
+            "reported-succeeded"
+        }
+        assert all(
+            event.payload["authoritative_outcome"] is False
+            for event in observations
+        )
+        assert store.list_records("Outcome") == []
+        assert store.get_work(graph["work_id"]).status != "completed"
+        assert store.get_run(graph["run_id"]).status != "succeeded"
