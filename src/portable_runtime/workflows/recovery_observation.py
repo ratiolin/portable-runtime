@@ -18,6 +18,7 @@ from dataclasses import dataclass
 from typing import Any, Literal, Protocol, cast
 
 from portable_runtime.core.models import Action, Event, Step, StepAttempt
+from portable_runtime.governance.dispatch import dispatch_commit_identity_from_payload
 
 RECOVERY_OBSERVATION_EVENT = "RecoveryObservationRecorded"
 RECOVERY_OBSERVATION_SCHEMA = "recovery-observation-v1"
@@ -126,16 +127,7 @@ def recovery_application_observation_identity(recovery_application_ref: str) -> 
 
 
 def _dispatch_commit_ref(payload: dict[str, Any]) -> str:
-    identity = {
-        "schema": payload.get("schema"),
-        "request_id": payload.get("request_id"),
-        "provider_id": payload.get("provider_id"),
-        "attempt_id": payload.get("attempt_ref"),
-        "invocation_permit_digest": payload.get("invocation_permit_digest"),
-        "governance_requirement_digest": payload.get("governance_requirement_digest"),
-        "governance_snapshot_digest": payload.get("governance_snapshot_digest"),
-    }
-    return f"dispatch_{_digest(identity)}"
+    return dispatch_commit_identity_from_payload(payload)
 
 
 def reported_status_from_capability_status(status: str) -> RecoveryReportedStatus:
@@ -309,9 +301,7 @@ def prepare_recovery_observation_commit(
         "schema": RECOVERY_OBSERVATION_SCHEMA,
         "observation_instance_ref": instance_ref,
     }
-    observation_id = (
-        f"recovery_observation_{_digest(observation_identity)[:32]}"
-    )
+    observation_id = f"recovery_observation_{_digest(observation_identity)[:32]}"
     event_payload = {
         "schema": RECOVERY_OBSERVATION_SCHEMA,
         "semantic_level": "recovery-observation",

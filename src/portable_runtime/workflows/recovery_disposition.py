@@ -16,6 +16,7 @@ from portable_runtime.governance.dispatch import (
     DISPATCH_COMMIT_EVENT,
     DISPATCH_COMMIT_SCHEMA,
     DispatchRecoveryMode,
+    dispatch_commit_identity_from_payload,
     dispatch_recovery_mode,
 )
 from portable_runtime.records.models import OutcomeRecord
@@ -147,16 +148,7 @@ def _canonical_refs(refs: tuple[str, ...], label: str, *, required: bool) -> tup
 
 
 def _dispatch_identity(payload: dict[str, Any]) -> str:
-    identity = {
-        "schema": payload.get("schema"),
-        "request_id": payload.get("request_id"),
-        "provider_id": payload.get("provider_id"),
-        "attempt_id": payload.get("attempt_ref"),
-        "invocation_permit_digest": payload.get("invocation_permit_digest"),
-        "governance_requirement_digest": payload.get("governance_requirement_digest"),
-        "governance_snapshot_digest": payload.get("governance_snapshot_digest"),
-    }
-    return f"dispatch_{_digest(identity)}"
+    return dispatch_commit_identity_from_payload(payload)
 
 
 def _basis_identity(

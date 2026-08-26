@@ -1,9 +1,9 @@
 """Unified B4 reconciliation substrate production decision freeze.
 
-A application-bound observation authority is now supported locally through
-opt-in stores. B configured-provider execution binding, C repeatability
-authority, reconciliation consumer, provider calls, DIS-015, PVP-007, retry,
-fresh invocation authority, and P5 authority remain closed.
+A application-bound observation authority and B configured-provider execution
+binding are supported locally. C repeatability authority, reconciliation
+consumer, provider reconciliation calls, DIS-015, PVP-007, retry, fresh
+invocation authority, and P5 authority remain closed.
 """
 
 from __future__ import annotations
@@ -11,14 +11,31 @@ from __future__ import annotations
 import importlib
 import importlib.util
 import inspect
+from typing import Any
 
 import pytest
 
-from portable_runtime.core.capabilities import ProviderDescriptor
+from portable_runtime.core.boundary import RealityBoundary
+from portable_runtime.core.capabilities import (
+    CapabilityRequest,
+    CapabilityResult,
+    InvocationContext,
+    ProviderDescriptor,
+    ProviderHealth,
+)
 from portable_runtime.core.models import Event
 from portable_runtime.core.provider_semantics import ProviderReplayBinding
-from portable_runtime.governance.dispatch import GovernanceDispatchCommitter
+from portable_runtime.core.registry import ProviderRegistry
+from portable_runtime.governance.dispatch import DISPATCH_COMMIT_EVENT
+from portable_runtime.governance.distinction import DistinctionState, UseContext
+from portable_runtime.governance.persistence import InMemoryDistinctionGovernancePersistence
+from portable_runtime.governance.provider_execution_binding import (
+    provider_execution_binding_from_dispatch,
+    reject_historical_execution_binding_backfill,
+)
+from portable_runtime.governance.use_admission import GovernanceUseRequirement
 from portable_runtime.interfaces.provider import CapabilityProvider
+from portable_runtime.stores.memory import InMemoryStateStore
 from portable_runtime.stores.recovery_application_observation import (
     RecoveryApplicationObservationInMemoryStateStore,
 )
@@ -56,22 +73,12 @@ def test_rsf_current_provider_protocol_has_no_repeatability_authority() -> None:
     assert "reconciliation_repeatability_contract" not in fields
 
 
-def test_rsf_current_provider_execution_binding_module_is_absent() -> None:
-    assert importlib.util.find_spec("portable_runtime.governance.provider_execution_binding") is None
-
-
 def test_rsf_v1_does_not_authorize_reconciliation_attempt_fact() -> None:
     assert importlib.util.find_spec("portable_runtime.workflows.recovery_reconciliation_attempt") is None
 
 
 def test_rsf_v1_does_not_authorize_generic_application_consumed_fact() -> None:
     assert importlib.util.find_spec("portable_runtime.workflows.recovery_application_consumed") is None
-
-
-def test_rsf_current_dispatch_has_no_configured_execution_binding() -> None:
-    source = inspect.getsource(GovernanceDispatchCommitter.commit)
-    assert "provider_execution_binding" not in source
-    assert "configured_execution_identity" not in source
 
 
 def test_rsf_local_provider_replay_binding_remains_non_authoritative_representation() -> None:
@@ -115,45 +122,129 @@ def test_rsf_003_bound_observation_direct_append_and_import_are_closed() -> None
         store.import_state({"event": [forged.model_dump(mode="json")]})
 
 
-@_xfail("B4 RSF-004: configured-provider binding originates from authoritative provider path")
-def test_rsf_004_execution_binding_has_authoritative_origin() -> None:
-    module = importlib.import_module("portable_runtime.governance.provider_execution_binding")
-    fixture = module.ProviderExecutionBindingAuditFixture.example()
-    binding = fixture.capture_from_authoritative_selection()
-    assert binding.authoritative_configuration_ref == fixture.configuration_ref
+class _BindingProvider:
+    def __init__(self, store: InMemoryStateStore | None = None) -> None:
+        self.store = store
+        self.calls = 0
+        self.descriptor = ProviderDescriptor(
+            id="provider:rsf-b",
+            name="RSF B provider",
+            version="1",
+            capabilities=["test.read"],
+            effect_semantics="pure",
+            side_effect_class="pure",
+            reversibility="reversible",
+        )
+
+    async def health(self) -> ProviderHealth:
+        return ProviderHealth(provider_id=self.descriptor.id, available=True)
+
+    async def invoke(
+        self,
+        request: CapabilityRequest,
+        context: InvocationContext,
+    ) -> CapabilityResult:
+        del context
+        self.calls += 1
+        if self.store is not None:
+            dispatches = [
+                event
+                for event in self.store.list_events()
+                if event.type == DISPATCH_COMMIT_EVENT and event.subject_ref == request.id
+            ]
+            assert len(dispatches) == 1
+            assert "provider_execution_binding_ref" in dispatches[0].payload
+            provider_execution_binding_from_dispatch(dispatches[0])
+        return CapabilityResult(
+            request_id=request.id,
+            provider_id=self.descriptor.id,
+            status="succeeded",
+        )
+
+    async def cancel(self, request_id: str) -> None:
+        del request_id
+
+    async def reconcile(self, request_id: str) -> CapabilityResult | None:
+        del request_id
+        raise AssertionError("C/consumer is not authorized")
 
 
-@_xfail("B4 RSF-005: execution binding capture precedes or linearizes with reality-exit authorization")
-def test_rsf_005_execution_binding_is_durable_before_reality_exit_can_be_ambiguous() -> None:
-    module = importlib.import_module("portable_runtime.governance.provider_execution_binding")
-    plan = module.ProviderExecutionBindingAuditFixture.example().capture_plan()
-    assert plan.binding_durable_before_provider_call is True
-    assert plan.provider_call_before_binding_commit is False
+def _state() -> DistinctionState:
+    return DistinctionState(
+        qualification="qualified",
+        activation="active",
+        scope=frozenset({"a"}),
+        partition=(frozenset({"a"}),),
+        version=1,
+    )
 
 
-@_xfail("B4 RSF-006: same-id provider replacement cannot satisfy historical execution binding")
+def _requirement(_request: CapabilityRequest) -> GovernanceUseRequirement:
+    return GovernanceUseRequirement(
+        scheme_id="d",
+        use_context=UseContext("ctx", frozenset({"a"})),
+    )
+
+
+def _register(registry: ProviderRegistry, provider: _BindingProvider, suffix: str) -> None:
+    registry.register(
+        provider,
+        configured_execution_identity=f"configured:rsf:{suffix}",
+        authoritative_configuration_ref=f"provider-config:rsf:{suffix}",
+    )
+
+
+def test_rsf_004_execution_binding_has_registry_authoritative_origin() -> None:
+    registry = ProviderRegistry()
+    provider = _BindingProvider()
+    _register(registry, provider, "004")
+    captured, binding = registry.capture_execution_target(
+        provider.descriptor.id,
+        expected_provider=provider,
+    )
+    assert captured is provider
+    assert binding.configured_execution_identity == "configured:rsf:004"
+    assert binding.authoritative_configuration_ref == "provider-config:rsf:004"
+
+
+async def test_rsf_005_binding_is_durable_before_provider_reality_exit() -> None:
+    store = InMemoryStateStore()
+    InMemoryDistinctionGovernancePersistence(store).seed_state("d", _state())
+    provider = _BindingProvider(store)
+    registry = ProviderRegistry()
+    _register(registry, provider, "005")
+    boundary = RealityBoundary(
+        store=store,
+        registry=registry,
+        governance_requirement_resolver=_requirement,
+    )
+    request = CapabilityRequest(
+        id="request:rsf:005",
+        capability="test.read",
+        idempotency_key="idem:rsf:005",
+    )
+    result = await boundary.execute(request)
+    assert result.status == "succeeded"
+    assert provider.calls == 1
+
+
 def test_rsf_006_same_id_replacement_fails_exact_target_resolution() -> None:
-    module = importlib.import_module("portable_runtime.governance.provider_execution_binding")
-    source = module.ProviderExecutionBinding.example(
-        provider_id="provider:a",
-        configured_execution_identity="configured:source",
-    )
-    replacement = module.ProviderExecutionBinding.example(
-        provider_id="provider:a",
-        configured_execution_identity="configured:replacement",
-    )
-    result = module.resolve_historical_reconciliation_target(source, replacement)
-    assert result.allowed is False
+    registry = ProviderRegistry()
+    source = _BindingProvider()
+    _register(registry, source, "006-source")
+    historical = registry.execution_binding(source.descriptor.id, expected_provider=source)
+    registry.unregister(source.descriptor.id)
+    replacement = _BindingProvider()
+    _register(registry, replacement, "006-replacement")
+    assert registry.resolve_execution_binding(historical) is None
 
 
-@_xfail("B4 RSF-007: legacy configured-provider execution binding backfill remains closed")
 def test_rsf_007_legacy_execution_binding_backfill_is_closed() -> None:
-    module = importlib.import_module("portable_runtime.governance.provider_execution_binding")
-    with pytest.raises(ValueError, match="historical|legacy|backfill|unsupported"):
-        module.backfill_historical_execution_binding(
-            dispatch_ref="dispatch:legacy",
-            provider_id="provider:a",
-            current_configuration_ref="provider-config:current",
+    with pytest.raises(ValueError, match="historical|backfill|unsupported"):
+        reject_historical_execution_binding_backfill(
+            "dispatch:legacy",
+            "provider:rsf-b",
+            "provider-config:current",
         )
 
 

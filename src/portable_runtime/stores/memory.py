@@ -58,6 +58,7 @@ class InMemoryStateStore:
         self._recovery_observation_commit_depth = 0
         self._recovery_disposition_commit_depth = 0
         self._recovery_application_commit_depth = 0
+        self._provider_execution_binding_dispatch_commit_depth = 0
 
     _SEMANTIC_KINDS = frozenset({"record", "relation", "authorization", "authorization_use", "knowledge_projection"})
 
@@ -322,6 +323,9 @@ class InMemoryStateStore:
 
     def append_event(self, value: Event) -> None:
         from portable_runtime.governance.outcome_impact_commit import OUTCOME_IMPACT_AUTHORITY_EVENT_TYPES
+        from portable_runtime.governance.provider_execution_binding import (
+            dispatch_has_provider_execution_binding_authority,
+        )
 
         if value.type in OUTCOME_IMPACT_AUTHORITY_EVENT_TYPES and self._outcome_impact_commit_depth <= 0:
             raise ValueError("Outcome impact authority events require commit_outcome_impact_judgment")
@@ -331,6 +335,13 @@ class InMemoryStateStore:
             raise ValueError("RecoveryDisposition events require commit_recovery_disposition")
         if value.type == "RecoveryApplicationRecorded" and self._recovery_application_commit_depth <= 0:
             raise ValueError("RecoveryApplication events require commit_recovery_application")
+        if (
+            dispatch_has_provider_execution_binding_authority(value)
+            and self._provider_execution_binding_dispatch_commit_depth <= 0
+        ):
+            raise ValueError(
+                "provider execution-binding dispatch events require governed dispatch commit"
+            )
         with self._lock:
             existing = self._records.get("event", {}).get(value.id)
             if existing is not None:
@@ -599,6 +610,9 @@ class InMemoryStateStore:
             from portable_runtime.governance.outcome_impact_commit import (
                 OUTCOME_IMPACT_AUTHORITY_EVENT_TYPES,
             )
+            from portable_runtime.governance.provider_execution_binding import (
+                dispatch_has_provider_execution_binding_authority,
+            )
 
             if any(
                 getattr(event, "type", "") in OUTCOME_IMPACT_AUTHORITY_EVENT_TYPES
@@ -615,6 +629,14 @@ class InMemoryStateStore:
                 raise ValueError(
                     "P5 RecoveryApplication authority import is unsupported; "
                     "durable application authority must be created by commit_recovery_application"
+                )
+            if any(
+                dispatch_has_provider_execution_binding_authority(event)
+                for event in prepared.get("event", ())
+            ):
+                raise ValueError(
+                    "P5 provider execution-binding dispatch authority import is unsupported; "
+                    "durable execution-binding authority must be created by governed dispatch commit"
                 )
             candidate = {
                 kind: [value.model_dump(mode="json") for value in values.values()]
