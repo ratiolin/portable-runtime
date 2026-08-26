@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import builtins
+import contextvars
 import threading
 import uuid
 from collections.abc import Iterable
 from contextlib import suppress
+from dataclasses import dataclass
 
 from portable_runtime.core.capabilities import ProviderDescriptor, ProviderHealth
 from portable_runtime.governance.provider_execution_binding import (
@@ -13,6 +15,31 @@ from portable_runtime.governance.provider_execution_binding import (
     provider_execution_descriptor_digest,
 )
 from portable_runtime.interfaces.provider import CapabilityProvider
+
+
+@dataclass(frozen=True)
+class _ExecutionLookup:
+    registry: ProviderRegistry
+    provider_id: str
+    provider: CapabilityProvider
+
+
+_execution_lookup: contextvars.ContextVar[_ExecutionLookup | None] = contextvars.ContextVar(
+    "portable_runtime_provider_execution_lookup",
+    default=None,
+)
+
+
+def consume_execution_target_lookup(
+    provider_id: str,
+) -> tuple[ProviderRegistry, CapabilityProvider] | None:
+    """Consume the task-local provider object fetched for the reality-exit path."""
+
+    lookup = _execution_lookup.get()
+    _execution_lookup.set(None)
+    if lookup is None or lookup.provider_id != provider_id:
+        return None
+    return lookup.registry, lookup.provider
 
 
 class ProviderRegistry:
@@ -62,11 +89,6 @@ class ProviderRegistry:
                 configured_execution_identity=configured_execution_identity,
                 authoritative_configuration_ref=authoritative_configuration_ref,
             )
-            # Circuit state belongs to a live provider registration, not merely to
-            # a string id. Test/runtime registries may intentionally replace a
-            # provider with the same id after a prior failure; carrying an open
-            # breaker across that replacement would make an unrelated provider
-            # permanently ineligible.
             with suppress(Exception):
                 from portable_runtime.core.boundary import _CIRCUITS
 
@@ -97,13 +119,13 @@ class ProviderRegistry:
     def reload(self, provider_id: str) -> ProviderDescriptor:
         with self._lock:
             self._require(provider_id)
-            # In-process providers are already live. External managers can replace
-            # the object and then call unregister/register without changing state.
             return self._descriptor(provider_id)
 
     def get(self, provider_id: str) -> CapabilityProvider:
         with self._lock:
-            return self._providers[provider_id]
+            provider = self._providers[provider_id]
+            _execution_lookup.set(_ExecutionLookup(self, provider_id, provider))
+            return provider
 
     def capture_execution_target(
         self,
