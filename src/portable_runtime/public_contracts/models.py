@@ -6,9 +6,13 @@ from pydantic import BaseModel, ConfigDict, Field
 
 
 class ApiProblemV1(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(
+        extra="forbid",
+        populate_by_name=True,
+        serialize_by_alias=True,
+    )
 
-    schema: Literal["api-problem-v1"] = "api-problem-v1"
+    schema_: Literal["api-problem-v1"] = Field("api-problem-v1", alias="schema")
     code: str
     message: str
     details: dict[str, Any] = Field(default_factory=dict)
@@ -16,9 +20,16 @@ class ApiProblemV1(BaseModel):
 
 
 class ExperienceUseRequirementV1(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(
+        extra="forbid",
+        populate_by_name=True,
+        serialize_by_alias=True,
+    )
 
-    schema: Literal["experience-use-requirement-v1"] = "experience-use-requirement-v1"
+    schema_: Literal["experience-use-requirement-v1"] = Field(
+        "experience-use-requirement-v1",
+        alias="schema",
+    )
     projection_refs: list[str] = Field(default_factory=list)
     use_scope: dict[str, Any] = Field(default_factory=dict)
     subject_version_refs: list[str] = Field(default_factory=list)
@@ -38,9 +49,16 @@ class ExperienceUseAdmissionV1(BaseModel):
 
 
 class HistoricalExperienceUseCommitV1(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(
+        extra="forbid",
+        populate_by_name=True,
+        serialize_by_alias=True,
+    )
 
-    schema: Literal["historical-experience-use-commit-v1"] = "historical-experience-use-commit-v1"
+    schema_: Literal["historical-experience-use-commit-v1"] = Field(
+        "historical-experience-use-commit-v1",
+        alias="schema",
+    )
     judgment: dict[str, Any]
     requirement: ExperienceUseRequirementV1
     expected_requirement_digest: str
@@ -62,9 +80,16 @@ class HistoricalExperienceUseV1(BaseModel):
 
 
 class GovernanceUseAdmissionView(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(
+        extra="forbid",
+        populate_by_name=True,
+        serialize_by_alias=True,
+    )
 
-    schema: Literal["governance-use-admission-view-v1"] = "governance-use-admission-view-v1"
+    schema_: Literal["governance-use-admission-view-v1"] = Field(
+        "governance-use-admission-view-v1",
+        alias="schema",
+    )
     status: str
     scheme_id: str | None = None
     requirement_digest: str | None = None
@@ -74,9 +99,16 @@ class GovernanceUseAdmissionView(BaseModel):
 
 
 class InvocationPermitView(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(
+        extra="forbid",
+        populate_by_name=True,
+        serialize_by_alias=True,
+    )
 
-    schema: Literal["invocation-permit-view-v1"] = "invocation-permit-view-v1"
+    schema_: Literal["invocation-permit-view-v1"] = Field(
+        "invocation-permit-view-v1",
+        alias="schema",
+    )
     permit_digest: str
     provider_id: str | None = None
     qualification_digest: str | None = None
@@ -88,9 +120,16 @@ class InvocationPermitView(BaseModel):
 
 
 class InvocationDispatchCommittedView(BaseModel):
-    model_config = ConfigDict(extra="allow")
+    model_config = ConfigDict(
+        extra="allow",
+        populate_by_name=True,
+        serialize_by_alias=True,
+    )
 
-    schema: Literal["invocation-dispatch-committed-view-v1"] = "invocation-dispatch-committed-view-v1"
+    schema_: Literal["invocation-dispatch-committed-view-v1"] = Field(
+        "invocation-dispatch-committed-view-v1",
+        alias="schema",
+    )
     event_id: str
     request_id: str | None = None
     provider_id: str | None = None
@@ -103,9 +142,16 @@ class InvocationDispatchCommittedView(BaseModel):
 
 
 class ConfirmedOutcomeView(BaseModel):
-    model_config = ConfigDict(extra="allow")
+    model_config = ConfigDict(
+        extra="allow",
+        populate_by_name=True,
+        serialize_by_alias=True,
+    )
 
-    schema: Literal["confirmed-outcome-view-v1"] = "confirmed-outcome-view-v1"
+    schema_: Literal["confirmed-outcome-view-v1"] = Field(
+        "confirmed-outcome-view-v1",
+        alias="schema",
+    )
     outcome_id: str
     action_ref: str | None = None
     status: str = "confirmed"
@@ -114,9 +160,16 @@ class ConfirmedOutcomeView(BaseModel):
 
 
 class RecoveryView(BaseModel):
-    model_config = ConfigDict(extra="allow")
+    model_config = ConfigDict(
+        extra="allow",
+        populate_by_name=True,
+        serialize_by_alias=True,
+    )
 
-    schema: Literal["recovery-view-v1"] = "recovery-view-v1"
+    schema_: Literal["recovery-view-v1"] = Field(
+        "recovery-view-v1",
+        alias="schema",
+    )
     subject_ref: str
     observation: dict[str, Any] | None = None
     disposition: dict[str, Any] | None = None
