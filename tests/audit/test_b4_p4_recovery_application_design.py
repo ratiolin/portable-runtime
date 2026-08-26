@@ -1,8 +1,8 @@
 """B4-P4 design/counterexample audit for RecoveryApplication.
 
-The audit freezes a responsibility seam only. No test in this file authorizes
-RecoveryDisposition consumption, provider execution, fresh attempt creation,
-or terminal completion.
+P4a now authorizes only one durable non-executing application intent derived
+from one exact RecoveryDisposition. P4b retry materialization and orchestration
+consumption remain outside this production slice.
 """
 
 from __future__ import annotations
@@ -163,14 +163,12 @@ def test_p4_audit_retry_request_specification_is_not_yet_durable() -> None:
     assert '"invocation_permit_digest"' in dispatch_source
 
 
-@_xfail("B4-P4a production: RecoveryApplication authority object is not implemented")
 def test_p4c_001_application_request_carries_only_exact_disposition_ref() -> None:
     module = importlib.import_module("portable_runtime.workflows.recovery_application")
     fields = set(module.RecoveryApplicationCommitRequest.__dataclass_fields__)
     assert fields == {"disposition_ref"}
 
 
-@_xfail("B4-P4a production: exact disposition must commit/replay one deterministic application intent")
 def test_p4c_002_same_disposition_replays_one_application_intent() -> None:
     module = importlib.import_module("portable_runtime.workflows.recovery_application")
     store, _graph, disposition = _seed_disposition(
@@ -184,7 +182,6 @@ def test_p4c_002_same_disposition_replays_one_application_intent() -> None:
     assert first.id == _application_identity(disposition.id)
 
 
-@_xfail("B4-P4a production: application semantics are payload under disposition identity")
 def test_p4c_003_same_application_identity_exposes_semantic_rebound() -> None:
     module = importlib.import_module("portable_runtime.workflows.recovery_application")
     store, _graph, disposition = _seed_disposition(
@@ -201,7 +198,6 @@ def test_p4c_003_same_application_identity_exposes_semantic_rebound() -> None:
     )
 
 
-@_xfail("B4-P4a production: retry application preserves source idempotency without minting execution authority")
 def test_p4c_004_retry_application_is_intent_not_fresh_execution() -> None:
     module = importlib.import_module("portable_runtime.workflows.recovery_application")
     store, graph, disposition = _seed_disposition(
@@ -225,7 +221,6 @@ def test_p4c_004_retry_application_is_intent_not_fresh_execution() -> None:
     assert getattr(application, "new_dispatch_commit_ref", None) is None
 
 
-@_xfail("B4-P4a production: RecoveryApplication module must remain non-executing")
 def test_p4c_005_application_module_has_no_reality_exit_or_terminal_authority() -> None:
     module = importlib.import_module("portable_runtime.workflows.recovery_application")
     source = inspect.getsource(module)
@@ -244,7 +239,6 @@ def test_p4c_005_application_module_has_no_reality_exit_or_terminal_authority() 
         assert token not in source
 
 
-@_xfail("B4-P4a production: disposition semantics derive application kind inside authority boundary")
 @pytest.mark.parametrize(
     ("action", "application_kind"),
     [
@@ -273,7 +267,6 @@ def test_p4c_006_application_kind_is_derived_from_durable_disposition(
     assert prepared.application.application_kind == application_kind
 
 
-@_xfail("B4-P4a production: RecoveryApplicationRecorded must be store-owned authority")
 def test_p4c_007_direct_application_event_append_is_denied() -> None:
     importlib.import_module("portable_runtime.workflows.recovery_application")
     store = InMemoryStateStore()
@@ -307,12 +300,17 @@ def test_p4c_008_retry_materialization_refuses_missing_durable_request_spec() ->
         module.prepare_recovery_retry_request(store, application.id)
 
 
-def test_p4_audit_serialized_application_authority_remains_out_of_scope() -> None:
-    """P4 must not silently close the independent P5 portability question."""
+def test_p4_audit_local_application_authority_does_not_close_p5_or_p4b() -> None:
+    """Local P4a authority is not portability or Runtime consumption authority."""
 
     bundle_source = inspect.getsource(importlib.import_module("portable_runtime.stores.bundle"))
     memory_source = inspect.getsource(importlib.import_module("portable_runtime.stores.memory"))
     sqlite_source = inspect.getsource(importlib.import_module("portable_runtime.stores.sqlite"))
+    runtime_source = inspect.getsource(importlib.import_module("portable_runtime.core.runtime"))
     assert "RecoveryApplicationRecorded" not in bundle_source
-    assert "RecoveryApplicationRecorded" not in memory_source
-    assert "RecoveryApplicationRecorded" not in sqlite_source
+    assert "commit_recovery_application" in memory_source
+    assert "commit_recovery_application" in sqlite_source
+    assert "P5 RecoveryApplication authority import is unsupported" in memory_source
+    assert "P5 RecoveryApplication authority import is unsupported" in sqlite_source
+    assert "commit_recovery_application" not in runtime_source
+    assert "RecoveryApplication" not in runtime_source

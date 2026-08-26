@@ -78,6 +78,7 @@ jobs:
           tests/audit/test_b4_p2_objective_bridge_design.py
           tests/audit/test_b4_p3_recovery_disposition_design.py
           tests/audit/test_b4_p4_recovery_application_design.py
+          tests/conformance/test_recovery_application_authority.py
           tests/conformance/test_recovery_disposition_counterexamples.py
           tests/conformance/test_recovery_disposition_preparation.py
           tests/conformance/test_recovery_disposition_commit.py

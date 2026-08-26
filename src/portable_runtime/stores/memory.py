@@ -57,6 +57,7 @@ class InMemoryStateStore:
         self._outcome_impact_commit_depth = 0
         self._recovery_observation_commit_depth = 0
         self._recovery_disposition_commit_depth = 0
+        self._recovery_application_commit_depth = 0
 
     _SEMANTIC_KINDS = frozenset({"record", "relation", "authorization", "authorization_use", "knowledge_projection"})
 
@@ -190,6 +191,25 @@ class InMemoryStateStore:
                 self._recovery_disposition_commit_depth -= 1
             return plan.disposition
 
+    def commit_recovery_application(self, request: Any) -> Any:
+        """Atomically commit or replay one exact-disposition application intent."""
+        from portable_runtime.workflows.recovery_application import (
+            prepare_recovery_application_commit,
+        )
+
+        with self.transaction():
+            plan = prepare_recovery_application_commit(self, request)
+            if plan.replayed:
+                return plan.application
+            if plan.event is None:
+                raise ValueError("RecoveryApplication commit plan is missing its durable event")
+            self._recovery_application_commit_depth += 1
+            try:
+                self.append_event(plan.event)
+            finally:
+                self._recovery_application_commit_depth -= 1
+            return plan.application
+
     def _validate_candidate_write(self, kind: str, value: BaseModel) -> None:
         """Validate semantic writes against the full current graph."""
         from portable_runtime.protocol.validation import assert_valid_candidate_write
@@ -309,6 +329,8 @@ class InMemoryStateStore:
             raise ValueError("RecoveryObservation events require commit_recovery_observation")
         if value.type == "RecoveryDispositionRecorded" and self._recovery_disposition_commit_depth <= 0:
             raise ValueError("RecoveryDisposition events require commit_recovery_disposition")
+        if value.type == "RecoveryApplicationRecorded" and self._recovery_application_commit_depth <= 0:
+            raise ValueError("RecoveryApplication events require commit_recovery_application")
         with self._lock:
             existing = self._records.get("event", {}).get(value.id)
             if existing is not None:
@@ -585,6 +607,14 @@ class InMemoryStateStore:
                 raise ValueError(
                     "B3 outcome impact authority history import is unsupported; "
                     "durable impact authority must be created by commit_outcome_impact_judgment"
+                )
+            if any(
+                getattr(event, "type", "") == "RecoveryApplicationRecorded"
+                for event in prepared.get("event", ())
+            ):
+                raise ValueError(
+                    "P5 RecoveryApplication authority import is unsupported; "
+                    "durable application authority must be created by commit_recovery_application"
                 )
             candidate = {
                 kind: [value.model_dump(mode="json") for value in values.values()]
