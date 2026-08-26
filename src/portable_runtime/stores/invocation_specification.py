@@ -1,7 +1,7 @@
 """Authority-capable local stores for DurableInvocationSpecification.
 
 These subclasses intentionally opt in to invocation-specification authority
-without expanding the baseline StateStore used by Runtime.  Specification
+without expanding the baseline StateStore used by Runtime. Specification
 persistence is therefore available locally while Runtime/retry consumption
 remains structurally absent.
 """
@@ -9,7 +9,6 @@ remains structurally absent.
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
 
 from portable_runtime.core.models import Event
 from portable_runtime.stores.memory import InMemoryStateStore
