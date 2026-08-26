@@ -1,14 +1,13 @@
-"""Unified B4 reconciliation substrate production decision freeze.
+"""Unified B4 reconciliation substrate production freeze.
 
-A application-bound observation authority and B configured-provider execution
-binding are supported locally. C repeatability authority, reconciliation
-consumer, provider reconciliation calls, DIS-015, PVP-007, retry, fresh
-invocation authority, and P5 authority remain closed.
+A application-bound observation authority, B configured-provider execution
+binding, and C exact reconciliation repeatability authority are supported
+locally. Reconciliation consumer/provider calls, DIS-015, PVP-007, retry,
+fresh invocation authority, and P5 authority remain closed.
 """
 
 from __future__ import annotations
 
-import importlib
 import importlib.util
 import inspect
 from typing import Any
@@ -25,11 +24,19 @@ from portable_runtime.core.capabilities import (
 )
 from portable_runtime.core.models import Event
 from portable_runtime.core.provider_semantics import ProviderReplayBinding
+from portable_runtime.core.reconciliation_repeatability import (
+    ReconciliationRepeatabilityAuthority,
+    ReconciliationRepeatabilityConfiguration,
+    build_reconciliation_repeatability_authority,
+    build_reconciliation_repeatability_contract,
+    evaluate_reconciliation_repeatability,
+)
 from portable_runtime.core.registry import ProviderRegistry
 from portable_runtime.governance.dispatch import DISPATCH_COMMIT_EVENT
 from portable_runtime.governance.distinction import DistinctionState, UseContext
 from portable_runtime.governance.persistence import InMemoryDistinctionGovernancePersistence
 from portable_runtime.governance.provider_execution_binding import (
+    ProviderExecutionBinding,
     provider_execution_binding_from_dispatch,
     reject_historical_execution_binding_backfill,
 )
@@ -48,10 +55,6 @@ from portable_runtime.workflows.recovery_observation import (
     RecoveryObservation,
     RecoveryObservationCommitRequest,
 )
-
-
-def _xfail(reason: str) -> pytest.MarkDecorator:
-    return pytest.mark.xfail(strict=True, reason=reason)
 
 
 def test_rsf_application_observation_binding_is_local_production() -> None:
@@ -166,7 +169,7 @@ class _BindingProvider:
 
     async def reconcile(self, request_id: str) -> CapabilityResult | None:
         del request_id
-        raise AssertionError("C/consumer is not authorized")
+        raise AssertionError("reconciliation consumer is not authorized")
 
 
 def _state() -> DistinctionState:
@@ -186,11 +189,32 @@ def _requirement(_request: CapabilityRequest) -> GovernanceUseRequirement:
     )
 
 
-def _register(registry: ProviderRegistry, provider: _BindingProvider, suffix: str) -> None:
+def _repeatability(
+    *,
+    mode: str = "repeat-safe",
+    protocol_version: str = "1",
+    contract_version: str = "1",
+) -> ReconciliationRepeatabilityConfiguration:
+    return ReconciliationRepeatabilityConfiguration(
+        reconciliation_protocol_identity="capability-provider.reconcile",
+        reconciliation_protocol_version=protocol_version,
+        repeatability_mode=mode,
+        contract_version=contract_version,
+    )
+
+
+def _register(
+    registry: ProviderRegistry,
+    provider: _BindingProvider,
+    suffix: str,
+    *,
+    repeatability: ReconciliationRepeatabilityConfiguration | None = None,
+) -> None:
     registry.register(
         provider,
         configured_execution_identity=f"configured:rsf:{suffix}",
         authoritative_configuration_ref=f"provider-config:rsf:{suffix}",
+        reconciliation_repeatability=repeatability,
     )
 
 
@@ -248,10 +272,8 @@ def test_rsf_007_legacy_execution_binding_backfill_is_closed() -> None:
         )
 
 
-@_xfail("B4 RSF-008: repeatability authority binds exact subject/provider execution/protocol/version")
-def test_rsf_008_repeatability_contract_has_exact_authority_domain() -> None:
-    module = importlib.import_module("portable_runtime.core.reconciliation_repeatability")
-    fields = set(module.ReconciliationRepeatabilityContract.model_fields)
+def test_rsf_008_repeatability_authority_has_exact_b_subject_protocol_domain() -> None:
+    fields = set(ReconciliationRepeatabilityAuthority.model_fields)
     assert {
         "subject_model",
         "subject_identity",
@@ -264,42 +286,104 @@ def test_rsf_008_repeatability_contract_has_exact_authority_domain() -> None:
     } <= fields
 
 
-@_xfail("B4 RSF-009: repeatability authority binds exact configured-provider execution binding")
-def test_rsf_009_repeatability_contract_cannot_float_free_of_execution_binding() -> None:
-    module = importlib.import_module("portable_runtime.core.reconciliation_repeatability")
-    with pytest.raises(ValueError, match="provider.*execution.*binding|target|identity"):
-        module.ReconciliationRepeatabilityContract.example(
-            provider_execution_binding_ref=None,
-            repeatability_mode="repeat-safe",
+def test_rsf_009_repeatability_authority_cannot_float_free_of_exact_b() -> None:
+    first_registry = ProviderRegistry()
+    first_provider = _BindingProvider()
+    _register(first_registry, first_provider, "009-first", repeatability=_repeatability())
+    first_binding = first_registry.execution_binding(first_provider.descriptor.id)
+    first_contract = first_registry.reconciliation_repeatability_contract(
+        first_provider.descriptor.id
+    )
+    assert first_contract is not None
+
+    second_registry = ProviderRegistry()
+    second_provider = _BindingProvider()
+    _register(second_registry, second_provider, "009-second", repeatability=_repeatability())
+    second_binding = second_registry.execution_binding(second_provider.descriptor.id)
+    second_contract = second_registry.reconciliation_repeatability_contract(
+        second_provider.descriptor.id
+    )
+    assert second_contract is not None
+
+    assert first_binding.provider_id == second_binding.provider_id
+    assert first_binding.id != second_binding.id
+    assert first_contract.provider_execution_binding_ref == first_binding.id
+    assert second_contract.provider_execution_binding_ref == second_binding.id
+    assert first_contract.id != second_contract.id
+
+
+def test_rsf_010_absent_unknown_or_drifted_repeatability_is_ineligible() -> None:
+    registry = ProviderRegistry()
+    provider = _BindingProvider()
+    _register(registry, provider, "010", repeatability=_repeatability())
+    binding = registry.execution_binding(provider.descriptor.id)
+    contract = registry.reconciliation_repeatability_contract(provider.descriptor.id)
+    assert contract is not None
+    authority = build_reconciliation_repeatability_authority(
+        contract,
+        subject_identity="request:rsf:010",
+    )
+
+    absent = evaluate_reconciliation_repeatability(
+        None,
+        historical_binding=binding,
+        current_contract=contract,
+        required_subject_identity="request:rsf:010",
+    )
+    assert absent.eligible is False
+
+    unknown_contract = build_reconciliation_repeatability_contract(
+        binding,
+        _repeatability(mode="unknown"),
+    )
+    unknown = evaluate_reconciliation_repeatability(
+        authority,
+        historical_binding=binding,
+        current_contract=unknown_contract,
+        required_subject_identity="request:rsf:010",
+    )
+    assert unknown.eligible is False
+
+    drifted_contract = build_reconciliation_repeatability_contract(
+        binding,
+        _repeatability(contract_version="2"),
+    )
+    drifted = evaluate_reconciliation_repeatability(
+        authority,
+        historical_binding=binding,
+        current_contract=drifted_contract,
+        required_subject_identity="request:rsf:010",
+    )
+    assert drifted.eligible is False
+
+
+def test_rsf_011_v1_positive_authority_is_repeat_safe_only() -> None:
+    for mode, expected in (
+        ("repeat-safe", True),
+        ("unknown", False),
+        ("non-repeat-safe", False),
+    ):
+        registry = ProviderRegistry()
+        provider = _BindingProvider()
+        _register(
+            registry,
+            provider,
+            f"011-{mode}",
+            repeatability=_repeatability(mode=mode),
         )
+        _provider, _binding_value, authority = registry.capture_reconciliation_execution_target(
+            provider.descriptor.id,
+            subject_identity=f"request:rsf:011:{mode}",
+            expected_provider=provider,
+        )
+        assert (authority is not None) is expected
 
 
-@_xfail("B4 RSF-010: absent, unknown, or drifted repeatability fails closed")
-def test_rsf_010_unknown_or_drifted_repeatability_is_ineligible() -> None:
-    module = importlib.import_module("portable_runtime.core.reconciliation_repeatability")
-    for mode in (None, "unknown", "non-repeat-safe", "drifted"):
-        eligibility = module.v1_reconciliation_repeat_eligibility(mode)
-        assert eligibility.allowed is False
-
-
-@_xfail("B4 RSF-011: v1 automatic reconciliation accepts only exact repeat-safe authority")
-def test_rsf_011_v1_is_repeat_safe_only() -> None:
-    module = importlib.import_module("portable_runtime.core.reconciliation_repeatability")
-    safe = module.v1_reconciliation_repeat_eligibility("repeat-safe")
-    assert safe.allowed is True
-    for mode in ("unknown", "non-repeat-safe"):
-        assert module.v1_reconciliation_repeat_eligibility(mode).allowed is False
-
-
-@_xfail("B4 RSF-012: all required substrate authorities remain non-executing by themselves")
-def test_rsf_012_substrate_objects_do_not_own_execution() -> None:
-    observation = importlib.import_module("portable_runtime.workflows.recovery_application_observation")
-    target = importlib.import_module("portable_runtime.governance.provider_execution_binding")
-    repeatability = importlib.import_module("portable_runtime.core.reconciliation_repeatability")
+def test_rsf_012_all_required_substrate_authorities_remain_non_executing() -> None:
     for obj in (
-        observation.RecoveryApplicationObservationCommitRequest,
-        target.ProviderExecutionBinding,
-        repeatability.ReconciliationRepeatabilityContract,
+        RecoveryApplicationObservationCommitRequest,
+        ProviderExecutionBinding,
+        ReconciliationRepeatabilityAuthority,
     ):
         assert not hasattr(obj, "invoke")
         assert not hasattr(obj, "reconcile")
