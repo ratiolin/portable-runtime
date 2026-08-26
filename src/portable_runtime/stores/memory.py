@@ -58,6 +58,7 @@ class InMemoryStateStore:
         self._recovery_observation_commit_depth = 0
         self._recovery_disposition_commit_depth = 0
         self._recovery_application_commit_depth = 0
+        self._provider_execution_binding_dispatch_commit_depth = 0
 
     _SEMANTIC_KINDS = frozenset({"record", "relation", "authorization", "authorization_use", "knowledge_projection"})
 
@@ -331,6 +332,15 @@ class InMemoryStateStore:
             raise ValueError("RecoveryDisposition events require commit_recovery_disposition")
         if value.type == "RecoveryApplicationRecorded" and self._recovery_application_commit_depth <= 0:
             raise ValueError("RecoveryApplication events require commit_recovery_application")
+        if (
+            value.type == "InvocationDispatchCommitted"
+            and isinstance(value.payload, dict)
+            and "provider_execution_binding_ref" in value.payload
+            and self._provider_execution_binding_dispatch_commit_depth <= 0
+        ):
+            raise ValueError(
+                "provider execution-binding dispatch events require governed dispatch commit"
+            )
         with self._lock:
             existing = self._records.get("event", {}).get(value.id)
             if existing is not None:
