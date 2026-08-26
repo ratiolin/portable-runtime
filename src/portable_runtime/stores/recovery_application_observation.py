@@ -8,8 +8,6 @@ retry, or fresh execution authority.
 
 from __future__ import annotations
 
-from pathlib import Path
-
 from portable_runtime.stores.memory import InMemoryStateStore
 from portable_runtime.stores.sqlite import SQLiteStateStore
 from portable_runtime.workflows.recovery_application_observation import (
