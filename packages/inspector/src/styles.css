@@ -1,0 +1,22 @@
+:root { font-family: Inter, ui-sans-serif, system-ui, sans-serif; color: #171717; background: #f4f4f2; }
+* { box-sizing: border-box; }
+body { margin: 0; }
+main { max-width: 1180px; margin: 0 auto; padding: 48px 28px 64px; }
+header { border-bottom: 1px solid #c9c9c3; padding-bottom: 28px; }
+.eyebrow { font-size: 12px; letter-spacing: .18em; font-weight: 700; }
+h1 { font-size: clamp(36px, 6vw, 72px); line-height: .95; margin: 12px 0; font-weight: 650; }
+.query { display: grid; grid-template-columns: 1fr 1fr auto; gap: 12px; align-items: end; margin: 28px 0; }
+label { display: grid; gap: 7px; font-size: 12px; font-weight: 700; }
+input { width: 100%; padding: 12px; border: 1px solid #b8b8b0; background: white; font: inherit; }
+button { padding: 12px 20px; border: 0; background: #171717; color: white; font-weight: 700; cursor: pointer; }
+button:disabled { opacity: .35; }
+.grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
+.card { min-height: 220px; background: white; border: 1px solid #d8d8d2; padding: 22px; overflow: auto; }
+.card h2 { margin: 0 0 8px; font-size: 15px; letter-spacing: .08em; }
+dl { display: grid; grid-template-columns: 140px 1fr; gap: 8px; font-size: 13px; }
+dt { font-weight: 700; } dd { margin: 0; word-break: break-all; }
+pre { white-space: pre-wrap; font-size: 12px; background: #f6f6f4; padding: 12px; }
+.muted { color: #777; font-size: 13px; }
+.error { color: #8a1f11; }
+footer { margin-top: 22px; font-size: 12px; color: #666; }
+@media (max-width: 760px) { .query, .grid { grid-template-columns: 1fr; } }
