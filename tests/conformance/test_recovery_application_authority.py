@@ -187,21 +187,23 @@ def test_p4a_direct_application_event_append_is_denied(
     backend: str,
     tmp_path: Path,
 ) -> None:
-    with _store(backend, tmp_path, f"forged-{backend}") as store:
-        with pytest.raises(ValueError, match="RecoveryApplication|commit_recovery_application"):
-            store.append_event(
-                Event(
-                    id="recovery_application_forged",
-                    type="RecoveryApplicationRecorded",
-                    subject_ref="recovery_disposition:forged",
-                    payload={
-                        "schema": "recovery-application-v1",
-                        "semantic_level": "recovery-application",
-                        "disposition_ref": "recovery_disposition:forged",
-                        "application_kind": "hold",
-                    },
-                )
+    with (
+        _store(backend, tmp_path, f"forged-{backend}") as store,
+        pytest.raises(ValueError, match="RecoveryApplication|commit_recovery_application"),
+    ):
+        store.append_event(
+            Event(
+                id="recovery_application_forged",
+                type="RecoveryApplicationRecorded",
+                subject_ref="recovery_disposition:forged",
+                payload={
+                    "schema": "recovery-application-v1",
+                    "semantic_level": "recovery-application",
+                    "disposition_ref": "recovery_disposition:forged",
+                    "application_kind": "hold",
+                },
             )
+        )
 
 
 def test_p4a_same_identity_changed_derived_semantics_is_rebound(
