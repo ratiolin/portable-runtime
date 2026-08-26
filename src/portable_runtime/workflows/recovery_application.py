@@ -1,7 +1,7 @@
 """Durable, non-executing RecoveryApplication authority.
 
 A RecoveryApplication is one store-owned orchestration intent derived from one
-exact durable RecoveryDisposition.  This module does not create requests,
+exact durable RecoveryDisposition. This module does not create requests,
 Attempts, InvocationPermits, dispatch commitments, provider calls, terminal
 completion, or governance discharge.
 """
@@ -32,6 +32,19 @@ RecoveryApplicationKind = Literal[
     "manual-resolution-handoff",
     "objective-resolution-acceptance",
 ]
+
+# Schema vocabulary is stable durable decoding state. It must not be inferred
+# from the current derivation mapping: mapping drift must surface as semantic
+# rebound against a still-decodable historical fact.
+_APPLICATION_KINDS = frozenset(
+    {
+        "hold",
+        "reconciliation-request",
+        "retry-request",
+        "manual-resolution-handoff",
+        "objective-resolution-acceptance",
+    }
+)
 
 _APPLICATION_KIND_BY_ACTION: dict[str, RecoveryApplicationKind] = {
     "hold-unresolved": "hold",
@@ -192,7 +205,7 @@ def recovery_application_from_event(event: Event) -> RecoveryApplication:
         raise ValueError("RecoveryApplication semantic level mismatch")
     disposition_ref = _required_string(payload.get("disposition_ref"), "disposition_ref")
     kind = payload.get("application_kind")
-    if kind not in set(_APPLICATION_KIND_BY_ACTION.values()):
+    if kind not in _APPLICATION_KINDS:
         raise ValueError("invalid RecoveryApplication kind")
     expected_id = _application_id(disposition_ref)
     if event.id != expected_id or event.subject_ref != disposition_ref:
