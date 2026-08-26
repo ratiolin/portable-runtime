@@ -1,8 +1,9 @@
 """B4 reconciliation-only RecoveryApplication consumption audit.
 
-Audit only. This file authorizes no reconciliation consumption production,
-provider-binding production, repeatability protocol, RecoveryObservation schema
-change, Runtime integration, retry, fresh invocation authority, or P5 import.
+Audit only. Application-bound RecoveryObservation local authority may exist,
+but this file authorizes no reconciliation consumption production,
+provider-binding production, repeatability protocol, Runtime integration,
+retry, fresh invocation authority, or P5 import.
 """
 
 from __future__ import annotations
@@ -113,11 +114,11 @@ def test_rc_audit_recovery_application_has_provider_id_but_no_execution_binding(
     assert "configured_provider_ref" not in fields
 
 
-def test_rc_audit_recovery_observation_has_no_first_class_application_binding() -> None:
+def test_rc_audit_generic_observation_request_cannot_manufacture_application_binding() -> None:
     request_fields = set(RecoveryObservationCommitRequest.__dataclass_fields__)
     observation_fields = set(RecoveryObservation.__dataclass_fields__)
     assert "recovery_application_ref" not in request_fields
-    assert "recovery_application_ref" not in observation_fields
+    assert "recovery_application_ref" in observation_fields
     assert "provenance_refs" in request_fields
     assert "provenance_refs" in observation_fields
 
@@ -259,10 +260,15 @@ def test_rc_010_post_call_pre_observation_crash_is_ambiguous_without_repeat_safe
     assert state.auto_repeat_allowed is False
 
 
-@_xfail("B4 RC-011: reconciliation RecoveryObservation needs first-class RecoveryApplication binding")
-def test_rc_011_observation_schema_binds_exact_recovery_application() -> None:
-    assert "recovery_application_ref" in RecoveryObservationCommitRequest.__dataclass_fields__
-    assert "recovery_application_ref" in RecoveryObservation.__dataclass_fields__
+@_xfail("B4 RC-011: reconciliation consumer must require a first-class application-bound observation")
+def test_rc_011_consumer_requires_bound_application_observation() -> None:
+    module = importlib.import_module("portable_runtime.workflows.recovery_reconciliation")
+    fixture = module.ReconciliationAuditFixture.example(
+        application_kind="reconciliation-request",
+        bound_observation_exists=True,
+    )
+    observation = fixture.bound_observation
+    assert observation.recovery_application_ref == fixture.application.id
 
 
 @_xfail("B4 RC-012: one application with an existing bound observation must not call provider again")
