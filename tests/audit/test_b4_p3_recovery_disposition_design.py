@@ -96,7 +96,9 @@ def test_p3_audit_recovery_observation_module_does_not_construct_follow_on_autho
         importlib.import_module("portable_runtime.workflows.recovery_observation")
     )
     assert "RecoveryDisposition" not in source
-    assert "RecoveryApplication" not in source
+    assert "RecoveryApplicationRecorded" not in source
+    assert "prepare_recovery_application_commit" not in source
+    assert "commit_recovery_application" not in source
     assert "VerifiedOutcomeAuthority" not in source
     assert "CompletionAuthority" not in source
     assert "provider.invoke" not in source
