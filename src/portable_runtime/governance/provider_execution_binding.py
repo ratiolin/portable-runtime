@@ -1,8 +1,12 @@
-"""Authoritative configured-provider execution identity for historical dispatches.
+"""Registry-authoritative configured-provider execution identity for dispatches.
 
 A ProviderExecutionBinding identifies the configured provider execution identity
-that the runtime registry selected for one reality-exit path. It is durable
-provenance, not provider invocation/reconciliation/retry authority.
+that the runtime ProviderRegistry selected for one reality-exit path. It is
+durable provenance, not provider invocation/reconciliation/retry authority.
+
+``authoritative_configuration_ref`` is a registry-owned registration input. The
+binding does not independently verify that reference as external configuration
+truth; its authority is limited to the ProviderRegistry registration domain.
 """
 
 from __future__ import annotations
@@ -10,7 +14,6 @@ from __future__ import annotations
 import hashlib
 import json
 from dataclasses import dataclass
-from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -54,7 +57,7 @@ def _binding_digest(
 
 
 class ProviderExecutionBinding(BaseModel):
-    """Self-validating historical identity of one configured provider execution target."""
+    """Self-validating identity of one registry-configured execution target."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
@@ -88,7 +91,7 @@ def build_provider_execution_binding(
     configured_execution_identity: str,
     authoritative_configuration_ref: str,
 ) -> ProviderExecutionBinding:
-    """Build a binding only from an authoritative configuration/registry path."""
+    """Build a binding from the ProviderRegistry registration path."""
 
     execution_identity = configured_execution_identity.strip()
     configuration_ref = authoritative_configuration_ref.strip()
@@ -114,7 +117,7 @@ def build_provider_execution_binding(
 
 
 def provider_execution_binding_from_dispatch(event: Event) -> ProviderExecutionBinding:
-    """Decode an exact binding from a dispatch that captured it at reality-exit authorization."""
+    """Decode an exact binding captured at dispatch authorization."""
 
     if event.type != DISPATCH_COMMIT_EVENT:
         raise ValueError("provider execution binding requires InvocationDispatchCommitted")
@@ -147,7 +150,7 @@ def resolve_historical_reconciliation_target(
     historical: ProviderExecutionBinding,
     current: ProviderExecutionBinding | None,
 ) -> HistoricalTargetResolution:
-    """Compare historical identity to a separately resolved current registry binding."""
+    """Compare historical identity to a separately resolved registry binding."""
 
     if current is None:
         return HistoricalTargetResolution(
