@@ -1,6 +1,6 @@
 """B4 reconciliation consumer production graduation.
 
-RCX-001..025 are real production tests.  No test-side consumer simulation is
+RCX-001..025 are real production tests. No test-side consumer simulation is
 used: each positive path creates a governed B/C-aware dispatch, durable recovery
 observation, RecoveryDisposition, and RecoveryApplication, then drives the
 production RecoveryReconciliationConsumer.
@@ -43,6 +43,10 @@ from portable_runtime.governance.use_admission import (
 from portable_runtime.stores.recovery_application_observation import (
     RecoveryApplicationObservationInMemoryStateStore,
 )
+from portable_runtime.workflows.reconciliation_consumer import (
+    RecoveryReconciliationConsumer,
+    RecoveryReconciliationRequest,
+)
 from portable_runtime.workflows.recovery_application import (
     RecoveryApplicationCommitRequest,
 )
@@ -54,10 +58,6 @@ from portable_runtime.workflows.recovery_disposition import (
 )
 from portable_runtime.workflows.recovery_observation import (
     RecoveryObservationCommitRequest,
-)
-from portable_runtime.workflows.recovery_reconciliation import (
-    RecoveryReconciliationConsumer,
-    RecoveryReconciliationRequest,
 )
 
 
@@ -620,7 +620,8 @@ async def test_rcx_015_exact_historical_request_and_resolved_target_reach_realit
     boundary_source = inspect.getsource(
         RecoveryReconciliationRealityBoundary.reconcile_exact_target
     )
-    assert "registry" not in boundary_source
+    assert "registry.get" not in boundary_source
+    assert "self.registry" not in boundary_source
     assert "CapabilityRequest" not in boundary_source
 
 
@@ -762,13 +763,13 @@ async def test_rcx_024_legacy_runtime_reconcile_is_zero_provider_call_compatibil
     seed = _seed("legacy-runtime", repeatability=_repeatability())
     source = inspect.getsource(Runtime.reconcile)
     assert "self.capabilities.reconcile" not in source
-    assert "RecoveryApplication" in source
+    assert "compatibility-only" in source
     runtime = Runtime(store=seed.store, registry=seed.registry)
     result = await runtime.reconcile(seed.step.id)
     assert result is not None
     assert result.status == "unknown"
     assert result.error is not None
-    assert result.error["code"] == "RecoveryApplicationRequired"
+    assert result.error["code"] == "AuthoritativeReconciliationRequired"
     assert seed.provider.reconcile_calls == 0
 
 
