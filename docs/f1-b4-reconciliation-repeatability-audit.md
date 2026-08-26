@@ -86,7 +86,7 @@ contract version/digest
 reconciliation subject model
 ```
 
-Provider-id equality alone is insufficient authority, as already frozen by the reconciliation target audit.
+Provider-id equality alone is insufficient authority, as already frozen by the prior reconciliation-consumption audit in RC-006…008.
 
 ### Permitted effect
 
