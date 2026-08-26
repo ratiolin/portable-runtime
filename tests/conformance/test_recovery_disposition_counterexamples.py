@@ -241,7 +241,6 @@ def _request(
     )
 
 
-@_xfail("B4-P3 production: Memory/SQLite exact-basis durable replay is absent")
 @pytest.mark.parametrize("backend", ["memory", "sqlite"])
 def test_p3c_001_exact_basis_replay_is_one_durable_decision(
     backend: str,
@@ -273,7 +272,6 @@ def test_p3c_001_exact_basis_replay_is_one_durable_decision(
         assert replay == first
 
 
-@_xfail("B4-P3 production: set-like basis refs require canonical order normalization")
 @pytest.mark.parametrize("backend", ["memory", "sqlite"])
 def test_p3c_002_observation_and_outcome_basis_order_is_canonical(
     backend: str,
@@ -308,7 +306,6 @@ def test_p3c_002_observation_and_outcome_basis_order_is_canonical(
         assert reordered.id == first.id
 
 
-@_xfail("B4-P3 production: new RecoveryObservation basis must create a new decision")
 @pytest.mark.parametrize("backend", ["memory", "sqlite"])
 def test_p3c_003_new_observation_creates_new_decision_without_supersession(
     backend: str,
@@ -333,7 +330,6 @@ def test_p3c_003_new_observation_creates_new_decision_without_supersession(
         assert getattr(second, "supersedes_ref", None) is None
 
 
-@_xfail("B4-P3 production: authoritative Outcome identity is part of exact decision basis")
 @pytest.mark.parametrize("backend", ["memory", "sqlite"])
 def test_p3c_004_new_confirmed_outcome_identity_creates_new_decision(
     backend: str,
@@ -369,7 +365,6 @@ def test_p3c_004_new_confirmed_outcome_identity_creates_new_decision(
         assert second.id != first.id
 
 
-@_xfail("B4-P3 production: exact-basis replay must not execute a newer policy")
 @pytest.mark.parametrize("backend", ["memory", "sqlite"])
 def test_p3c_005_policy_drift_replay_does_not_call_current_policy(
     backend: str,
@@ -389,7 +384,6 @@ def test_p3c_005_policy_drift_replay_does_not_call_current_policy(
         assert current_policy.calls == 0
 
 
-@_xfail("B4-P3 production: policy output is payload, not decision identity; rebound fails closed")
 @pytest.mark.parametrize("backend", ["memory", "sqlite"])
 def test_p3c_006_same_basis_identity_cannot_rebind_decision_semantics(
     backend: str,
@@ -412,7 +406,6 @@ def test_p3c_006_same_basis_identity_cannot_rebind_decision_semantics(
         assert first.id
 
 
-@_xfail("B4-P3 production: RecoveryDispositionRecorded must be store-owned authority")
 @pytest.mark.parametrize("backend", ["memory", "sqlite"])
 def test_p3c_007_direct_recovery_disposition_event_append_is_denied(
     backend: str,
