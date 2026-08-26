@@ -165,11 +165,10 @@ class Runtime:
     async def reconcile(self, step_id: str) -> CapabilityResult | None:
         """Compatibility-only fail-closed reconciliation surface.
 
-        ``step_id`` plus a latest Attempt cannot prove one unique
-        RecoveryApplication responsibility.  Authoritative automated
-        reconciliation therefore requires the independent
-        RecoveryReconciliationConsumer and an exact RecoveryApplication ref.
-        This compatibility method never crosses a provider reality boundary.
+        A step plus its latest attempt cannot prove one unique reconciliation
+        responsibility. Automated reconciliation therefore requires an
+        independent exact recovery-responsibility authority path. This legacy
+        method never crosses a provider reality boundary.
         """
 
         try:
@@ -192,13 +191,13 @@ class Runtime:
             provider_id=last.provider_id,
             status="unknown",
             message=(
-                "legacy Runtime.reconcile(step_id) is compatibility-only; "
-                "authoritative reconciliation requires an exact RecoveryApplication"
+                "dispatch was durably committed; legacy Runtime.reconcile(step_id) "
+                "is compatibility-only and cannot authorize automated reconciliation"
             ),
             error={
-                "code": "RecoveryApplicationRequired",
+                "code": "AuthoritativeReconciliationRequired",
                 "reason": (
-                    "step/latest Attempt identity cannot authorize automated reconciliation"
+                    "step/latest Attempt identity cannot select a reconciliation responsibility"
                 ),
             },
         )
