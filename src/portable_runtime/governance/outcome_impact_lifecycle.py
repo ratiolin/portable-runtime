@@ -6,6 +6,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Literal, Protocol
 
+from portable_runtime.governance.distinction import ReviewObligation
 from portable_runtime.governance.outcome_impact import (
     OutcomeConfirmedTriggerStore,
     OutcomeGovernanceDependency,
@@ -22,7 +23,6 @@ from portable_runtime.governance.revalidation import (
     ReviewProjection,
     project_review_obligation_from_disposition,
 )
-from portable_runtime.governance.distinction import ReviewObligation
 
 OutcomeGovernanceImpactStatus = Literal[
     "processed",
