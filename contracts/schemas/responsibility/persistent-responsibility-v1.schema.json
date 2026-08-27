@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "persistent-responsibility-v1.schema.json",
+  "$id": "portable-runtime://contracts/responsibility/persistent-responsibility-v1",
   "title": "Persistent Responsibility Object",
   "type": "object",
   "required": ["id", "object_type", "created_at"],
