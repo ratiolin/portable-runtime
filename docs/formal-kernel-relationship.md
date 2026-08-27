@@ -2,29 +2,82 @@
 document_type: research-correspondence
 document_status: stable
 normative_for_runtime: false
-updated: 2026-08-26
+updated: 2026-08-27
 ---
 
-# Non-normative relationship to the formal kernel
+# Non-normative relationship to the Framework and formal kernel
 
-This document records formal-verification evidence and historical/research correspondence. It is **not** a portable-runtime semantic contract.
+This document records research lineage, formal-verification evidence and cross-repository correspondence. It is **not** a portable-runtime semantic contract.
 
 Current ownership is:
 
 ```text
-portable-runtime/contracts/
-    owns portable-runtime canonical semantics
+ratio/责任拓扑
+    owns the upstream Framework V1 semantic/design definitions,
+    responsibility cuts and handoff rules
 
 responsibility_topology
-    owns its Lean theorem, checker and proof semantics
+    owns its formal research governance,
+    Lean theorem/checker/proof semantics and frozen research artifacts
 
-ratio
-    may remain a historical/research lineage source only
+portable-runtime/contracts/
+    owns portable-runtime canonical product semantics,
+    interoperability contracts and conformance meaning
 ```
 
-No external repository is a normative dependency for determining portable-runtime legal state, legal transition, authority, replay identity, qualification, or public wire meaning. If this document conflicts with `contracts/`, `contracts/` wins.
+These ownership roles are intentionally different:
 
-## Current correspondence direction
+```text
+upstream Framework semantic/design source
+!= downstream normative product protocol
+!= formal-specialization/proof owner
+```
+
+`ratio/责任拓扑` may motivate or define an upstream Framework distinction, but it is not a runtime dependency. A Framework change does not change portable-runtime behavior unless the relevant semantics are deliberately adopted and versioned in `portable-runtime/contracts/`.
+
+`responsibility_topology` may prove or check a formal specialization, but that proof surface does not become portable-runtime semantic authority.
+
+No external repository is a normative dependency for determining portable-runtime legal state, legal transition, authority, replay identity, qualification or public wire meaning. If this document or any external source conflicts with `contracts/`, `contracts/` wins for portable-runtime product behavior.
+
+## Current correspondence directions
+
+### Framework -> product protocol / runtime
+
+```text
+ratio/责任拓扑 Framework definitions and responsibility cuts
+        |
+        | reference / boundary-reference / deliberate product adoption
+        v
+portable-runtime/contracts
+        |
+        | normative product protocol
+        v
+portable-runtime implementation
+```
+
+The adoption edge is explicit and versioned. Therefore:
+
+```text
+reference / operationalize / represent
+!= redefine the upstream Framework
+
+upstream Framework change
+-/-> automatic portable-runtime semantic change
+```
+
+### Framework -> formal specialization
+
+```text
+ratio/责任拓扑 Framework definitions
+        |
+        | reference / boundary-reference / specialize
+        v
+responsibility_topology formal objects and relations
+```
+
+A Lean theorem proves a property of its explicit formal specialization. It does not automatically prove the broader Framework concept for every domain.
+
+### Runtime -> formal evidence
 
 The active runtime-to-formal relation is evidence-oriented:
 
@@ -51,13 +104,13 @@ responsibility_topology -/-> verified refinement of portable-runtime
 portable-runtime -/-> verified implementation of responsibility_topology
 ```
 
-Historical research lineage may explain why a contract or proof obligation was investigated, but those arrows are not current normative dependency arrows.
+Research lineage may explain why a product contract or proof obligation was investigated, but those arrows are not current normative runtime dependency arrows.
 
 ## Known semantic non-identity
 
 Dependency propagation remains a concrete example. The formal work may use a specialized historical warrant graph with transitive challenge semantics, while the runtime uses typed direct dependency matching and separates impact observation, risk interpretation, policy disposition, revalidation and discharge.
 
-Therefore the safe claim is that both systems can preserve related responsibility distinctions while using different state spaces and propagation semantics. The unsafe claim is that formal challenge semantics verify the runtime revalidation engine.
+Therefore the safe claim is that the Framework, formal specialization and product runtime can preserve related responsibility distinctions while using different state spaces and propagation semantics. The unsafe claim is that formal challenge semantics verify the runtime revalidation engine.
 
 ## Restricted observational bridge
 
@@ -142,6 +195,6 @@ Runtime deep reopen operationalizes a selected revision scope. It is not proof t
 
 Future documentation using terms such as `verified runtime`, `formal refinement`, `implements exactly`, `semantically equivalent`, `complete dependency extraction`, or `universal responsibility invariant` must cite a theorem/artifact establishing that exact relation.
 
-Preferred language for the current bridge includes `research correspondence`, `formal verification evidence`, `partial observational boundary`, `restricted certified observational bridge`, and `verified certificate checker`.
+Preferred language for the current cross-repository relation includes `upstream Framework semantic/design source`, `downstream normative product protocol`, `formal specialization`, `research correspondence`, `formal verification evidence`, `partial observational boundary`, `restricted certified observational bridge`, and `verified certificate checker`.
 
 This document changes neither canonical runtime semantics nor runtime behavior.
