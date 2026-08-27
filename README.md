@@ -20,11 +20,13 @@ contracts semantic/schema/canonicalization/vector artifacts
 > Responsibility Inspector
 ```
 
-External research repositories, proofs, documents and historical commits may provide evidence or lineage, but they are not normative dependencies for current runtime state, transition, authority, qualification or wire meaning.
+External research repositories, proofs, documents, experiments and historical commits may provide evidence or lineage, but they are not normative dependencies for current runtime state, transition, authority, qualification or wire meaning unless explicitly promoted into `contracts/`.
 
 ## Executable status
 
 The exact-head executable status is defined by the repository's GitHub CI checks. Do not infer current pass counts from documentation snapshots.
+
+For a code-oriented snapshot of the current canonical runtime and the separate non-canonical persistent-agency experiment, see [`docs/current-implementation.md`](docs/current-implementation.md).
 
 Local verification commands:
 
@@ -67,6 +69,7 @@ These identifiers describe different compatibility surfaces:
 - **Validation & Reliability:** closed verification remains separate from open validation and reliability policy.
 - **Protocol:** append-only event journal, portable bundle validation, HTTP/CLI explain surfaces, strict negative-path conformance.
 - **Public contracts:** Python is the reference execution oracle; TypeScript and the Responsibility Inspector are non-authoritative consumers.
+- **Persistent-agency experiment:** `experiments/` tests non-canonical `StandingResponsibility -> SituationAssessment -> WorkProposal -> PriorityJudgment -> Commitment -> Work` semantics without promoting them into public runtime contracts or authority.
 
 ## Quick start
 
@@ -133,7 +136,9 @@ Cross-cutting: append-only history, provenance, versioning, authorization, reval
 - **Store** — `StateStore / ArtifactStore / EventStore`, with SQLite and in-memory/filesystem implementations plus portable bundles.
 - **Workflow** — orchestrates capabilities and explicit procedure gates; built-ins include generic task, incident repair, daily scan and knowledge consolidation.
 
-See [`contracts/README.md`](contracts/README.md), [`contracts/catalog.toml`](contracts/catalog.toml), [docs/architecture.md](docs/architecture.md), [docs/distinction-governance-implementation.md](docs/distinction-governance-implementation.md), [docs/formal-kernel-relationship.md](docs/formal-kernel-relationship.md), [docs/responsibility-separation-contracts.md](docs/responsibility-separation-contracts.md), [docs/provider-api.md](docs/provider-api.md), [docs/provider-protocol.md](docs/provider-protocol.md), [docs/workflow-authoring.md](docs/workflow-authoring.md) and [docs/state-migration.md](docs/state-migration.md).
+A separate non-canonical experiment models a persistent responsibility layer above Work/Run; see [`docs/experiments/persistent-agency.md`](docs/experiments/persistent-agency.md) and [`docs/experiments/responsibility-supervisor.md`](docs/experiments/responsibility-supervisor.md).
+
+See [`contracts/README.md`](contracts/README.md), [`contracts/catalog.toml`](contracts/catalog.toml), [docs/current-implementation.md](docs/current-implementation.md), [docs/architecture.md](docs/architecture.md), [docs/distinction-governance-implementation.md](docs/distinction-governance-implementation.md), [docs/formal-kernel-relationship.md](docs/formal-kernel-relationship.md), [docs/responsibility-separation-contracts.md](docs/responsibility-separation-contracts.md), [docs/provider-api.md](docs/provider-api.md), [docs/provider-protocol.md](docs/provider-protocol.md), [docs/workflow-authoring.md](docs/workflow-authoring.md) and [docs/state-migration.md](docs/state-migration.md).
 
 ## Public contract HTTP API
 
@@ -142,7 +147,7 @@ See [`contracts/README.md`](contracts/README.md), [`contracts/catalog.toml`](con
 - `POST /v1/experience/historical-use/commit` (local mutation boundary)
 - `GET /v1/experience/historical-use/{judgment_id}`
 
-These surfaces expose contract DTOs/views only. They do not expose runtime-internal authority objects such as `InvocationPermit` or `GovernanceUseRequirement`.
+These surfaces expose contract DTOs/views only. They do not expose runtime-internal authority objects such as `InvocationPermit` or `GovernanceUseRequirement`, and they do not expose the experimental persistent-agency objects as canonical DTOs.
 
 ## Development
 
