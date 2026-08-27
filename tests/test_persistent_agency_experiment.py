@@ -1,4 +1,4 @@
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import pytest
 
@@ -72,7 +72,7 @@ def _commitment() -> Commitment:
         resource_allocation=ResourceRequest(compute_units=2, api_calls=4),
         stop_conditions=("drift-explained",),
         escalation_conditions=("external-write-required",),
-        committed_at=datetime(2026, 8, 27, tzinfo=timezone.utc),
+        committed_at=datetime(2026, 8, 27, tzinfo=UTC),
     )
 
 
@@ -163,7 +163,7 @@ def test_task_completion_does_not_discharge_standing_responsibility():
 
 def test_missing_expected_signal_can_create_situation_but_not_work():
     mission = _mission()
-    due = datetime(2026, 8, 27, 0, 0, tzinfo=timezone.utc)
+    due = datetime(2026, 8, 27, 0, 0, tzinfo=UTC)
     expectation = ExpectedSignal(
         id="expectation:daily-reconciliation",
         subject_ref="listing:SKU-1",
