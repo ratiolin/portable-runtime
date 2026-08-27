@@ -1,0 +1,35 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "persistent-responsibility-v1.schema.json",
+  "title": "Persistent Responsibility Object",
+  "type": "object",
+  "required": ["id", "object_type", "created_at"],
+  "properties": {
+    "id": {"type": "string", "minLength": 1},
+    "object_type": {
+      "type": "string",
+      "enum": [
+        "StandingResponsibility",
+        "ResponsibilityAdmission",
+        "ResponsibilityRevision",
+        "ResponsibilityLifecycleTransition",
+        "ResponsibilityExpectation",
+        "ResponsibilityExpectationResolution",
+        "ResponsibilityAssessment",
+        "WorkProposal",
+        "PriorityJudgment",
+        "ResourcePool",
+        "PortfolioAdmissionDecision",
+        "ResourceReservation",
+        "ResourceReservationRelease",
+        "Commitment",
+        "ReasoningSessionBinding",
+        "ResponsibilityContextSnapshot",
+        "ResponsibilityHandoff",
+        "ContinuityValidation"
+      ]
+    },
+    "created_at": {"type": "string", "format": "date-time"}
+  },
+  "additionalProperties": true
+}
