@@ -1,3 +1,5 @@
+from portable_runtime.responsibility.domain import due_expectations, record_domain_assessment
+from portable_runtime.responsibility.inspection import ResponsibilityInspection, inspect_responsibility
 from portable_runtime.responsibility.models import (
     Commitment,
     ContinuityValidation,
@@ -27,13 +29,23 @@ from portable_runtime.responsibility.models import (
     parse_responsibility_object,
 )
 from portable_runtime.responsibility.persistence import ResponsibilityJournal
+from portable_runtime.responsibility.reference_profiles import (
+    DeploymentHealthState,
+    ListingIntegrityState,
+    assess_deployment_health,
+    assess_listing_integrity,
+    deployment_health_proposal,
+    listing_integrity_proposal,
+)
 from portable_runtime.responsibility.service import ResponsibilityKernel
 
 __all__ = [
     "Commitment",
     "ContinuityValidation",
+    "DeploymentHealthState",
     "EffectClass",
     "ExpectationResolutionKind",
+    "ListingIntegrityState",
     "PortfolioAdmissionDecision",
     "PriorityDimensions",
     "PriorityJudgment",
@@ -49,6 +61,7 @@ __all__ = [
     "ResponsibilityExpectation",
     "ResponsibilityExpectationResolution",
     "ResponsibilityHandoff",
+    "ResponsibilityInspection",
     "ResponsibilityJournal",
     "ResponsibilityKernel",
     "ResponsibilityLifecycleTransition",
@@ -57,5 +70,12 @@ __all__ = [
     "ResponsibilityStatus",
     "StandingResponsibility",
     "WorkProposal",
+    "assess_deployment_health",
+    "assess_listing_integrity",
+    "deployment_health_proposal",
+    "due_expectations",
+    "inspect_responsibility",
+    "listing_integrity_proposal",
     "parse_responsibility_object",
+    "record_domain_assessment",
 ]
