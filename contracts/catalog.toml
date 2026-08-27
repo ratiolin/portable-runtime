@@ -14,6 +14,13 @@ current = "responsibility-separation-v1"
 semantic_path = "contracts/semantics/core/responsibility-separation-v1.md"
 public = false
 
+[contracts.persistent_responsibility]
+current = "persistent-responsibility-v1"
+schema_path = "contracts/schemas/responsibility/persistent-responsibility-v1.schema.json"
+semantic_path = "contracts/semantics/core/persistent-responsibility-v1.md"
+public_read = true
+public_write = "authority-gated"
+
 [contracts.distinction_governance]
 current = "distinction-governance-1.0"
 semantic_path = "contracts/semantics/governance/distinction-governance-v1.md"
