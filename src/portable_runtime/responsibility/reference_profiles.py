@@ -49,7 +49,10 @@ def assess_listing_integrity(
         basis_refs=evidence_refs,
         assessed_at=now,
         fresh_until=now + timedelta(minutes=15),
-        rationale="Commerce facts remain domain-owned; this object records only the portable responsibility assessment.",
+        rationale=(
+            "Commerce facts remain domain-owned; this object records only the "
+            "portable responsibility assessment."
+        ),
     )
     return record_domain_assessment(kernel, assessment, now=now)
 
@@ -95,7 +98,10 @@ def listing_integrity_proposal(
             subject_ref=assessment.subject_ref,
             work_kind="listing-requalification-preparation",
             title="Prepare listing requalification evidence",
-            description="Prepare bounded evidence for Commerce-owned publication qualification; do not restore qualification.",
+            description=(
+                "Prepare bounded evidence for Commerce-owned publication qualification; "
+                "do not restore qualification."
+            ),
             requested_resources=ResourceVector(compute_units=1, api_calls=2, concurrency_slots=1),
             requested_capabilities=["commerce.read", "shopify.read"],
             expected_result="requalification evidence package",
@@ -126,7 +132,10 @@ def assess_deployment_health(
         basis_refs=evidence_refs,
         assessed_at=now,
         fresh_until=now + timedelta(minutes=10),
-        rationale="Monitoring and repository/runtime facts remain profile-owned; this records only the portable assessment.",
+        rationale=(
+            "Monitoring and repository/runtime facts remain profile-owned; "
+            "this records only the portable assessment."
+        ),
     )
     return record_domain_assessment(kernel, assessment, now=now)
 
@@ -154,7 +163,10 @@ def deployment_health_proposal(
             subject_ref=assessment.subject_ref,
             work_kind="deployment-health-diagnosis",
             title="Diagnose deployment health",
-            description="Read metrics, logs and repository/runtime state; produce diagnosis without host mutation.",
+            description=(
+                "Read metrics, logs and repository/runtime state; produce diagnosis "
+                "without host mutation."
+            ),
             requested_resources=ResourceVector(compute_units=2, api_calls=5, concurrency_slots=1),
             requested_capabilities=["metrics.read", "logs.read", "code.read"],
             expected_result="diagnosis with current evidence and bounded repair options",
@@ -172,7 +184,10 @@ def deployment_health_proposal(
             subject_ref=assessment.subject_ref,
             work_kind="candidate-patch",
             title="Prepare isolated candidate repair",
-            description="Prepare and test an isolated candidate patch; do not merge, deploy or mutate host runtime.",
+            description=(
+                "Prepare and test an isolated candidate patch; do not merge, deploy "
+                "or mutate host runtime."
+            ),
             requested_resources=ResourceVector(compute_units=4, api_calls=4, concurrency_slots=1),
             requested_capabilities=["code.read", "code.edit", "code.test", "git.diff"],
             expected_result="tested candidate patch and deterministic verification evidence",
@@ -190,7 +205,10 @@ def deployment_health_proposal(
             subject_ref=assessment.subject_ref,
             work_kind="deployment-effect-proposal",
             title="Request bounded deployment effect",
-            description="Represent requested deployment effect only; execution remains behind existing authorization/RealityBoundary.",
+            description=(
+                "Represent requested deployment effect only; execution remains behind "
+                "existing authorization/RealityBoundary."
+            ),
             requested_resources=ResourceVector(
                 compute_units=1,
                 api_calls=1,
