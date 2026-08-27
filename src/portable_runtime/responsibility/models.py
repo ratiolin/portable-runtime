@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from enum import StrEnum
-from typing import Annotated, Literal, TypeAlias
+from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -48,7 +48,7 @@ class ResponsibilityObject(BaseModel):
     created_at: datetime = Field(default_factory=utcnow)
 
     @model_validator(mode="after")
-    def _non_empty_id(self) -> "ResponsibilityObject":
+    def _non_empty_id(self) -> ResponsibilityObject:
         if not self.id.strip():
             raise ValueError("responsibility object id must not be empty")
         return self
@@ -62,7 +62,7 @@ class StandingResponsibility(ResponsibilityObject):
     schema_version: str = "persistent-responsibility-v1"
 
     @model_validator(mode="after")
-    def _identity_not_empty(self) -> "StandingResponsibility":
+    def _identity_not_empty(self) -> StandingResponsibility:
         if not self.responsibility_kind.strip():
             raise ValueError("responsibility_kind must not be empty")
         if not self.statement.strip():
@@ -90,7 +90,7 @@ class ResponsibilityRevision(ResponsibilityObject):
     reason: str = ""
 
     @model_validator(mode="after")
-    def _monotonic(self) -> "ResponsibilityRevision":
+    def _monotonic(self) -> ResponsibilityRevision:
         if self.to_version != self.from_version + 1:
             raise ValueError("responsibility revision must advance version by exactly one")
         if not self.statement.strip():
@@ -111,14 +111,17 @@ class ResponsibilityLifecycleTransition(ResponsibilityObject):
     reason: str = ""
 
     @model_validator(mode="after")
-    def _meaningful_transition(self) -> "ResponsibilityLifecycleTransition":
+    def _meaningful_transition(self) -> ResponsibilityLifecycleTransition:
         if self.from_status == self.to_status:
             raise ValueError("responsibility lifecycle transition must change status")
         if self.to_status is ResponsibilityStatus.DISCHARGED and not self.decision_ref:
             raise ValueError("responsibility discharge requires an explicit decision_ref")
-        if self.from_status is ResponsibilityStatus.DISCHARGED and self.to_status is ResponsibilityStatus.ACTIVE:
-            if not self.decision_ref:
-                raise ValueError("reopening a discharged responsibility requires decision_ref")
+        if (
+            self.from_status is ResponsibilityStatus.DISCHARGED
+            and self.to_status is ResponsibilityStatus.ACTIVE
+            and not self.decision_ref
+        ):
+            raise ValueError("reopening a discharged responsibility requires decision_ref")
         return self
 
 
@@ -134,7 +137,7 @@ class ResponsibilityExpectation(ResponsibilityObject):
     source_requirement: str | None = None
 
     @model_validator(mode="after")
-    def _valid_windows(self) -> "ResponsibilityExpectation":
+    def _valid_windows(self) -> ResponsibilityExpectation:
         if self.recurrence_seconds is not None and self.recurrence_seconds <= 0:
             raise ValueError("recurrence_seconds must be positive")
         if self.freshness_window_seconds is not None and self.freshness_window_seconds <= 0:
@@ -173,7 +176,7 @@ class ResourceVector(BaseModel):
     domain_quota: dict[str, int] = Field(default_factory=dict)
 
     @model_validator(mode="after")
-    def _non_negative(self) -> "ResourceVector":
+    def _non_negative(self) -> ResourceVector:
         base = (
             self.compute_units,
             self.api_calls,
@@ -185,7 +188,7 @@ class ResourceVector(BaseModel):
             raise ValueError("resource values cannot be negative")
         return self
 
-    def fits_within(self, other: "ResourceVector") -> bool:
+    def fits_within(self, other: ResourceVector) -> bool:
         if (
             self.compute_units > other.compute_units
             or self.api_calls > other.api_calls
@@ -196,7 +199,7 @@ class ResourceVector(BaseModel):
             return False
         return all(value <= other.domain_quota.get(key, 0) for key, value in self.domain_quota.items())
 
-    def plus(self, other: "ResourceVector") -> "ResourceVector":
+    def plus(self, other: ResourceVector) -> ResourceVector:
         keys = set(self.domain_quota) | set(other.domain_quota)
         return ResourceVector(
             compute_units=self.compute_units + other.compute_units,
@@ -219,7 +222,7 @@ class PriorityDimensions(BaseModel):
     human_attention_cost: int
 
     @model_validator(mode="after")
-    def _bounded(self) -> "PriorityDimensions":
+    def _bounded(self) -> PriorityDimensions:
         for value in (
             self.urgency,
             self.impact,
@@ -379,7 +382,7 @@ class ContinuityValidation(ResponsibilityObject):
         )
 
 
-ResponsibilityValue: TypeAlias = Annotated[
+type ResponsibilityValue = Annotated[
     StandingResponsibility
     | ResponsibilityAdmission
     | ResponsibilityRevision
