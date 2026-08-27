@@ -32,6 +32,12 @@ build-backend = "hatchling.build"
 [tool.hatch.build.targets.wheel]
 packages = ["src/portable_runtime"]
 
+# `contracts/` remains the sole canonical owner in the source repository.
+# The wheel carries an immutable distribution copy so public contract APIs
+# remain usable by downstream consumers installed from a wheel/VCS source.
+[tool.hatch.build.targets.wheel.force-include]
+"contracts" = "portable_runtime/_contracts"
+
 [tool.ruff]
 target-version = "py312"
 line-length = 120
@@ -85,7 +91,6 @@ exclude = ["tests/"]
 [tool.coverage.run]
 omit = ["tests/*", ".venv/*"]
 
-
 [[tool.mypy.overrides]]
 module = "portable_runtime.core.independence"
 ignore_missing_imports = true
@@ -109,14 +114,3 @@ ignore_missing_imports = true
 [[tool.mypy.overrides]]
 module = "control_plane"
 ignore_missing_imports = true
-
-
-
-
-
-
-
-
-
-
-
