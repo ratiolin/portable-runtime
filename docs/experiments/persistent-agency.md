@@ -1,12 +1,41 @@
-# Persistent responsibility experiment
+# Persistent responsibility experiment — historical precursor
 
-Status: **experimental / non-canonical / non-authority-bearing**.
+Status: **historical precursor / non-authority-bearing experiment**.
 
-This experiment asks what must exist *above* durable Work/Run orchestration when a system is expected to remain responsible for a condition over time. It intentionally does not add new public contracts to `src/portable_runtime` or the canonical contract catalog.
+This document originally captured the falsifiable Stage-4 candidate that preceded `persistent-responsibility-v1`.
 
-## Hypothesis
+The promotion decision has now happened: the responsibility positions that survived independent-domain falsification are owned canonically by:
 
-Stage-4 persistent agency requires a durable responsibility owner that outlives any single Work. The candidate flow is:
+```text
+contracts/semantics/core/persistent-responsibility-v1.md
+contracts/schemas/responsibility/persistent-responsibility-v1.schema.json
+src/portable_runtime/responsibility/
+```
+
+Therefore this experiment is **not** the current product-status or semantic authority for promoted concepts such as `StandingResponsibility`, `ResponsibilityAssessment`, `WorkProposal`, resource reservation/commitment separation, process/provider/model/session continuity, or the negative invariants cataloged by `persistent-responsibility-v1`.
+
+The promoted contract includes, among others:
+
+```text
+HistoricalAssessment -/-> CurrentWorkAdmission
+Commitment -/-> ExecutionAuthorization
+ProviderChange -/-> ResponsibilityIdentityChange
+ContextReset -/-> ResponsibilityLoss
+ResponsibilityHandoff -/-> AuthorityTransfer
+NoObservedFailure -/-> ConditionVerifiedHealthy
+TaskCompleted -/-> ResponsibilityDischarged
+StandingResponsibility -/-> PermanentAuthority
+```
+
+## What remains useful here
+
+The old experiment remains useful as lineage for how the promoted contract was discovered and as a place to explore concepts that are **not** part of v1, for example broader supervisor/autonomy/arbitration policies.
+
+Those experiment-only ideas must not be inferred into the stable contract. Any future promotion requires a new explicit versioned contract change driven by real failure/user need and independent-domain evidence.
+
+## Historical hypothesis
+
+The original hypothesis was that durable Work/Run orchestration is insufficient when a system must remain responsible for a condition over time. The candidate flow was:
 
 ```text
 StandingResponsibility
@@ -17,44 +46,41 @@ StandingResponsibility
   -> Commitment + ResourceEnvelope
   -> Work / Run / Effect / Verification
   -> Responsibility reassessment
-  -> wait / reopen / propose again
 ```
 
-A Trigger may wake the system, but a trigger does not itself justify Work. A model may propose Work, but proposal does not itself commit resources or mint authority. A completed Work does not discharge a standing responsibility.
+That hypothesis was later refined and promoted into the canonical v1 vocabulary. In the canonical contract, `SituationAssessment` became `ResponsibilityAssessment`, portfolio/resource admission became explicit typed positions, and continuity across provider/model/session/process changes became explicit durable state.
 
-## Candidate non-equivalences
+## Promotion evidence now available
 
-These are deliberately **not** canonical. They should be promoted only if independent domains produce counterexamples that require them.
+Two independent downstream domains now exercise the promoted semantics:
 
-- `Observation != SituationAssessment`
-- `SituationAssessment != WorkProposal`
-- `WorkProposal != Commitment`
-- `Commitment != ExecutionAuthorization`
-- `PriorityJudgment != ValueTruth`
-- `ResourceAllocation != ExternalEffectAuthority`
-- `TaskCompleted != StandingResponsibilityDischarged`
-- `StandingResponsibility != PermanentAuthority`
-- `RoleDelegation != SubdelegationRight`
-- `NoObservedFailure != ConditionVerifiedHealthy`
+- Commerce listing integrity: durable SQLite responsibility restart while PostgreSQL/DBOS remain the business/effect truth owners; responsibility continuity does not mint `AuthorizationGrant`.
+- Control-plane deployment health: SQLite restart plus provider/model/session replacement, followed by fresh Prometheus current-truth re-evaluation that supersedes a still-fresh historical diagnostic proposal without deleting history or creating Work/authority.
 
-## Why Commitment exists
+These downstream results are evidence for the stable contract. They do not make this historical experiment a normative dependency.
 
-A proposal can be sensible while still not deserving resources *now*. Commitment is the explicit boundary where a system accepts a bounded resource allocation, stop conditions, and escalation conditions. It remains non-authority-bearing: external effect authority must still come from the existing authorization path.
+## Authority ceiling remains unchanged
 
-## Why priority is multidimensional
+Promotion of persistent responsibility did **not** promote permanent authority or unrestricted autonomy:
 
-The experiment stores urgency, impact, risk, reversibility, confidence, resource cost, and human-attention cost as separate dimensions. It intentionally avoids a universal scalar `priority_score` that would pretend a policy judgment is objective value truth.
+```text
+StandingResponsibility != PermanentAuthority
+WorkProposal != Commitment
+Commitment != ExecutionAuthorization
+ResponsibilityHandoff != AuthorityTransfer
+```
 
-## Missing events
+External effects still require the existing current Decision/Authorization/RealityBoundary path and fresh verification afterwards.
 
-Persistent responsibility cannot depend only on positive events. `ExpectedSignal` allows elapsed time plus missing evidence to produce a `SituationAssessment`. Absence becomes actionable only relative to an explicit expectation; `no error observed` is not equivalent to verified health.
+## Still non-goals for v1
 
-## Escalation
+```text
+continual model/policy learning
+universal value/priority function
+automatic permanent mission creation
+self-expanding permissions
+self-authorizing external repair
+canonical universal cross-mission arbitration
+```
 
-The experiment treats autonomy and authority as independent. Read-only, reversible diagnosis may remain autonomous. Financial or irreversible external effects can route to human review without reducing the system's ability to notice, diagnose, propose, or prepare work.
-
-## Promotion rule
-
-Do not move these types into the canonical runtime merely because the experiment is convenient. Promotion requires repeated domain evidence that collapsing the candidate responsibility position causes a real shortcut, ambiguity, or unsafe state.
-
-The first reference-domain falsification target is `commerce-orchestrator`'s Listing Integrity Steward: a standing responsibility remains active after each listing-diagnosis Work completes, while external publication changes continue to use Commerce-owned Decision -> ExecutionAuthorization -> Effect -> Reality -> ConfirmedOutcome semantics.
+For current product status, use [`../../README.md`](../../README.md), [`../current-implementation.md`](../current-implementation.md), [`../architecture.md`](../architecture.md), and the canonical contract itself.

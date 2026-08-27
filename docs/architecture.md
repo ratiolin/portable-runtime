@@ -1,6 +1,6 @@
 # Architecture
 
-Portable Runtime R2.0 is a responsibility-preserving durable execution runtime. The repository also contains a deliberately non-canonical persistent-agency experiment above the runtime. Canonical product semantics remain owned by `contracts/`; experimental code and this document are explanatory/testing surfaces and cannot redefine those contracts.
+Portable Runtime R2.0 is a provider-neutral durable execution runtime with a stable canonical persistent-responsibility layer. Canonical product semantics remain owned by `contracts/`; this document is explanatory and cannot redefine those contracts.
 
 ## 1. Canonical ownership
 
@@ -17,26 +17,28 @@ contracts semantic contracts
 > Responsibility Inspector
 ```
 
-`contracts/catalog.toml` is the machine-readable contract index. Source-checkout and installed-wheel consumers resolve the same repository-owned catalog; wheel builds package a distribution copy under `portable_runtime/_contracts` so public contract interpretation does not depend on a Git checkout.
+`contracts/catalog.toml` is the machine-readable contract index. External research/proof repositories, experiments and historical documents may provide evidence or lineage but are not normative inputs unless explicitly promoted into `contracts/`.
 
-External research repositories, proof repositories, experiments and historical documents may provide evidence or lineage, but they are not normative inputs to current runtime state, authority, qualification, transition or wire meaning unless explicitly promoted into `contracts/`.
+`persistent-responsibility-v1` has been promoted and is therefore part of the canonical product layer. The historical `experiments/` implementation is no longer the owner of the promoted semantics.
 
-## 2. Repository layering
+## 2. Product layering
 
-The current repository has two distinct layers:
+The current architecture is:
 
 ```text
-EXPERIMENTAL / NON-CANONICAL
+CANONICAL PERSISTENT RESPONSIBILITY
 StandingResponsibility
-  -> Observation / ExpectedSignal
-  -> SituationAssessment
+  -> Observation / Evidence
+  -> ResponsibilityAssessment
   -> WorkProposal
   -> PriorityJudgment
-  -> Commitment + ResourceEnvelope
-  -> ResponsibilitySupervisor
+  -> PortfolioAdmissionDecision
+  -> ResourceReservation
+  -> Commitment
         |
+        | bounded Work admission; no effect authority shortcut
         v
-CANONICAL / PRODUCT RUNTIME
+CANONICAL DURABLE EXECUTION
 Work / Run / Step / StepAttempt
         |
         v
@@ -55,29 +57,108 @@ Provider / external effect
 Observation / Evidence
         |
         v
-verification -> revalidation / recovery / reopen
+verification -> responsibility reassessment / revalidation / recovery / reopen
 ```
 
-The upper layer currently lives under `experiments/` and `docs/experiments/`. It is not imported as a public runtime API, is not listed in the canonical contract catalog, and is explicitly non-authority-bearing.
+Responsibility and execution share the existing StateStore/Event durability substrate. The responsibility layer is not a second workflow engine.
 
-The lower layer is the current portable runtime product surface. Cross-cutting concerns include append-only history, provenance, versioning, idempotency, leases/fencing, explicit authority, failure-domain routing, recovery, conformance and state portability.
+## 3. Responsibility identity and continuity
 
-## 3. Durable execution model
+A `StandingResponsibility` is durable identity plus bounded statement/scope. It is not a task, provider identity or authority grant.
 
-The basic orchestration objects are:
+```text
+StandingResponsibility
+!= Work / Run
+!= provider / model / reasoning session
+!= PermanentAuthority
+```
+
+Continuity across provider/model/session/process changes is represented through:
+
+```text
+ReasoningSessionBinding
+ResponsibilityContextSnapshot
+ResponsibilityHandoff
+ContinuityValidation
+```
+
+The provider/model/session is a temporary worker context. A handoff preserves responsibility history but must recheck activity, scope/version, assessment/proposal freshness, expectations and reservations. It always requires execution-authorization revalidation before a later external effect.
+
+Therefore:
+
+```text
+ProviderChange -/-> ResponsibilityIdentityChange
+ContextReset -/-> ResponsibilityLoss
+ResponsibilityHandoff -/-> AuthorityTransfer
+```
+
+## 4. Current truth versus history
+
+Responsibility history is append-only. Historical existence does not imply current eligibility.
+
+```text
+HistoricalAssessment -/-> CurrentWorkAdmission
+NoObservedFailure -/-> ConditionVerifiedHealthy
+```
+
+A new current observation can supersede an older assessment/proposal for current-use purposes without deleting the old record. Responsibility scope/version changes also make prior current-use eligibility stale until revalidated.
+
+This is why continuity snapshots are history/context carriers, not current-truth or authority tokens.
+
+## 5. Work admission
+
+Persistent responsibility may materialize Work only through the explicit bounded chain:
+
+```text
+active responsibility
++ current responsibility version
++ current assessment
++ WorkProposal
++ admitted PriorityJudgment
++ admitted PortfolioAdmissionDecision
++ current ResourceReservation
++ Commitment
+-> Work
+```
+
+`ResponsibilityAssessment` alone does not create Work. `WorkProposal` alone does not create a commitment. `Commitment` does not create effect authorization.
+
+Materialized Work keeps responsibility/proposal/commitment/reservation provenance. For external effects it explicitly records that effect authority is required separately.
+
+## 6. Authorization and RealityBoundary
+
+Authority remains isolated from responsibility coordination, model judgment and policy allow.
+
+```text
+assessment / proposal / priority / commitment
+        !=
+Decision
+        !=
+AuthorizationGrant / AuthorizationUse
+        !=
+InvocationPermit
+        !=
+provider execution
+        !=
+verified Outcome
+```
+
+The RealityBoundary is the runtime control point before provider/external effects. Provider replacement, process restart, state import or responsibility handoff cannot mint or transfer authority.
+
+## 7. Durable execution model
+
+The execution layer includes:
 
 - `Work`: durable task/request identity;
 - `Run`: one workflow execution for a Work item;
 - `Step`: durable procedure position;
-- `StepAttempt`: one execution attempt and its request/provider lineage;
+- `StepAttempt`: one execution attempt and request/provider lineage;
 - `Checkpoint`: recoverable progress boundary;
-- `Compensation`: explicit compensation intent/state rather than implicit rollback.
+- `Compensation`: explicit compensation intent/state.
 
-The runtime supports interruption/resume, stale-step recovery inspection, CAS where required by stores, idempotent execution paths, and run leases with fencing semantics. Lease acquire/renew/release attempts are journaled when the event store is available.
+The runtime supports interruption/resume, stale-step recovery inspection, CAS where required, idempotent paths, leases/fencing and explicit reconciliation behavior. Ambiguous external failure is not permission to repeat a side effect.
 
-Ambiguous external failure is not treated as permission to blindly repeat a side effect. The compatibility `Runtime.reconcile(step_id)` path is intentionally fail-closed: a Step plus its latest attempt does not prove a unique reconciliation responsibility, so it cannot authorize an external reconciliation effect on its own.
-
-## 4. Capability and provider boundary
+## 8. Capability/provider boundary
 
 `Runtime` composes:
 
@@ -92,231 +173,132 @@ RealityBoundary
 CapabilityService
 ```
 
-Workflows and callers request a capability; they do not directly own provider selection. The RealityBoundary is the control point between runtime judgment/governance state and provider/external effects.
+Workflows request capabilities rather than owning concrete providers. Provider protocol compatibility is independent of durable responsibility identity.
 
-Provider protocol `1` is a separate compatibility axis from runtime protocol `2.0`. The stdio provider transport uses `stdio-jsonl`; changing provider transport does not silently redefine runtime state or responsibility semantics.
+The architecture distinguishes:
 
-## 5. Responsibility and semantic record plane
+```text
+workflow intent
+!= provider selection
+!= policy allow
+!= execution authorization
+!= external effect
+```
 
-The record plane preserves distinctions that ordinary agent/workflow stacks often collapse. Important canonical separations include:
+## 9. Semantic record plane
+
+Canonical separations include:
 
 ```text
 judgment != authorization
-policy allow != AuthorizationGrant
-provider/execution success != verified/confirmed objective completion
-epistemic supported != governance qualified
-governed state application != real-world Action
+provider/execution success != verified objective completion
+supported != current-use qualified
 historical provenance != current qualification
 dependency impact != discharge
 repair selection != repair realization
 current-use admission != execution authority
 ```
 
-Record type, epistemic status and lifecycle status are intentionally orthogonal. Provenance is retained, and `produces` is not silently promoted into `causes`.
+Record type, epistemic status and lifecycle status remain orthogonal. Provenance is retained and `produces` is not silently promoted into `causes`.
 
-Generic relation ingress does not allow a caller to manufacture local governance edges by naming them. Authority-bearing local semantic relations require matching durable proof, such as a covering `AuthorizationUse` or the exact Revision endpoint relationship. Reopen lineage is committed through the reopen control action rather than fabricated by a generic relation payload.
+## 10. Revision, revalidation and lifecycle
 
-The complete canonical separation set is owned by `contracts/semantics/core/responsibility-separation-v1.md`.
+Historical success is not permanent current validity. Typed dependency impact, revalidation disposition and reopen state preserve history while requiring current justification after change.
 
-## 6. Authorization and current validity
-
-Authorization is isolated from model judgment and from policy allow. Authority is bound to the subject/context that was actually authorized, including version references where required.
-
-The architecture therefore distinguishes:
+Standing-responsibility lifecycle is explicit:
 
 ```text
-judgment formed
-        !=
-policy says allowed
-        !=
-authority granted
-        !=
-authority used for this invocation/effect
-        !=
-external action actually occurred
+active
+suspended
+discharged
 ```
 
-Public consumers may inspect non-authority-bearing views, but cannot reconstruct internal authority objects from those views. `InvocationPermit` and `GovernanceUseRequirement` remain internal; public surfaces expose bounded views only.
+Work completion, provider success, UI state or absence of recent failures do not discharge the responsibility. Discharge and reopen require explicit decision provenance plus an applied lifecycle transition.
 
-The persistent-agency experiment does not weaken this boundary. `Commitment` and resource allocation in the experiment are explicitly non-authority-bearing; an external effect still requires the existing authorization path.
+## 11. Stores and portability
 
-## 7. Revision, revalidation and reopen
-
-Historical success is not permanent current validity.
-
-The runtime retains dependency/provenance history and can represent typed impact, pending revalidation, explicit revalidation disposition and reopen responsibility. A changed evaluator, policy, dependency or other governing basis may invalidate current use without rewriting the historical fact that an earlier judgment or action occurred.
-
-The resulting rule is:
+Responsibility objects use the existing StateStore/Event/SQLite/export/import/bundle durability path.
 
 ```text
-historically accepted / qualified / used
-        !=
-currently eligible for reuse
+state or bundle import
+-/-> AuthorizationGrant
+-/-> InvocationPermit
+-/-> external effect
 ```
 
-Reopen creates new responsibility/history; it does not erase the earlier closed state.
+SQLite can therefore preserve both durable execution state and persistent-responsibility history across process restarts without coupling either identity to a model session.
 
-## 8. Knowledge and Experience use
+## 12. Downstream fault-domain evidence
 
-`KnowledgeProjection` is selectively consolidated state, not a synonym for reality or authority.
+The architecture has independent downstream executable evidence.
 
-The Experience contracts distinguish:
+### Commerce / listing integrity
+
+Commerce keeps PostgreSQL/DBOS as the owner of business facts, Decisions, ExecutionAuthorization, effects and verified outcomes while consuming the portable responsibility kernel for durable responsibility coordination. SQLite restart preserves responsibility identity/history and does not mint effect authority.
+
+### Operations / deployment health
+
+Control-plane keeps Alertmanager/Prometheus operational facts profile-owned. Its responsibility adapter converts those facts into canonical assessments/read-only proposals only. A real SQLite close/reopen plus provider/model/session replacement preserves the same responsibility, and fresh Prometheus healthy evidence supersedes a still-fresh historical diagnostic proposal for current use. No Work or authorization is minted by continuity/handoff.
+
+These domains exercise different fault boundaries and support the narrow claim that responsibility identity/current-use state can be provider/model/session/process-independent.
+
+## 13. Trigger boundary
+
+Triggers are ingress/wakeup, not Work admission:
 
 ```text
-current ExperienceUseAdmission
-        !=
-HistoricalExperienceUse
-        !=
-task/domain judgment
-        !=
-execution authorization
+Trigger != Observation proof
+Observation != ResponsibilityAssessment
+ResponsibilityAssessment != Work
 ```
 
-Historical use records what experience was actually relied on for a judgment. Current-use admission is re-evaluated independently; the existence of historical use does not self-qualify the same experience for current use.
+Missing signals are meaningful only relative to explicit expectations and evidence requirements.
 
-The canonical public DTOs/schemas and semantics are under `contracts/schemas/experience/` and `contracts/semantics/experience/`.
+## 14. HTTP/public surfaces
 
-## 9. Workflow boundary
+The built-in FastAPI control plane is local-control infrastructure, not an authenticated multi-user enterprise API.
 
-Workflows describe procedure and capability use, not concrete provider ownership. They call `WorkflowContext.invoke(capability, ...)` and stores rather than importing a concrete provider implementation.
+Current public-contract HTTP routes expose the contract catalog and Experience-use surfaces. Persistent responsibility remains canonical even without mintable public HTTP responsibility DTOs; HTTP exposure is a separate compatibility surface.
 
-Built-in workflows currently include:
+Internal authority objects such as `InvocationPermit` remain non-public.
 
-- `generic-task`;
-- `incident-repair`;
-- `daily-scan`;
-- `knowledge-consolidation`.
+## 15. Historical experiments
 
-`generic-task` is intentionally fail-closed: provider `status="succeeded"` proves execution only. Durable outputs/evidence prove delivery only. Without an explicitly injected objective verifier returning literal `True`, the workflow waits rather than declaring terminal success.
+`experiments/persistent_agency.py` and `docs/experiments/persistent-agency.md` were precursors to the promoted responsibility contract. Their promoted subset is now owned by `persistent-responsibility-v1` and `src/portable_runtime/responsibility/`.
 
-## 10. Trigger boundary
+Experiment-only concepts may still be useful for future falsification, including broader supervisor/autonomy/arbitration ideas. They remain non-canonical unless a later explicit contract version promotes them.
 
-Triggers can create Work from webhook/schedule/alert-compatible ingress and may apply ingress authentication/idempotency as appropriate.
+## 16. Current autonomy ceiling
 
-Canonical Trigger semantics remain ingress semantics. A Trigger does not itself prove that a new Work is justified, prioritized or authorized.
+The product now owns durable provider/model/session-independent responsibility state in addition to durable execution. It does **not** thereby claim unrestricted autonomous operation.
 
-The persistent-agency experiment specifically tests a richer sequence above Work:
+Not part of v1:
 
 ```text
-Observation / ExpectedSignal
-!= SituationAssessment
-!= WorkProposal
-!= Commitment
-!= ExecutionAuthorization
-```
-
-`ResponsibilitySupervisor` requires a registered SituationAssessment before a WorkProposal can be registered, preserving the distinction between being awakened by an event and committing Work.
-
-## 11. Persistent-agency experiment
-
-`experiments/persistent_agency.py` currently defines non-canonical candidate objects including:
-
-- `StandingResponsibility` and its active/suspended/discharged lifecycle;
-- `Observation` and `ExpectedSignal`;
-- `SituationAssessment`;
-- `WorkProposal` and proposal lifecycle;
-- multidimensional `PriorityJudgment`;
-- `ResourceRequest` and `ResourceEnvelope`;
-- `Commitment`;
-- `WorkRecord`;
-- `RoleDelegation`;
-- `EscalationPolicy`;
-- `ResponsibilityPortfolio`.
-
-`experiments/responsibility_supervisor.py` adds a non-canonical coordinator that:
-
-- refuses a WorkProposal without a registered SituationAssessment under the same standing responsibility;
-- enforces committed resource ceilings through explicit `ResourceConsumption` records;
-- can turn an overdue `ExpectedSignal` with absent evidence into a SituationAssessment;
-- keeps bounded Work completion separate from standing-responsibility discharge.
-
-Candidate non-equivalences are documented in `docs/experiments/persistent-agency.md`. They are intentionally not canonical. Promotion requires repeated domain evidence that collapsing a candidate responsibility position causes a real shortcut, ambiguity or unsafe state.
-
-The experiment therefore demonstrates executable candidate semantics, not a public Stage-4 product contract.
-
-## 12. Stores and portability
-
-The runtime separates state, artifacts and events through interfaces such as `StateStore`, `ArtifactStore` and event-journal operations.
-
-Current implementations include in-memory and SQLite/filesystem-backed local operation, plus portable export/import and bundle support. Runtime protocol `2.0` covers the state/bundle/HTTP/CLI compatibility surface.
-
-Portable state preserves durable identity/history; importing state does not grant new semantic authority by itself.
-
-The persistent-agency experiment currently uses in-process dataclass state and is not part of the canonical portable state/bundle protocol.
-
-## 13. HTTP control-plane boundary
-
-The FastAPI control plane intentionally does not pretend to be an authenticated multi-user service.
-
-Mutating control/governance routes call a local-control guard and reject non-loopback callers. A remote deployment must put an authenticated and authorized deployment boundary in front of this process rather than treating the built-in HTTP server as an enterprise IAM boundary.
-
-Core HTTP surfaces include runtime/health/provider/work/run/state/knowledge and governance inspection/control routes. Canonical public-contract routes are attached by `portable_runtime.public_contracts.http.create_public_app()`:
-
-```text
-GET  /v1/contracts
-POST /v1/experience/use/evaluate
-POST /v1/experience/historical-use/commit
-GET  /v1/experience/historical-use/{judgment_id}
-```
-
-The historical-use commit endpoint is a local mutation boundary.
-
-No persistent-agency experiment object is exposed as a canonical HTTP contract.
-
-## 14. Public contract packaging and conformance
-
-`contracts/` is the semantic owner; Python is the reference execution oracle. TypeScript packages and the Responsibility Inspector are non-authoritative consumers.
-
-The installed Python wheel packages the canonical contract catalog and required public contract artifacts for downstream consumers. Conformance vectors verify public DTO/canonical behavior and negative paths.
-
-The persistent-agency experiment is covered by ordinary repository tests, not canonical conformance vectors. Passing those tests does not promote its semantics into the public contract catalog.
-
-## 15. Current autonomy ceiling
-
-Portable Runtime currently provides substantial infrastructure useful for persistent governed agency: durable tasks, event ingress, provider-independent execution, authority separation, long-lived state/history, revalidation, recovery/reopen and explicit reality boundaries.
-
-The repository now also contains an executable Stage-4 candidate experiment for standing responsibility, proposal/commitment separation, priority dimensions, resource envelopes, missing-signal assessment and responsibility supervision.
-
-However, the canonical runtime still does **not** own these as public/product responsibilities:
-
-```text
-StandingResponsibility / Mission
-Goal Portfolio
-SituationAssessment -> WorkProposal admission
-Proposal -> Commitment
-priority/resource arbitration
-resource/budget commitment
-role-level perpetual responsibility lifecycle
-autonomous task generation as a canonical responsibility contract
 continual model/policy learning
+universal value/priority arbitration
+automatic permanent mission creation
+self-expanding permissions
+handoff-based authority transfer
+self-authorizing external repair
+canonical universal cross-mission arbitration
 ```
 
-The correct current claim is therefore:
+External operational effects remain governed by current assessment/proposal/commitment plus a separate current Decision/Authorization, followed by fresh reality verification and responsibility reassessment.
 
-```text
-implemented and tested experimentally
-!= canonicalized
-!= publicly authority-bearing
-!= integrated into durable Work/Run persistence
-```
-
-These concepts must not be inferred from Trigger, Work, KnowledgeProjection or Experience-use support, and the experiment must not be described as if it had already become the production runtime layer.
-
-## 16. Documentation/source-of-truth map
+## 17. Source-of-truth map
 
 | Concern | Primary source |
 | --- | --- |
 | Canonical semantic ownership | `contracts/README.md`, `contracts/catalog.toml`, `contracts/semantics/` |
+| Persistent responsibility | `contracts/semantics/core/persistent-responsibility-v1.md`, `src/portable_runtime/responsibility/` |
 | Current implementation snapshot | `docs/current-implementation.md` |
 | Runtime composition | `src/portable_runtime/core/runtime.py` |
 | HTTP control plane | `src/portable_runtime/api/http.py` |
 | Public contract HTTP | `src/portable_runtime/public_contracts/http.py` |
 | Workflows | `docs/workflow-authoring.md`, `src/portable_runtime/workflows/` |
 | Provider interface/protocol | `docs/provider-api.md`, `docs/provider-protocol.md` |
-| Persistent-agency experiment | `docs/experiments/persistent-agency.md`, `docs/experiments/responsibility-supervisor.md`, `experiments/` |
-| Distinction governance | `docs/distinction-governance-implementation.md` and canonical contracts |
-| Responsibility separations | `docs/responsibility-separation-contracts.md` and canonical contracts |
-| State/bundle migration | `docs/state-migration.md` |
+| Historical persistent-agency precursor | `docs/experiments/persistent-agency.md`, `experiments/` |
 | Exact executable status | GitHub CI for the exact commit |
 
-When explanatory prose and implementation disagree during a documentation synchronization pass, update explanatory prose to the implementation unless the mismatch is a canonical-contract violation. Canonical contract violations must be fixed in implementation rather than documented away.
+When explanatory prose and implementation disagree, update explanatory prose to the canonical contract/implementation. Documentation cannot demote a stable canonical contract back into an experiment.
