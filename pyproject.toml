@@ -1,7 +1,7 @@
 [project]
 name = "portable-runtime"
 version = "0.1.0"
-description = "Portable runtime for durable Work/Run orchestration: pluggable providers, triggers, stores, and workflows"
+description = "Agent Kernel for durable cognitive control, persistent responsibility, and governed Work/Run execution"
 requires-python = ">=3.12"
 readme = "README.md"
 license = { text = "MIT" }
@@ -62,7 +62,7 @@ select = ["E", "F", "I", "N", "W", "UP", "B", "C4", "SIM", "S"]
 "src/portable_runtime/workflows/daily_scan/workflow.py" = ["S110", "SIM105", "E501"]
 "src/portable_runtime/workflows/knowledge_consolidation/workflow.py" = ["S110", "SIM105", "E501", "W291"]
 "src/portable_runtime/workflows/incident_repair/workflow.py" = ["S110", "SIM105"]
-"src/portable_runtime/api/http.py" = ["S110", "SIM105", "E501"]
+"src/portable_runtime/api/http.py" = ["S110", "E501"]
 "src/portable_runtime/api/cli.py" = ["S110", "E501", "F841", "E501"]
 "src/portable_runtime/stores/bundle.py" = ["E501", "B007", "S112", "S110", "I001"]
 "src/portable_runtime/interfaces/transport.py" = ["S110", "SIM105", "E501", "UP042", "SIM102"]
