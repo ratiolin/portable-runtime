@@ -1,11 +1,11 @@
 from __future__ import annotations
 
-import contextlib
 from pathlib import Path
 from typing import Any
 
+from portable_runtime.core import metrics
 from portable_runtime.core.capabilities import CapabilityRequest, CapabilityResult
-from portable_runtime.core.models import Run, Step, Work, new_id, utcnow
+from portable_runtime.core.models import Event, Run, Step, Work, new_id, utcnow
 from portable_runtime.core.registry import ProviderRegistry
 from portable_runtime.core.router import CapabilityService
 from portable_runtime.interfaces.artifact_store import ArtifactStore
@@ -28,12 +28,13 @@ class Runtime:
         from portable_runtime.core.boundary import RealityBoundary
         from portable_runtime.core.capability_contract import CapabilityContractRegistry
         from portable_runtime.core.router import ConstraintRouter
+
         self.runtime_id = runtime_id
         self.store = store or InMemoryStateStore()
         self.artifact_store = artifact_store
         self.registry = registry or ProviderRegistry()
         self.contract_registry = contract_registry or CapabilityContractRegistry()
-        self.routing = ConstraintRouter()
+        self.routing = ConstraintRouter(self.registry)
         self.policy_engine = policy_engine
         self.boundary = RealityBoundary(
             store=self.store,
@@ -42,17 +43,28 @@ class Runtime:
             policy_engine=self.policy_engine,
             reliability=reliability,
             runtime_id=self.runtime_id,
-            contract_registry=self.contract_registry,  # type: ignore[call-arg]
+            contract_registry=self.contract_registry,
         )
         self.capabilities = CapabilityService(boundary=self.boundary)
 
-    def create_work(self, *, title: str, description: str = "", kind: str = "generic-task", **fields: Any) -> Work:
-        work = Work(id=new_id("work"), title=title, description=description, kind=kind, **fields)
+    def create_work(
+        self,
+        *,
+        title: str,
+        description: str = "",
+        kind: str = "generic-task",
+        **fields: Any,
+    ) -> Work:
+        work = Work(
+            id=new_id("work"),
+            title=title,
+            description=description,
+            kind=kind,
+            **fields,
+        )
         self.store.save_work(work)
-        with contextlib.suppress(Exception):
-            from portable_runtime.core import metrics as _metrics
-            _metrics.inc_work(kind=work.kind, status=work.status)
-            _metrics.inc_event("work_created")
+        metrics.inc_work(kind=work.kind, status=work.status)
+        metrics.inc_event("work_created")
         return work
 
     def get_work(self, work_id: str) -> Work | None:
@@ -74,18 +86,20 @@ class Runtime:
             started_at=now,
         )
         self.store.save_run(run)
-        self.store.save_work(work.model_copy(update={"status": "running", "updated_at": now}))
-        with contextlib.suppress(Exception):
-            from portable_runtime.core import metrics as _metrics
-            _metrics.inc_run(workflow_id=workflow_id, status="running")
-            _metrics.inc_event("run_started")
+        self.store.save_work(
+            work.model_copy(update={"status": "running", "updated_at": now})
+        )
+        metrics.inc_run(workflow_id=workflow_id, status="running")
+        metrics.inc_event("run_started")
         return run
 
     async def invoke(self, request: CapabilityRequest) -> CapabilityResult:
         result = await self.capabilities.invoke(request)
-        with contextlib.suppress(Exception):
-            from portable_runtime.core import metrics as _metrics
-            _metrics.inc_provider_invocation(result.provider_id or "none", request.capability, result.status)
+        metrics.inc_provider_invocation(
+            result.provider_id or "none",
+            request.capability,
+            result.status,
+        )
         return result
 
     async def run_capability(
@@ -101,11 +115,16 @@ class Runtime:
         **parameters: Any,
     ) -> CapabilityResult:
         from portable_runtime.core.invocation import InvocationFactory
+
         run = self.store.get_run(run_id) if run_id else None
         if run is None:
             run = self.start_run(work_id)
-        factory = InvocationFactory(store=self.store, registry=self.registry, contract_registry=self.contract_registry, runtime_id=self.runtime_id)
-        request = factory.build(
+        request = InvocationFactory(
+            store=self.store,
+            registry=self.registry,
+            contract_registry=self.contract_registry,
+            runtime_id=self.runtime_id,
+        ).build(
             capability,
             work_id=work_id,
             run_id=run.id,
@@ -115,7 +134,14 @@ class Runtime:
             resource_ref=resource_ref,
             subject_version_refs=subject_version_refs,
         )
-        run = run.model_copy(update={"provider_invocation_refs": [*run.provider_invocation_refs, request.id]})
+        run = run.model_copy(
+            update={
+                "provider_invocation_refs": [
+                    *run.provider_invocation_refs,
+                    request.id,
+                ]
+            }
+        )
         self.store.save_run(run)
         return await self.invoke(request)
 
@@ -127,10 +153,17 @@ class Runtime:
 
     def export_bundle(self, bundle_path: Path) -> Path:
         from portable_runtime.stores.bundle import export_bundle
-        return export_bundle(self.store, self.artifact_store, bundle_path, runtime_id=self.runtime_id)
+
+        return export_bundle(
+            self.store,
+            self.artifact_store,
+            bundle_path,
+            runtime_id=self.runtime_id,
+        )
 
     def import_bundle(self, bundle_path: Path) -> dict[str, Any]:
         from portable_runtime.stores.bundle import import_bundle
+
         return import_bundle(self.store, self.artifact_store, bundle_path)
 
     async def health(self) -> dict[str, Any]:
@@ -138,14 +171,11 @@ class Runtime:
         for descriptor in self.registry.list():
             health = await self.registry.health(descriptor.id)
             providers.append(health.model_dump(mode="json"))
-            with contextlib.suppress(Exception):
-                from portable_runtime.core import metrics as _metrics
-                _metrics.set_provider_health(descriptor.id, health.available)
+            metrics.set_provider_health(descriptor.id, health.available)
         return {"runtime_id": self.runtime_id, "providers": providers}
 
     def metrics_snapshot(self) -> dict[str, Any]:
-        from portable_runtime.core.metrics import metrics_snapshot
-        return metrics_snapshot(self.store)
+        return metrics.metrics_snapshot(self.store)
 
     def resume(self, run_id: str) -> Run:
         run = self.store.get_run(run_id)
@@ -157,43 +187,24 @@ class Runtime:
         return run
 
     def recover(self, before_seconds: float = 30) -> list[Step]:
-        try:
-            return self.store.list_stale_steps(before_seconds)  # type: ignore[attr-defined]
-        except Exception:
-            return []
+        return self.store.list_stale_steps(before_seconds)
 
     async def reconcile(self, step_id: str) -> CapabilityResult | None:
-        """Compatibility-only fail-closed reconciliation surface.
-
-        A step plus its latest attempt cannot prove one unique reconciliation
-        responsibility. Automated reconciliation therefore requires an
-        independent exact recovery-responsibility authority path. This legacy
-        method never crosses a provider reality boundary.
-        """
-
-        try:
-            step = self.store.get_step(step_id)  # type: ignore[attr-defined]
-        except Exception:
+        """Return the compatibility-only unknown reconciliation projection."""
+        step = self.store.get_step(step_id)
+        if step is None:
             return None
-        if not step:
-            return None
-        try:
-            attempts = self.store.list_attempts(step_id)  # type: ignore[attr-defined]
-        except Exception:
-            return None
+        attempts = self.store.list_attempts(step_id)
         if not attempts:
             return None
-        last = sorted(attempts, key=lambda a: a.attempt_no)[-1]
+        last = max(attempts, key=lambda attempt: attempt.attempt_no)
         if not last.request_ref or not last.provider_id:
             return None
 
-        # Compatibility projection only: a durable dispatch with no exact
-        # reconciliation responsibility selected remains locally unknown.
         if step.status != "unknown":
-            with contextlib.suppress(Exception):
-                self.store.save_step(
-                    step.model_copy(update={"status": "unknown", "updated_at": utcnow()})
-                )
+            self.store.save_step(
+                step.model_copy(update={"status": "unknown", "updated_at": utcnow()})
+            )
 
         return CapabilityResult(
             request_id=last.request_ref,
@@ -228,48 +239,50 @@ class Runtime:
         return run
 
     def acquire_lease(self, run_id: str, owner: str, ttl_seconds: float = 30) -> bool:
-        previous_owner = None
-        try:
-            current = self.store.get_run(run_id)
-            previous_owner = getattr(current, "lease_owner", None) if current is not None else None
-        except Exception:
-            previous_owner = None
-        try:
-            acquired = self.store.acquire_lease(run_id, owner, ttl_seconds)  # type: ignore
-        except Exception:
-            return False
-        try:
-            from portable_runtime.core.models import Event, new_id
-            event_type = "LeaseTakenOver" if acquired and previous_owner not in (None, owner) else "LeaseAcquired"
-            if not acquired:
-                event_type = "FencingRejected"
-            self.store.append_event(Event(id=new_id("event"), type=event_type, subject_ref=run_id, payload={"owner": owner, "previous_owner": previous_owner, "acquired": acquired}))  # type: ignore[attr-defined]
-        except Exception:
-            # Lease state remains authoritative; journal availability is
-            # surfaced by boundary transitions and conformance evidence.
-            pass
+        current = self.store.get_run(run_id)
+        previous_owner = current.lease_owner if current is not None else None
+        acquired = self.store.acquire_lease(run_id, owner, ttl_seconds)
+        event_type = (
+            "LeaseTakenOver"
+            if acquired and previous_owner not in (None, owner)
+            else "LeaseAcquired"
+        )
+        if not acquired:
+            event_type = "FencingRejected"
+        self.store.append_event(
+            Event(
+                id=new_id("event"),
+                type=event_type,
+                subject_ref=run_id,
+                payload={
+                    "owner": owner,
+                    "previous_owner": previous_owner,
+                    "acquired": acquired,
+                },
+            )
+        )
         return acquired
 
     def renew_lease(self, run_id: str, owner: str, ttl_seconds: float = 30) -> bool:
-        try:
-            renewed = self.store.renew_lease(run_id, owner, ttl_seconds)  # type: ignore
-        except Exception:
-            return False
-        try:
-            from portable_runtime.core.models import Event, new_id
-            self.store.append_event(Event(id=new_id("event"), type="LeaseRenewed" if renewed else "FencingRejected", subject_ref=run_id, payload={"owner": owner, "renewed": renewed}))  # type: ignore[attr-defined]
-        except Exception:
-            pass
+        renewed = self.store.renew_lease(run_id, owner, ttl_seconds)
+        self.store.append_event(
+            Event(
+                id=new_id("event"),
+                type="LeaseRenewed" if renewed else "FencingRejected",
+                subject_ref=run_id,
+                payload={"owner": owner, "renewed": renewed},
+            )
+        )
         return renewed
 
     def release_lease(self, run_id: str, owner: str) -> bool:
-        try:
-            released = self.store.release_lease(run_id, owner)  # type: ignore
-        except Exception:
-            return False
-        try:
-            from portable_runtime.core.models import Event, new_id
-            self.store.append_event(Event(id=new_id("event"), type="LeaseReleased" if released else "FencingRejected", subject_ref=run_id, payload={"owner": owner, "released": released}))  # type: ignore[attr-defined]
-        except Exception:
-            pass
+        released = self.store.release_lease(run_id, owner)
+        self.store.append_event(
+            Event(
+                id=new_id("event"),
+                type="LeaseReleased" if released else "FencingRejected",
+                subject_ref=run_id,
+                payload={"owner": owner, "released": released},
+            )
+        )
         return released

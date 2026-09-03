@@ -1,4 +1,4 @@
-"""Workflow contract kept independent from concrete providers — hardened."""
+"""Workflow contract kept independent from concrete providers."""
 
 from __future__ import annotations
 
@@ -15,8 +15,6 @@ class Workflow(Protocol):
 
     async def run(self, work: Work, run: Run) -> str: ...
 
-
-# --- Hardened helpers (testable, no provider import) ---
 
 _WORKFLOW_REQUIRED_ATTRS = ("id", "version", "accepts", "run")
 
@@ -58,10 +56,7 @@ class WorkflowRegistry:
         return list(self._workflows.values())
 
     def resolve_for_work(self, work: Work) -> Any | None:
-        for wf in self._workflows.values():
-            try:
-                if wf.accepts(work):
-                    return wf
-            except Exception:
-                continue
+        for workflow in self._workflows.values():
+            if workflow.accepts(work):
+                return workflow
         return None
