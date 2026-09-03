@@ -91,9 +91,11 @@ class ControllerDecision(BaseModel):
     def _kind_payload(self) -> ControllerDecision:
         if self.state_version < 0:
             raise ValueError("controller decision state_version cannot be negative")
-        if self.kind is ControllerDecisionKind.INVOKE_CAPABILITY:
-            if not self.capability or not self.capability.strip():
-                raise ValueError("invoke-capability requires capability")
+        if (
+            self.kind is ControllerDecisionKind.INVOKE_CAPABILITY
+            and (not self.capability or not self.capability.strip())
+        ):
+            raise ValueError("invoke-capability requires capability")
         if self.kind is ControllerDecisionKind.PROPOSE_WORK:
             if not self.assessment_ref or not self.assessment_ref.strip():
                 raise ValueError("propose-work requires assessment_ref")
