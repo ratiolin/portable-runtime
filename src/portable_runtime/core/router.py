@@ -47,14 +47,14 @@ class DeterministicPriorityRouting:
         ]
         if not matching:
             return None
-        return min(
+        return sorted(
             matching,
             key=lambda descriptor: (
                 preferred.get(descriptor.id, len(preferred)),
                 -descriptor.priority,
                 descriptor.id,
             ),
-        )
+        )[0]
 
 
 class ConstraintRouter(DeterministicPriorityRouting):
