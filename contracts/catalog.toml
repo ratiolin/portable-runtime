@@ -1,5 +1,5 @@
 catalog_version = "portable-runtime-contracts-v1"
-owner = "portable-runtime/contracts"
+owner = "agent-kernel/contracts"
 runtime_protocol = "2.0"
 provider_protocol = "1"
 control_plane_schema = "official-1.0.0"
@@ -20,6 +20,11 @@ schema_path = "contracts/schemas/responsibility/persistent-responsibility-v1.sch
 semantic_path = "contracts/semantics/core/persistent-responsibility-v1.md"
 public_read = true
 public_write = "authority-gated"
+
+[contracts.cognitive_control]
+current = "cognitive-control-v1"
+semantic_path = "contracts/semantics/core/cognitive-control-v1.md"
+public = false
 
 [contracts.distinction_governance]
 current = "distinction-governance-1.0"
