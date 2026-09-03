@@ -1,5 +1,5 @@
 catalog_version = "portable-runtime-contracts-v1"
-owner = "agent-kernel/contracts"
+owner = "portable-runtime/contracts"
 runtime_protocol = "2.0"
 provider_protocol = "1"
 control_plane_schema = "official-1.0.0"
