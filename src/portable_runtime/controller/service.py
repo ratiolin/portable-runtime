@@ -17,6 +17,7 @@ CONTROLLER_STATE_EVENT = "ControllerStateRecorded"
 CONTROLLER_DECISION_EVENT = "ControllerDecisionSelected"
 CONTROLLER_RESULT_EVENT = "ControllerCapabilityResultObserved"
 CONTROLLER_WORK_PROPOSAL_EVENT = "ControllerWorkProposalHandedOff"
+CONTROLLER_REOPEN_REQUIRED_EVENT = "ControllerReopenRequired"
 
 
 class CognitiveController:
@@ -90,22 +91,21 @@ class CognitiveController:
                 state,
                 decision,
                 status=ControllerStatus.CLOSED,
-                pending_request_ref=None,
+                pending_ref=None,
             )
         if decision.kind is ControllerDecisionKind.REOPEN:
             return self._transition(
                 state,
                 decision,
                 status=ControllerStatus.OPEN,
-                pending_request_ref=None,
+                pending_ref=None,
             )
         if decision.kind is ControllerDecisionKind.WAIT:
-            request_ref = new_id("controller_wait")
             return self._transition(
                 state,
                 decision,
                 status=ControllerStatus.WAITING,
-                pending_request_ref=request_ref,
+                pending_ref=decision.id,
             )
         raise ValueError(f"unsupported controller decision kind: {decision.kind}")
 
@@ -113,13 +113,20 @@ class CognitiveController:
         state = self.get(controller_id)
         if state is None:
             raise ValueError(f"unknown controller state: {controller_id}")
+        self.store.append_event(
+            Event(
+                id=new_id("event"),
+                type=CONTROLLER_REOPEN_REQUIRED_EVENT,
+                subject_ref=state.id,
+                payload={"reason": reason, "from_version": state.version},
+            )
+        )
         next_state = state.model_copy(
             update={
                 "status": ControllerStatus.REOPEN_REQUIRED,
                 "version": state.version + 1,
-                "pending_request_ref": None,
+                "pending_ref": None,
                 "updated_at": utcnow(),
-                "last_result_ref": reason or state.last_result_ref,
             }
         )
         self._record_state(next_state)
@@ -150,7 +157,7 @@ class CognitiveController:
             update={
                 "status": ControllerStatus.WAITING,
                 "version": state.version + 1,
-                "pending_request_ref": request_id,
+                "pending_ref": request_id,
                 "last_decision_ref": decision.id,
                 "updated_at": utcnow(),
             }
@@ -187,7 +194,7 @@ class CognitiveController:
             update={
                 "status": ControllerStatus.OPEN,
                 "version": waiting.version + 1,
-                "pending_request_ref": None,
+                "pending_ref": None,
                 "last_result_ref": result_event.id,
                 "updated_at": utcnow(),
             }
@@ -241,7 +248,7 @@ class CognitiveController:
             state,
             decision,
             status=ControllerStatus.OPEN,
-            pending_request_ref=None,
+            pending_ref=None,
             last_result_ref=proposal.id,
         )
 
@@ -251,14 +258,14 @@ class CognitiveController:
         decision: ControllerDecision,
         *,
         status: ControllerStatus,
-        pending_request_ref: str | None,
+        pending_ref: str | None,
         last_result_ref: str | None = None,
     ) -> ControllerState:
         next_state = state.model_copy(
             update={
                 "status": status,
                 "version": state.version + 1,
-                "pending_request_ref": pending_request_ref,
+                "pending_ref": pending_ref,
                 "last_decision_ref": decision.id,
                 "last_result_ref": last_result_ref if last_result_ref is not None else state.last_result_ref,
                 "updated_at": utcnow(),
