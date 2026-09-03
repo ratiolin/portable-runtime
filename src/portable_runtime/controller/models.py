@@ -41,7 +41,7 @@ class ControllerState(BaseModel):
     open_issue_refs: list[str] = Field(default_factory=list)
     status: ControllerStatus = ControllerStatus.OPEN
     version: int = 0
-    pending_request_ref: str | None = None
+    pending_ref: str | None = None
     last_decision_ref: str | None = None
     last_result_ref: str | None = None
     created_at: datetime = Field(default_factory=utcnow)
@@ -51,10 +51,10 @@ class ControllerState(BaseModel):
     def _valid_state(self) -> ControllerState:
         if self.version < 0:
             raise ValueError("controller state version cannot be negative")
-        if self.status is ControllerStatus.WAITING and not self.pending_request_ref:
-            raise ValueError("waiting controller state requires pending_request_ref")
-        if self.status is not ControllerStatus.WAITING and self.pending_request_ref is not None:
-            raise ValueError("only waiting controller state may carry pending_request_ref")
+        if self.status is ControllerStatus.WAITING and not self.pending_ref:
+            raise ValueError("waiting controller state requires pending_ref")
+        if self.status is not ControllerStatus.WAITING and self.pending_ref is not None:
+            raise ValueError("only waiting controller state may carry pending_ref")
         return self
 
 
