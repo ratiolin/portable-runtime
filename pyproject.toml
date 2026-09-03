@@ -1,7 +1,7 @@
 [project]
 name = "portable-runtime"
 version = "0.1.0"
-description = "Portable runtime for durable Work/Run orchestration: pluggable providers, triggers, stores, and workflows"
+description = "Agent Kernel for durable cognitive control, persistent responsibility, and governed Work/Run execution"
 requires-python = ">=3.12"
 readme = "README.md"
 license = { text = "MIT" }

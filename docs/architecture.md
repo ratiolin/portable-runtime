@@ -1,6 +1,6 @@
 # Architecture
 
-Portable Runtime R2.0 is a provider-neutral durable execution runtime with a stable canonical persistent-responsibility layer. Canonical product semantics remain owned by `contracts/`; this document is explanatory and cannot redefine those contracts.
+Agent Kernel is a provider-neutral kernel for durable cognitive control, persistent responsibility, and governed Work/Run execution. Canonical product semantics remain owned by `contracts/`; this document is explanatory and cannot redefine those contracts.
 
 ## 1. Canonical ownership
 
@@ -14,18 +14,35 @@ contracts semantic contracts
 > Python reference implementation
 > HTTP adapters
 > TypeScript consumers
-> Responsibility Inspector
+> inspection surfaces
 ```
 
-`contracts/catalog.toml` is the machine-readable contract index. External research/proof repositories, experiments and historical documents may provide evidence or lineage but are not normative inputs unless explicitly promoted into `contracts/`.
+`contracts/catalog.toml` is the machine-readable contract index. External research/framework documents, experiments, and historical commits may motivate a product change but are not runtime inputs unless a distinction is explicitly promoted into `contracts/`.
 
-`persistent-responsibility-v1` has been promoted and is therefore part of the canonical product layer. The historical `experiments/` implementation is no longer the owner of the promoted semantics.
+The repository/product owner is now `agent-kernel`. Existing `portable-runtime-*` identifiers and the `portable_runtime` Python namespace remain compatibility axes until a separately justified migration changes them.
 
 ## 2. Product layering
 
 The current architecture is:
 
 ```text
+EXISTING CONTEXT / RECORDS / RESPONSIBILITY STATE
+        |
+        v
+CANONICAL COGNITIVE CONTROL
+ControllerState -> ControllerDecision
+        |              |
+        |              +-> invoke-capability
+        |              |      |
+        |              |      v
+        |              |  existing Runtime / Capability / Provider path
+        |              |      |
+        |              |<----- result/event
+        |              |
+        |              +-> propose-work -> canonical WorkProposal only
+        |              +-> close / reopen / wait
+        |
+        v
 CANONICAL PERSISTENT RESPONSIBILITY
 StandingResponsibility
   -> Observation / Evidence
@@ -57,14 +74,46 @@ Provider / external effect
 Observation / Evidence
         |
         v
-verification -> responsibility reassessment / revalidation / recovery / reopen
+verification -> reassessment / revalidation / recovery / reopen
 ```
 
-Responsibility and execution share the existing StateStore/Event durability substrate. The responsibility layer is not a second workflow engine.
+Controller, responsibility, and execution reuse the existing StateStore/Event durability substrate. Cognitive control is not a second evidence store, provider router, authorization system, or workflow engine.
 
-## 3. Responsibility identity and continuity
+## 3. Cognitive controller
 
-A `StandingResponsibility` is durable identity plus bounded statement/scope. It is not a task, provider identity or authority grant.
+The controller owns only the selection of the next cognitive/work direction.
+
+Canonical v1 decisions are:
+
+```text
+invoke-capability
+propose-work
+close
+reopen
+wait
+```
+
+Key separations:
+
+```text
+ReasonerOutput != ControllerDecision
+ControllerDecision != WorkAdmission
+ControllerDecision != ActionAuthorization
+ControllerClose != ResponsibilityDischarge
+CapabilityResult != VerifiedOutcome
+```
+
+`ControllerState` keeps references to existing context, candidate, issue, subject, and responsibility objects plus a monotonic state version and small coordination state. It does not create a second truth/knowledge ontology.
+
+Every `ControllerDecision` binds one exact state version. Stale selections fail closed. State snapshots are append-only Event-journal entries and therefore survive the same SQLite/export/import durability boundary without adding a new store schema.
+
+`invoke-capability` always goes through the existing Runtime/RealityBoundary/provider path. Cognitive control requests a capability; it does not select or identify a product/model implementation directly.
+
+`propose-work` hands off to `ResponsibilityKernel.propose()`. It stops at `WorkProposal`; priority judgment, portfolio admission, resource reservation, commitment, Work materialization, authorization, and execution remain downstream responsibilities.
+
+## 4. Responsibility identity and continuity
+
+A `StandingResponsibility` is durable identity plus bounded statement/scope. It is not a task, provider identity, model/session identity, or authority grant.
 
 ```text
 StandingResponsibility
@@ -73,18 +122,7 @@ StandingResponsibility
 != PermanentAuthority
 ```
 
-Continuity across provider/model/session/process changes is represented through:
-
-```text
-ReasoningSessionBinding
-ResponsibilityContextSnapshot
-ResponsibilityHandoff
-ContinuityValidation
-```
-
-The provider/model/session is a temporary worker context. A handoff preserves responsibility history but must recheck activity, scope/version, assessment/proposal freshness, expectations and reservations. It always requires execution-authorization revalidation before a later external effect.
-
-Therefore:
+Continuity across provider/model/session/process changes is represented through `ReasoningSessionBinding`, `ResponsibilityContextSnapshot`, `ResponsibilityHandoff`, and `ContinuityValidation`.
 
 ```text
 ProviderChange -/-> ResponsibilityIdentityChange
@@ -92,22 +130,21 @@ ContextReset -/-> ResponsibilityLoss
 ResponsibilityHandoff -/-> AuthorityTransfer
 ```
 
-## 4. Current truth versus history
+## 5. Current truth versus history
 
-Responsibility history is append-only. Historical existence does not imply current eligibility.
+Historical existence does not imply current eligibility.
 
 ```text
 HistoricalAssessment -/-> CurrentWorkAdmission
+HistoricalControllerDecision -/-> CurrentControllerSelection
 NoObservedFailure -/-> ConditionVerifiedHealthy
 ```
 
-A new current observation can supersede an older assessment/proposal for current-use purposes without deleting the old record. Responsibility scope/version changes also make prior current-use eligibility stale until revalidated.
+A controller decision is current only for the exact state version it names. A later observation, result, scope change, reopen, or state transition makes the old decision stale without deleting history.
 
-This is why continuity snapshots are history/context carriers, not current-truth or authority tokens.
+## 6. Work admission
 
-## 5. Work admission
-
-Persistent responsibility may materialize Work only through the explicit bounded chain:
+Persistent responsibility may materialize Work only through:
 
 ```text
 active responsibility
@@ -121,15 +158,15 @@ active responsibility
 -> Work
 ```
 
-`ResponsibilityAssessment` alone does not create Work. `WorkProposal` alone does not create a commitment. `Commitment` does not create effect authorization.
+Controller selection cannot skip this chain.
 
-Materialized Work keeps responsibility/proposal/commitment/reservation provenance. For external effects it explicitly records that effect authority is required separately.
+## 7. Authorization and RealityBoundary
 
-## 6. Authorization and RealityBoundary
-
-Authority remains isolated from responsibility coordination, model judgment and policy allow.
+Authority remains isolated from cognitive control, responsibility coordination, model judgment, and policy allow.
 
 ```text
+ControllerDecision
+        !=
 assessment / proposal / priority / commitment
         !=
 Decision
@@ -143,11 +180,11 @@ provider execution
 verified Outcome
 ```
 
-The RealityBoundary is the runtime control point before provider/external effects. Provider replacement, process restart, state import or responsibility handoff cannot mint or transfer authority.
+The RealityBoundary remains the runtime control point before provider/external effects. Provider replacement, process restart, state import, responsibility handoff, or controller close/reopen cannot mint or transfer authority.
 
-## 7. Durable execution model
+## 8. Durable execution model
 
-The execution layer includes:
+The execution layer remains:
 
 - `Work`: durable task/request identity;
 - `Run`: one workflow execution for a Work item;
@@ -156,9 +193,9 @@ The execution layer includes:
 - `Checkpoint`: recoverable progress boundary;
 - `Compensation`: explicit compensation intent/state.
 
-The runtime supports interruption/resume, stale-step recovery inspection, CAS where required, idempotent paths, leases/fencing and explicit reconciliation behavior. Ambiguous external failure is not permission to repeat a side effect.
+The runtime supports interruption/resume, stale-step recovery inspection, CAS where required, idempotent paths, leases/fencing, and explicit reconciliation behavior. Ambiguous external failure is not permission to repeat a side effect.
 
-## 8. Capability/provider boundary
+## 9. Capability/provider boundary
 
 `Runtime` composes:
 
@@ -173,39 +210,27 @@ RealityBoundary
 CapabilityService
 ```
 
-Workflows request capabilities rather than owning concrete providers. Provider protocol compatibility is independent of durable responsibility identity.
-
-The architecture distinguishes:
+Callers and the controller request capabilities rather than owning concrete providers. The kernel does not need a special concept for an external agent product; any compatible implementation remains behind the existing capability/provider boundary.
 
 ```text
-workflow intent
+controller/workflow intent
 != provider selection
 != policy allow
 != execution authorization
 != external effect
 ```
 
-## 9. Semantic record plane
+## 10. Semantic record plane
 
-Canonical separations include:
+Record type, epistemic status, and lifecycle remain orthogonal. Provenance is retained and `produces` is not silently promoted into `causes`.
 
-```text
-judgment != authorization
-provider/execution success != verified objective completion
-supported != current-use qualified
-historical provenance != current qualification
-dependency impact != discharge
-repair selection != repair realization
-current-use admission != execution authority
-```
+Controller result events are coordination/provenance records. A reasoning provider result does not automatically become an Assertion, official KnowledgeItem, qualification, Decision, or verified Outcome.
 
-Record type, epistemic status and lifecycle status remain orthogonal. Provenance is retained and `produces` is not silently promoted into `causes`.
+## 11. Revision, revalidation and lifecycle
 
-## 10. Revision, revalidation and lifecycle
+Historical success is not permanent current validity. Typed dependency impact, revalidation disposition, controller reopen state, and responsibility lifecycle preserve history while requiring current justification after change.
 
-Historical success is not permanent current validity. Typed dependency impact, revalidation disposition and reopen state preserve history while requiring current justification after change.
-
-Standing-responsibility lifecycle is explicit:
+Standing-responsibility lifecycle remains:
 
 ```text
 active
@@ -213,38 +238,41 @@ suspended
 discharged
 ```
 
-Work completion, provider success, UI state or absence of recent failures do not discharge the responsibility. Discharge and reopen require explicit decision provenance plus an applied lifecycle transition.
+Controller status remains separate:
 
-## 11. Stores and portability
+```text
+open
+waiting
+closed
+reopen-required
+```
 
-Responsibility objects use the existing StateStore/Event/SQLite/export/import/bundle durability path.
+Closing one does not mutate the other.
+
+## 12. Stores and portability
+
+Controller snapshots and responsibility objects use the existing StateStore/Event/SQLite/export/import/bundle durability path.
 
 ```text
 state or bundle import
+-/-> ControllerDecision
+-/-> Work
 -/-> AuthorizationGrant
 -/-> InvocationPermit
 -/-> external effect
 ```
 
-SQLite can therefore preserve both durable execution state and persistent-responsibility history across process restarts without coupling either identity to a model session.
+No controller-specific database table is required by v1.
 
-## 12. Downstream fault-domain evidence
+## 13. Deployment/profile boundary
 
-The architecture has independent downstream executable evidence.
+Agent Kernel owns generic product semantics and implementation. Downstream deployment profiles should consume the kernel as their core and retain only environment-specific ingress, integrations, providers, policy, verification, notification, and deployment behavior.
 
-### Commerce / listing integrity
+A profile is not a second runtime semantic owner.
 
-Commerce keeps PostgreSQL/DBOS as the owner of business facts, Decisions, ExecutionAuthorization, effects and verified outcomes while consuming the portable responsibility kernel for durable responsibility coordination. SQLite restart preserves responsibility identity/history and does not mint effect authority.
+## 14. Trigger and public-surface boundary
 
-### Operations / deployment health
-
-Control-plane keeps Alertmanager/Prometheus operational facts profile-owned. Its responsibility adapter converts those facts into canonical assessments/read-only proposals only. A real SQLite close/reopen plus provider/model/session replacement preserves the same responsibility, and fresh Prometheus healthy evidence supersedes a still-fresh historical diagnostic proposal for current use. No Work or authorization is minted by continuity/handoff.
-
-These domains exercise different fault boundaries and support the narrow claim that responsibility identity/current-use state can be provider/model/session/process-independent.
-
-## 13. Trigger boundary
-
-Triggers are ingress/wakeup, not Work admission:
+Triggers remain ingress/wakeup, not Work admission:
 
 ```text
 Trigger != Observation proof
@@ -252,27 +280,11 @@ Observation != ResponsibilityAssessment
 ResponsibilityAssessment != Work
 ```
 
-Missing signals are meaningful only relative to explicit expectations and evidence requirements.
+Cognitive control is canonical without requiring a new public HTTP API. HTTP exposure is a separate compatibility surface.
 
-## 14. HTTP/public surfaces
+## 15. Non-goals
 
-The built-in FastAPI control plane is local-control infrastructure, not an authenticated multi-user enterprise API.
-
-Current public-contract HTTP routes expose the contract catalog and Experience-use surfaces. Persistent responsibility remains canonical even without mintable public HTTP responsibility DTOs; HTTP exposure is a separate compatibility surface.
-
-Internal authority objects such as `InvocationPermit` remain non-public.
-
-## 15. Historical experiments
-
-`experiments/persistent_agency.py` and `docs/experiments/persistent-agency.md` were precursors to the promoted responsibility contract. Their promoted subset is now owned by `persistent-responsibility-v1` and `src/portable_runtime/responsibility/`.
-
-Experiment-only concepts may still be useful for future falsification, including broader supervisor/autonomy/arbitration ideas. They remain non-canonical unless a later explicit contract version promotes them.
-
-## 16. Current autonomy ceiling
-
-The product now owns durable provider/model/session-independent responsibility state in addition to durable execution. It does **not** thereby claim unrestricted autonomous operation.
-
-Not part of v1:
+Agent Kernel does not define:
 
 ```text
 continual model/policy learning
@@ -281,24 +293,23 @@ automatic permanent mission creation
 self-expanding permissions
 handoff-based authority transfer
 self-authorizing external repair
-canonical universal cross-mission arbitration
+provider-specific model routing
+special cross-agent interoperability semantics
 ```
 
-External operational effects remain governed by current assessment/proposal/commitment plus a separate current Decision/Authorization, followed by fresh reality verification and responsibility reassessment.
+Additional cognitive concepts are promoted only after a concrete runtime failure demonstrates that the current minimal contract cannot preserve a necessary distinction.
 
-## 17. Source-of-truth map
+## 16. Source-of-truth map
 
 | Concern | Primary source |
 | --- | --- |
 | Canonical semantic ownership | `contracts/README.md`, `contracts/catalog.toml`, `contracts/semantics/` |
+| Cognitive control | `contracts/semantics/core/cognitive-control-v1.md`, `src/portable_runtime/controller/` |
 | Persistent responsibility | `contracts/semantics/core/persistent-responsibility-v1.md`, `src/portable_runtime/responsibility/` |
-| Current implementation snapshot | `docs/current-implementation.md` |
 | Runtime composition | `src/portable_runtime/core/runtime.py` |
-| HTTP control plane | `src/portable_runtime/api/http.py` |
-| Public contract HTTP | `src/portable_runtime/public_contracts/http.py` |
-| Workflows | `docs/workflow-authoring.md`, `src/portable_runtime/workflows/` |
+| Current implementation snapshot | `docs/current-implementation.md` |
 | Provider interface/protocol | `docs/provider-api.md`, `docs/provider-protocol.md` |
-| Historical persistent-agency precursor | `docs/experiments/persistent-agency.md`, `experiments/` |
+| Workflows | `docs/workflow-authoring.md`, `src/portable_runtime/workflows/` |
 | Exact executable status | GitHub CI for the exact commit |
 
-When explanatory prose and implementation disagree, update explanatory prose to the canonical contract/implementation. Documentation cannot demote a stable canonical contract back into an experiment.
+When explanatory prose and implementation disagree, update explanatory prose to the canonical contract/implementation. Documentation cannot demote or redefine a stable canonical contract.

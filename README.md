@@ -1,70 +1,112 @@
-# portable-runtime
+# agent-kernel
 
-[![CI](https://github.com/xiongweilin/portable-runtime/actions/workflows/ci.yml/badge.svg)](https://github.com/xiongweilin/portable-runtime/actions/workflows/ci.yml) [![Quality Gate Status](https://sonarcloud.io/api/project_badges/measure?project=portable-runtime&metric=alert_status)](https://sonarcloud.io/summary/new_code?id=portable-runtime) [![Coverage](https://sonarcloud.io/api/project_badges/measure?project=portable-runtime&metric=coverage)](https://sonarcloud.io/summary/new_code?id=portable-runtime) [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE) [![Python 3.12](https://img.shields.io/badge/Python-3.12-blue.svg)](pyproject.toml)
+[![CI](https://github.com/xiongweilin/agent-kernel/actions/workflows/ci.yml/badge.svg)](https://github.com/xiongweilin/agent-kernel/actions/workflows/ci.yml) [![Quality Gate Status](https://sonarcloud.io/api/project_badges/measure?project=portable-runtime&metric=alert_status)](https://sonarcloud.io/summary/new_code?id=portable-runtime) [![Coverage](https://sonarcloud.io/api/project_badges/measure?project=portable-runtime&metric=coverage)](https://sonarcloud.io/summary/new_code?id=portable-runtime) [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE) [![Python 3.12](https://img.shields.io/badge/Python-3.12-blue.svg)](pyproject.toml)
 
-Provider-neutral runtime for durable agent/workflow execution and persistent governed responsibility.
+Provider-neutral kernel for durable cognitive control, persistent responsibility, and governed Work/Run execution.
 
-> **R2.0 motto:** Portable Runtime does not guarantee correctness; it guarantees that judgment, authorization, execution, verification and revision are never silently conflated, and that errors remain traceable, recoverable and reopenable.
+> Agent Kernel does not guarantee correctness. It preserves the boundaries between cognitive selection, Work admission, authorization, execution, verification, revision, and durable responsibility so errors remain traceable, recoverable, and reopenable.
 
-## Product status
+## Product boundary
 
-Durable Work/Run execution is a product surface, and `persistent-responsibility-v1` is now also a **stable canonical product contract** owned by `portable-runtime/contracts`.
-
-The promoted responsibility layer is implemented under `src/portable_runtime/responsibility/` and defines durable responsibility state that may outlive any individual Work, Run, provider, model, process or reasoning session.
-
-The core claim is deliberately bounded:
+Agent Kernel has three connected surfaces:
 
 ```text
-StandingResponsibility
-!= Work / Run
-!= provider / model / reasoning session
-!= permanent execution authority
+Cognitive Controller
+    -> selects the next cognitive/work direction
+    -> may invoke an existing capability
+    -> may hand off only to WorkProposal
+
+Persistent Responsibility
+    -> keeps durable responsibility identity/current-use coordination
+    -> outlives Work, Run, provider, model, process, and reasoning session
+
+Durable Runtime
+    -> Work / Run / Step / Attempt
+    -> capability routing / policy / authorization
+    -> RealityBoundary / provider execution
+    -> verification / recovery / revalidation
 ```
 
-A reasoning provider is a temporary worker, not the responsibility owner. Process/context replacement may preserve the same responsibility identity and history, but every later external effect still requires the existing current authorization / RealityBoundary path.
-
-The older code under `experiments/` remains useful as historical/prototyping lineage. It is **not** the semantic owner of the promoted contract, and experiment-only supervisor/arbitration ideas remain non-canonical unless separately promoted later.
-
-## Canonical contract boundary
-
-Canonical product semantics and interoperability contracts live under [`contracts/`](contracts/README.md). `contracts/catalog.toml` is the machine-readable contract index.
-
-The precedence rule is:
+The core separations are deliberate:
 
 ```text
-contracts semantic/schema/canonicalization/vector artifacts
+ReasonerOutput != ControllerDecision
+ControllerDecision != WorkAdmission
+ControllerDecision != ActionAuthorization
+ProviderSuccess != VerifiedOutcome
+TaskCompleted != ResponsibilityDischarged
+```
+
+The controller is intentionally small. It references existing records and responsibility objects rather than creating a second evidence, knowledge, outcome, provider, or model-routing system.
+
+## Canonical contracts
+
+Canonical product semantics live under [`contracts/`](contracts/README.md). `contracts/catalog.toml` is the machine-readable contract index.
+
+Current core contracts include:
+
+- `persistent-responsibility-v1`
+- `cognitive-control-v1`
+- `responsibility-record-plane-1.0`
+- `distinction-governance-1.0`
+- `action-responsibility-1.0`
+
+The precedence rule remains:
+
+```text
+contract semantics / schemas / canonicalization / vectors
 > Python reference implementation
 > HTTP adapters
-> TypeScript client/workflow helpers
-> Responsibility Inspector
+> TypeScript helpers
+> inspection surfaces
 ```
 
-External research repositories, proofs, documents, experiments and historical commits may provide evidence or lineage, but they are not normative dependencies for current runtime state, transition, authority, qualification or wire meaning unless explicitly promoted into `contracts/`.
+External research/framework documents can motivate product changes but are not runtime authority unless a distinction is explicitly promoted into `contracts/`.
 
-`persistent-responsibility-v1` follows that same rule. Its canonical semantic owner is [`contracts/semantics/core/persistent-responsibility-v1.md`](contracts/semantics/core/persistent-responsibility-v1.md), not the historical persistent-agency experiment.
+## Compatibility axes
 
-## Version axes
-
-These identifiers describe different compatibility surfaces:
+The repository/product name is `agent-kernel`. Existing implementation and wire identifiers are retained where renaming would create compatibility work without changing semantics.
 
 | Axis | Current value |
 |---|---|
 | Contract catalog | `portable-runtime-contracts-v1` |
-| Control Plane schema | `official-1.0.0` |
-| Portable Runtime implementation milestone | `R2.0` |
+| Python distribution | `portable-runtime` |
+| Python namespace | `portable_runtime` |
 | Runtime protocol | `2.0` |
 | External provider protocol | `1` (`stdio-jsonl`) |
 | Persistent Responsibility | `persistent-responsibility-v1` |
+| Cognitive Control | `cognitive-control-v1` |
 | Distinction Governance | `distinction-governance-1.0` |
 | Experience Use Admission | `experience-use-admission-v1` |
 | Historical Experience Use | `historical-experience-use-v1` |
-| Python package | `0.1.0` |
 
-These axes are intentionally independent. A documentation-only commit or a provider-protocol change does not silently advance the persistent-responsibility contract.
+These axes are intentionally independent. The repository rename does not silently rewrite persisted state, contract IDs, imports, or wire meaning.
+
+## Cognitive control
+
+The canonical controller implementation lives under `src/portable_runtime/controller/` and uses the existing append-only Event journal for durable state snapshots.
+
+The v1 decision vocabulary is deliberately small:
+
+```text
+invoke-capability
+propose-work
+close
+reopen
+wait
+```
+
+`invoke-capability` sends a read-class `CapabilityRequest` through the existing runtime/provider path. A provider result is retained as controller evidence/provenance and is not automatically promoted to current truth or knowledge.
+
+`propose-work` stops at the existing persistent-responsibility `WorkProposal`; priority judgment, portfolio admission, resource reservation, commitment, Work materialization, authorization, and execution remain owned by their existing layers.
+
+`close` closes only the current cognitive-control loop. It does not complete a Work or discharge a standing responsibility.
+
+Controller decisions bind an exact state version, so stale selections fail closed. State survives process restart through the same StateStore/Event/SQLite substrate used by the runtime.
 
 ## Persistent responsibility
 
-The stable product boundary is:
+The durable responsibility path remains:
 
 ```text
 StandingResponsibility
@@ -76,14 +118,14 @@ StandingResponsibility
     -> ResourceReservation
     -> Commitment
     -> Work
-    -> existing Decision / Authorization boundary
+    -> Decision / Authorization
     -> RealityBoundary
     -> External Effect
     -> verification / Outcome
     -> responsibility reassessment
 ```
 
-Important negative invariants include:
+Important invariants include:
 
 ```text
 HistoricalAssessment -/-> CurrentWorkAdmission
@@ -96,66 +138,61 @@ TaskCompleted -/-> ResponsibilityDischarged
 StandingResponsibility -/-> PermanentAuthority
 ```
 
-Continuity is represented explicitly through `ReasoningSessionBinding`, `ResponsibilityContextSnapshot`, `ResponsibilityHandoff` and `ContinuityValidation`. Handoff preserves durable history and requires current revalidation; it does not carry or extend effect authority.
+Responsibility objects reuse the existing StateStore/Event/SQLite/export/import durability path rather than creating a second workflow engine.
 
-Responsibility objects are persisted through the existing StateStore/Event/SQLite/export/import durability path rather than a second workflow engine.
+## Runtime capabilities
 
-## Downstream executable evidence
-
-The canonical contract is exercised by independent downstream fault domains rather than only by local examples.
-
-- **Commerce / listing integrity:** `commerce-orchestrator` consumes the exact canonical responsibility kernel with SQLite restart durability while keeping PostgreSQL/DBOS business facts and Commerce Decision/ExecutionAuthorization/effect truth in their existing owners. A restart preserves responsibility identity/history and does not mint `AuthorizationGrant`.
-- **Operations / deployment health:** `control-plane` consumes the exact vendored runtime and proves process restart plus provider/model/session replacement while re-reading current Prometheus facts. A historical unhealthy assessment/proposal remains history; fresh healthy evidence prevents the historical proposal from becoming current Work, responsibility remains active, and handoff mints no authority.
-
-These downstream results support a narrow product claim: the runtime can hold responsibility identity and current-use governance independently of a specific model/session/process. They do **not** imply universal autonomy, self-authorizing repair, continual learning or self-expanding permissions.
-
-## Other core capabilities
-
-- **Execution Integrity:** `Step / StepAttempt / Checkpoint / Compensation`, CAS, lease/fencing, idempotency and explicit effect semantics prevent silent double execution after ambiguous failures.
-- **Semantic Records:** `record_type`, `epistemic_status` and `lifecycle_status` remain orthogonal; provenance and `produces != causes` are enforced.
-- **Revision & Revalidation:** retained history plus typed dependency impact, explicit revalidation disposition and reopen responsibilities.
-- **Authorization & Policy:** `AuthorizationGrant` is isolated from judgment and policy allow; subject-version binding prevents stale authority reuse.
-- **Knowledge & Experience Use:** current-use admission is separate from historical reliance, task/domain judgment and execution authority.
-- **Failure-domain Routing:** deterministic routing over provider/failure-domain constraints.
-- **Validation & Reliability:** closed verification remains separate from open validation and reliability policy.
-- **Protocol:** append-only event journal, portable bundle validation, HTTP/CLI explain surfaces and strict negative-path conformance.
+- **Execution integrity:** durable `Work / Run / Step / StepAttempt`, checkpoints, compensation, CAS, lease/fencing, idempotency, and explicit reconciliation semantics.
+- **Semantic records:** record type, epistemic status, and lifecycle remain orthogonal; provenance is retained and `produces != causes`.
+- **Authorization:** `AuthorizationGrant` remains separate from judgment, policy allow, commitment, and controller selection.
+- **Revision and revalidation:** historical state can remain true while losing current-use eligibility.
+- **Capability routing:** callers request capabilities; provider selection stays behind the existing registry/router boundary.
+- **Verification and reliability:** provider execution success remains separate from objective verification and long-term responsibility reassessment.
+- **Portability:** append-only event history plus SQLite/export/import/bundle support survives process/provider replacement without minting authority.
 
 ## Architecture
 
 ```text
-StandingResponsibility / current assessment / proposal / commitment
+existing records / responsibility / context
         |
-        |  no authority shortcut
+        v
+CognitiveController
+        |  invoke-capability
+        |---------------------------> existing Capability / Provider path
+        |                                  |
+        |<----------- result/event --------|
+        |
+        +-- close / reopen / wait
+        |
+        +-- propose-work
+                 |
+                 v
+StandingResponsibility admission chain
+        |
         v
 Work / Run / Step / Attempt
         |
         v
-Semantic Records + Procedure
-        |
-        v
-Capability Router + Authorization
+Capability Router + Policy + Authorization
         |
         v
 RealityBoundary -> Provider / external effect
         |
         v
-Observation / Evidence -> verification -> reassessment / revalidation / recovery / reopen
+Observation / Evidence -> verification -> reassessment / revalidation / recovery
 ```
 
-Cross-cutting: append-only history, provenance, versioning, authorization, revalidation, recovery and portability.
+Cross-cutting concerns remain append-only history, provenance, versioning, current-use qualification, authorization, revalidation, recovery, and portability.
 
-- **Provider** — implements `CapabilityProvider`; provider/model identity is execution context, not durable responsibility identity.
-- **Trigger** — ingress/wakeup only; a trigger does not by itself justify Work.
-- **Store** — `StateStore / ArtifactStore / EventStore`, with SQLite and in-memory/filesystem implementations plus portable bundles.
-- **Workflow** — orchestrates capabilities and explicit procedure gates; built-ins include generic task, incident repair, daily scan and knowledge consolidation.
+## Provider boundary
 
-See [`docs/architecture.md`](docs/architecture.md) and [`docs/current-implementation.md`](docs/current-implementation.md) for the synchronized implementation view.
+Kernel code does not need to know whether a provider is internally a model, program, service, human-mediated system, or another agent product. It requests capabilities through the existing `CapabilityProvider` interface and routing layer.
+
+No separate agent registry, cross-agent protocol, or model catalog is part of cognitive control.
 
 ## Executable status
 
-The exact-head executable status is defined by the repository's GitHub CI checks. Do not infer current pass counts from documentation snapshots.
-
-Local verification commands:
+The exact-head executable status is defined by GitHub CI for the exact commit. Local verification:
 
 ```powershell
 uv sync --locked --extra dev
@@ -166,6 +203,8 @@ uv run python -m portable_runtime.public_contracts.vectors
 ```
 
 ## Quick start
+
+The compatibility CLI and Python namespace remain unchanged:
 
 ```powershell
 uv sync
@@ -182,32 +221,22 @@ uv run runtime work submit --kind generic-task --title "Echo test" --capability 
 uv run runtime work list
 ```
 
-Export/import state:
+State export/import:
 
 ```powershell
-.venv\Scripts\python.exe -m portable_runtime --state data/portable-runtime.db state export runtime-state.json
-.venv\Scripts\python.exe -m portable_runtime --state data/portable-runtime.db state import runtime-state.json
-.venv\Scripts\python.exe -m portable_runtime --state data/portable-runtime.db state export bundle.tar.zst
+.venv\Scripts\python.exe -m portable_runtime --state data/agent-kernel.db state export runtime-state.json
+.venv\Scripts\python.exe -m portable_runtime --state data/agent-kernel.db state import runtime-state.json
 ```
 
-## Public contract HTTP surface
+## Public surfaces
 
-Current canonical public-contract HTTP routes are:
+Current canonical public-contract HTTP routes remain focused on existing contract/catalog and experience-use surfaces. Cognitive control is canonical but is not exposed as a mintable public HTTP authority surface.
 
-- `GET /v1/contracts`
-- `POST /v1/experience/use/evaluate`
-- `POST /v1/experience/historical-use/commit`
-- `GET /v1/experience/historical-use/{judgment_id}`
+The built-in HTTP control plane is local-control infrastructure, not an authenticated multi-user enterprise boundary.
 
-Persistent responsibility is canonical even though its typed runtime objects are not currently exposed as mintable public HTTP DTOs. HTTP exposure and semantic canonicality are different compatibility surfaces. Internal authority objects such as `InvocationPermit` remain non-public.
+## Non-goals
 
-The built-in HTTP control plane is local-control infrastructure, not an authenticated multi-user enterprise boundary. Remote deployments must place an authenticated and authorized deployment boundary in front of it.
-
-## Historical experiments and non-goals
-
-[`docs/experiments/persistent-agency.md`](docs/experiments/persistent-agency.md) now documents the historical precursor to the promoted responsibility contract. Experiment-only supervisor/arbitration ideas remain outside the stable contract until separately justified.
-
-The current product does **not** claim:
+Agent Kernel does not claim:
 
 ```text
 continual model/policy learning
@@ -216,9 +245,11 @@ automatic permanent mission creation
 self-expanding permissions
 handoff-based authority transfer
 self-authorizing external repair
+provider-specific model routing
+special cross-agent interoperability semantics
 ```
 
-External operational repair remains an ordinary governed effect chain: current assessment -> proposal/commitment -> separate current Decision/Authorization -> effect -> fresh verification -> responsibility reassessment.
+New controller concepts are promoted only when a concrete runtime failure shows that the current minimal contract cannot preserve a necessary distinction.
 
 ## Development
 
@@ -229,8 +260,4 @@ uv run mypy src
 uv run pytest -q
 ```
 
-Python is the reference execution oracle subject to `contracts/`. TypeScript helpers and the Responsibility Inspector are non-authoritative consumers.
-
----
-
-Standalone portable runtime for durable execution and provider/model/session-independent persistent responsibility, with authority and current-truth boundaries kept explicit.
+Python remains the reference execution oracle subject to `contracts/`. Existing downstream deployment profiles should consume Agent Kernel as their core and keep only profile-specific integrations, policy, ingress, notification, and deployment behavior.

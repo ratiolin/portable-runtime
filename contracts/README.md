@@ -1,8 +1,10 @@
-# Portable Runtime canonical contracts
+# Agent Kernel canonical contracts
 
-`contracts/` is the sole canonical semantic and interoperability owner for `portable-runtime`.
+`contracts/` is the sole canonical semantic and interoperability owner for `agent-kernel`.
 
-No external repository, document set, commit SHA, theorem repository, or research note is required to interpret the runtime's supported product semantics. Historical or research material may motivate a contract, but it has no normative authority over this repository unless its semantics are explicitly adopted into this directory.
+No external repository, document set, commit SHA, theorem repository, or research note is required to interpret the kernel's supported product semantics. Historical or research material may motivate a contract, but it has no normative authority over this repository unless its semantics are explicitly adopted into this directory.
+
+Existing `portable-runtime-*` contract/version identifiers remain compatibility tokens. The repository/product owner is now `agent-kernel`; the rename does not silently change the meaning of previously published v1 contracts.
 
 ## Canonical precedence
 
@@ -24,7 +26,7 @@ A lower layer that conflicts with a higher layer is defective. Python is the ref
 ## Ownership chain
 
 ```text
-portable-runtime/contracts
+agent-kernel/contracts
     owns canonical product semantics,
     state/transition invariants,
     authority ceilings,
@@ -65,9 +67,12 @@ The following separations are canonical:
 - dependency impact != discharge;
 - selecting a repair != realizing a repair;
 - current-use admission != execution authority;
-- existing adopted assignment use != classification of reality.
+- existing adopted assignment use != classification of reality;
+- reasoner output != controller selection;
+- controller selection != Work admission;
+- controller close != responsibility discharge.
 
-The complete cross-layer separation set is owned by `semantics/core/responsibility-separation-v1.md`.
+The complete cross-layer separation set is owned by `semantics/core/responsibility-separation-v1.md`; cognitive-control-specific separations are owned by `semantics/core/cognitive-control-v1.md`.
 
 ## Public authority ceiling
 
@@ -75,6 +80,6 @@ Public contracts may expose read-only views of authority-bearing runtime objects
 
 ## Compatibility
 
-`distinction-governance-1.0`, Control Plane `official-1.0.0`, runtime protocol `2.0`, provider protocol `1`, and the existing persisted/event tokens remain compatible unless a versioned contract in this directory explicitly declares a breaking change.
+`distinction-governance-1.0`, Control Plane `official-1.0.0`, runtime protocol `2.0`, provider protocol `1`, the `portable-runtime-contracts-v1` catalog identifier, and the existing persisted/event tokens remain compatible unless a versioned contract in this directory explicitly declares a breaking change.
 
 See `catalog.toml` for the machine-readable contract index and `semantics/core/ownership-v1.md` for the ownership rule.
