@@ -58,9 +58,14 @@ ControllerState
     open-issue refs
     open / waiting / closed / reopen-required status
     monotonic version
-    pending request ref
+    pending ref
     latest decision/result refs
 ```
+
+`pending_ref` is a coordination reference. For capability invocation it is the
+request id; for an explicit wait it may identify the controller decision or
+another durable wait condition. It does not imply that every wait corresponds
+to a provider request.
 
 These are coordination references, not new epistemic statuses. Evidence,
 assertions, outcomes, knowledge and responsibility objects remain owned by their
@@ -95,8 +100,8 @@ portfolio admission, resource reservation, commitment or Work materialization.
 Work, discharge a responsibility or authorize an effect.
 
 `reopen` and `wait` are controller coordination states only. A restart while
-waiting preserves the pending request reference and requires explicit handling;
-it is not permission to repeat an ambiguous external operation.
+waiting preserves the pending reference and requires explicit handling; it is
+not permission to repeat an ambiguous external operation.
 
 ## Provider neutrality
 
