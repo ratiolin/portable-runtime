@@ -1,14 +1,7 @@
-"""Workflow context bridging Runtime and providers (portable, provider-agnostic).
-
-Hardened: idempotent invoke deduplication + Run state-machine with explicit
-transition contract. Same (run, capability, params) re-invoked is deduped;
-waiting/blocked states are resumable with validated transitions.
-R1.1: Step/Checkpoint/Lease + fencing support.
-"""
+"""Workflow context bridging Runtime and providers."""
 
 from __future__ import annotations
 
-import contextlib
 import hashlib
 import json
 from dataclasses import dataclass, field
@@ -18,10 +11,6 @@ from portable_runtime.core.models import Checkpoint, Run, Step, Work, utcnow
 from portable_runtime.core.registry import ProviderRegistry
 from portable_runtime.core.router import CapabilityService
 from portable_runtime.interfaces.store import StateStore
-
-# ---------------------------------------------------------------------------
-# Run state machine — explicit contract, unit-testable
-# ---------------------------------------------------------------------------
 
 _RUN_ALLOWED_TRANSITIONS: dict[str, set[str]] = {
     "queued": {"running", "cancelled"},
@@ -61,29 +50,28 @@ class WorkflowContext:
     registry: ProviderRegistry
     _invocation_cache: dict[str, CapabilityResult] = field(default_factory=dict, init=False)
 
-    def __post_init__(self) -> None:
-        with contextlib.suppress(Exception):
-            cached_meta = self.run.metadata.get("_invocation_cache_sizes", None)  # noqa: F841
-        meta_cache = self.run.metadata.get("_workflow_cache_keys", {}) if isinstance(self.run.metadata, dict) else {}
-        _ = meta_cache
-
-    def _cache_key(self, capability: str, instruction: str | None, parameters: dict[str, object]) -> str:
+    def _cache_key(
+        self,
+        capability: str,
+        instruction: str | None,
+        parameters: dict[str, object],
+    ) -> str:
         payload = json.dumps(
-            {"cap": capability, "inst": instruction, "params": parameters}, sort_keys=True, default=str
+            {"cap": capability, "inst": instruction, "params": parameters},
+            sort_keys=True,
+            default=str,
         )
-        h = hashlib.sha256(payload.encode()).hexdigest()[:16]
-        return f"{capability}:{h}"
+        return f"{capability}:{hashlib.sha256(payload.encode()).hexdigest()[:16]}"
 
     def _lookup_cache(self, key: str) -> CapabilityResult | None:
         return self._invocation_cache.get(key)
 
     def _store_cache(self, key: str, result: CapabilityResult) -> None:
         self._invocation_cache[key] = result
-        with contextlib.suppress(Exception):
-            cache_keys = dict(self.run.metadata.get("_workflow_cache_keys", {}))
-            cache_keys[key] = result.status
-            self.run.metadata["_workflow_cache_keys"] = cache_keys
-            self.store.save_run(self.run)
+        cache_keys = dict(self.run.metadata.get("_workflow_cache_keys", {}))
+        cache_keys[key] = result.status
+        self.run.metadata["_workflow_cache_keys"] = cache_keys
+        self.store.save_run(self.run)
 
     async def invoke(
         self, capability: str, *, instruction: str | None = None, **parameters: object
@@ -92,15 +80,17 @@ class WorkflowContext:
         cached = self._lookup_cache(key)
         if cached is not None:
             return cached
-        from portable_runtime.core.invocation import InvocationFactory  # type: ignore[import-untyped]
-        contract_registry = None
-        try:
-            b = getattr(self.capabilities, "boundary", None)
-            if b is not None and hasattr(b, "contract_registry"):
-                contract_registry = b.contract_registry
-        except Exception:
-            pass
-        factory = InvocationFactory(store=self.store, registry=self.registry, contract_registry=contract_registry, runtime_id=getattr(self.capabilities, "runtime_id", "runtime"))
+
+        from portable_runtime.core.invocation import InvocationFactory
+
+        boundary = getattr(self.capabilities, "boundary", None)
+        contract_registry = getattr(boundary, "contract_registry", None)
+        factory = InvocationFactory(
+            store=self.store,
+            registry=self.registry,
+            contract_registry=contract_registry,
+            runtime_id=getattr(self.capabilities, "runtime_id", "runtime"),
+        )
         governance_keys = {
             "actor_ref",
             "resource_ref",
@@ -123,68 +113,71 @@ class WorkflowContext:
         }
         governance_metadata: dict[str, object] = {}
         for source in (self.work.metadata, self.run.metadata):
-            if isinstance(source, dict):
-                governance_metadata.update({key: source[key] for key in governance_keys if key in source})
+            governance_metadata.update(
+                {key: source[key] for key in governance_keys if key in source}
+            )
         subject_versions = governance_metadata.get("subject_version_refs")
         if isinstance(subject_versions, str):
             subject_versions = [subject_versions]
         elif not isinstance(subject_versions, list):
             subject_versions = None
-        req = factory.build(
+        request = factory.build(
             capability,
             work_id=self.work.id,
             run_id=self.run.id,
             instruction=instruction,
-            parameters=dict(parameters),  # type: ignore[arg-type]
+            parameters=dict(parameters),
             idempotency_key=f"{self.run.id}:{key}",
             step_key=key,
             request_id=f"req_{self.run.id}_{capability}_{len(self._invocation_cache)}",
             metadata=governance_metadata,
-            actor_ref=governance_metadata.get("actor_ref"),  # type: ignore[arg-type]
-            resource_ref=governance_metadata.get("resource_ref"),  # type: ignore[arg-type]
-            subject_version_refs=subject_versions,  # type: ignore[arg-type]
+            actor_ref=governance_metadata.get("actor_ref"),
+            resource_ref=governance_metadata.get("resource_ref"),
+            subject_version_refs=subject_versions,
         )
-        result = await self.capabilities.invoke(req)
+        result = await self.capabilities.invoke(request)
         self._store_cache(key, result)
         return result
 
-    # --- Step helpers R1.1 ---
-
     def step(self, step_key: str, kind: str = "generic") -> Step:
-        """Get or create durable Step; ensures stable key."""
-        try:
-            steps = self.store.list_steps(self.run.id)  # type: ignore
-            existing = next((s for s in steps if s.step_key == step_key), None)
-            if existing:
-                return existing
-        except Exception:
-            pass
+        """Get or create a durable Step with a stable key."""
+        existing = next(
+            (step for step in self.store.list_steps(self.run.id) if step.step_key == step_key),
+            None,
+        )
+        if existing is not None:
+            return existing
+
         from portable_runtime.core.models import new_id
 
-        s = Step(id=new_id("step"), run_id=self.run.id, step_key=step_key, kind=kind, status="pending")
-        try:
-            self.store.save_step(s)  # type: ignore
-        except Exception:
-            pass
-        return s
+        step = Step(
+            id=new_id("step"),
+            run_id=self.run.id,
+            step_key=step_key,
+            kind=kind,
+            status="pending",
+        )
+        self.store.save_step(step)
+        return step
 
-    def checkpoint(self, step_id: str | None = None, payload: dict | None = None) -> Checkpoint:
+    def checkpoint(
+        self, step_id: str | None = None, payload: dict | None = None
+    ) -> Checkpoint:
         from portable_runtime.core.models import new_id
 
-        cp = Checkpoint(
+        checkpoint = Checkpoint(
             id=new_id("checkpoint"),
             run_id=self.run.id,
             step_id=step_id,
             payload=payload,
-            state_digest=hashlib.sha256(json.dumps(payload or {}, sort_keys=True).encode()).hexdigest()[:16] if payload else None,
+            state_digest=(
+                hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()[:16]
+                if payload
+                else None
+            ),
         )
-        try:
-            self.store.save_checkpoint(cp)  # type: ignore
-        except Exception:
-            pass
-        return cp
-
-    # --- Run status helpers ---
+        self.store.save_checkpoint(checkpoint)
+        return checkpoint
 
     def can_transition(self, to_status: str) -> bool:
         return is_valid_run_transition(self.run.status, to_status)
@@ -206,12 +199,7 @@ class WorkflowContext:
         return new_run
 
     def complete_with_proofs(self, verification_refs: list[str]) -> Run:
-        """Authorize ``succeeded`` using the shared completion primitive.
-
-        Workflows must not equate provider execution success with a terminal
-        workflow result.  The authority resolves durable proof records and
-        accepts only explicit typed passing verification judgments.
-        """
+        """Authorize ``succeeded`` using the shared completion primitive."""
         from portable_runtime.workflows.completion import CompletionAuthority
 
         self.run = CompletionAuthority(self.store).authorize(
@@ -219,9 +207,6 @@ class WorkflowContext:
             run=self.run,
             verification_refs=verification_refs,
         )
-        # CompletionAuthority commits Work and Run together. Refresh the
-        # context's Work view so callers cannot accidentally persist a stale
-        # non-terminal Work after the authoritative commit.
         self.work = self.store.get_work(self.work.id) or self.work
         return self.run
 
@@ -232,8 +217,8 @@ class WorkflowContext:
         return new_run
 
     def has_completed_step(self, step: str) -> bool:
-        keys = self.run.metadata.get("_workflow_cache_keys", {}) if isinstance(self.run.metadata, dict) else {}
-        return any(step in k for k in keys) if isinstance(keys, dict) else False
+        keys = self.run.metadata.get("_workflow_cache_keys", {})
+        return any(step in key for key in keys) if isinstance(keys, dict) else False
 
     def is_resumable(self) -> bool:
         return self.run.status in ("waiting", "blocked", "interrupted", "running")
@@ -245,6 +230,6 @@ class WorkflowContext:
 
     def clear_cache(self) -> None:
         self._invocation_cache.clear()
-        if isinstance(self.run.metadata, dict) and "_workflow_cache_keys" in self.run.metadata:
-            self.run.metadata.pop("_workflow_cache_keys", None)
+        if "_workflow_cache_keys" in self.run.metadata:
+            self.run.metadata.pop("_workflow_cache_keys")
             self.store.save_run(self.run)
