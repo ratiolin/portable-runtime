@@ -13,8 +13,6 @@ class ControllerPolicy(Protocol):
     """
 
     @property
-    def policy_ref(self) -> str:
-        """Stable policy/version reference retained as decision provenance."""
+    def policy_ref(self) -> str: ...
 
-    async def select(self, state: ControllerState) -> ControllerDecision:
-        """Return one decision bound to the supplied controller state."""
+    async def select(self, state: ControllerState) -> ControllerDecision: ...
