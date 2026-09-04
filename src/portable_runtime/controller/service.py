@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from portable_runtime.controller.closure import CognitiveClosure
 from portable_runtime.controller.models import (
     ControllerDecision,
     ControllerDecisionKind,
@@ -9,6 +10,7 @@ from portable_runtime.controller.models import (
     ControllerStatus,
 )
 from portable_runtime.controller.policy import ControllerPolicy
+from portable_runtime.controller.revision import RevisionAssessment, RevisionDisposition
 from portable_runtime.core.capabilities import CapabilityRequest
 from portable_runtime.core.models import Event, new_id, utcnow
 from portable_runtime.responsibility.models import EffectClass, WorkProposal
@@ -17,16 +19,20 @@ from portable_runtime.responsibility.service import ResponsibilityKernel
 CONTROLLER_STATE_EVENT = "ControllerStateRecorded"
 CONTROLLER_DECISION_EVENT = "ControllerDecisionSelected"
 CONTROLLER_RESULT_EVENT = "ControllerCapabilityResultObserved"
+CONTROLLER_CLOSURE_EVENT = "ControllerCognitiveClosureFormed"
 CONTROLLER_WORK_PROPOSAL_EVENT = "ControllerWorkProposalHandedOff"
+CONTROLLER_REVISION_EVENT = "ControllerRevisionAssessed"
 CONTROLLER_REOPEN_REQUIRED_EVENT = "ControllerReopenRequired"
+
+_UNCHANGED = object()
 
 
 class CognitiveController:
-    """Minimal cognitive-control state machine over the existing runtime.
+    """Durable cognitive-control state machine over the existing runtime.
 
-    The controller selects cognitive/work direction. It does not own provider
-    truth, Work admission, execution authorization, external effects,
-    verification or responsibility discharge.
+    The controller selects cognitive/work direction and preserves closure/revision
+    lineage. It does not own provider truth, Work admission, execution authority,
+    external effects, verification or responsibility discharge.
     """
 
     def __init__(self, runtime: Any) -> None:
@@ -79,6 +85,29 @@ class CognitiveController:
                 values.append(ControllerDecision.model_validate(raw))
         return values
 
+    def closures(self, controller_id: str) -> list[CognitiveClosure]:
+        values: list[CognitiveClosure] = []
+        for event in self.store.list_events(controller_id):
+            if event.type != CONTROLLER_CLOSURE_EVENT:
+                continue
+            raw = event.payload.get("closure")
+            if isinstance(raw, dict):
+                values.append(CognitiveClosure.model_validate(raw))
+        return values
+
+    def get_closure(self, controller_id: str, closure_id: str) -> CognitiveClosure | None:
+        return next((value for value in self.closures(controller_id) if value.id == closure_id), None)
+
+    def revisions(self, controller_id: str) -> list[RevisionAssessment]:
+        values: list[RevisionAssessment] = []
+        for event in self.store.list_events(controller_id):
+            if event.type != CONTROLLER_REVISION_EVENT:
+                continue
+            raw = event.payload.get("revision")
+            if isinstance(raw, dict):
+                values.append(RevisionAssessment.model_validate(raw))
+        return values
+
     async def step(self, controller_id: str, policy: ControllerPolicy) -> ControllerState:
         """Ask one policy for one selection, then apply it through normal guards."""
 
@@ -106,8 +135,12 @@ class CognitiveController:
 
         if decision.kind is ControllerDecisionKind.INVOKE_CAPABILITY:
             return await self._invoke_capability(state, decision)
+        if decision.kind is ControllerDecisionKind.FORM_CLOSURE:
+            return self._form_closure(state, decision)
         if decision.kind is ControllerDecisionKind.PROPOSE_WORK:
             return self._propose_work(state, decision)
+        if decision.kind is ControllerDecisionKind.ASSESS_REVISION:
+            return self._assess_revision(state, decision)
         if decision.kind is ControllerDecisionKind.CLOSE:
             return self._transition(
                 state,
@@ -121,6 +154,8 @@ class CognitiveController:
                 decision,
                 status=ControllerStatus.OPEN,
                 pending_ref=None,
+                active_closure_ref=None,
+                work_proposal_ref=None,
             )
         if decision.kind is ControllerDecisionKind.WAIT:
             return self._transition(
@@ -164,23 +199,40 @@ class CognitiveController:
                 f"got {decision.state_version}"
             )
 
-        allowed = {
-            ControllerStatus.OPEN: {
-                ControllerDecisionKind.INVOKE_CAPABILITY,
-                ControllerDecisionKind.PROPOSE_WORK,
-                ControllerDecisionKind.CLOSE,
-                ControllerDecisionKind.WAIT,
-            },
-            ControllerStatus.WAITING: {ControllerDecisionKind.REOPEN},
-            ControllerStatus.CLOSED: {ControllerDecisionKind.REOPEN},
-            ControllerStatus.REOPEN_REQUIRED: {ControllerDecisionKind.REOPEN},
-        }
-        if decision.kind not in allowed[state.status]:
+        if state.status is ControllerStatus.OPEN:
+            if state.active_closure_ref is None:
+                allowed = {
+                    ControllerDecisionKind.INVOKE_CAPABILITY,
+                    ControllerDecisionKind.FORM_CLOSURE,
+                    ControllerDecisionKind.CLOSE,
+                    ControllerDecisionKind.WAIT,
+                }
+            else:
+                allowed = {
+                    ControllerDecisionKind.PROPOSE_WORK,
+                    ControllerDecisionKind.CLOSE,
+                    ControllerDecisionKind.WAIT,
+                }
+        elif state.status is ControllerStatus.WAITING:
+            allowed = {
+                ControllerDecisionKind.ASSESS_REVISION,
+                ControllerDecisionKind.REOPEN,
+            }
+        elif state.status in {ControllerStatus.CLOSED, ControllerStatus.REOPEN_REQUIRED}:
+            allowed = {ControllerDecisionKind.REOPEN}
+        else:  # pragma: no cover - StrEnum exhaustiveness guard
+            allowed = set()
+
+        if decision.kind not in allowed:
+            if state.status is ControllerStatus.OPEN and state.active_closure_ref is not None:
+                raise ValueError(
+                    "active cognitive closure admits only propose-work, close, or wait; "
+                    "explicit reopen is required before further exploration"
+                )
             if state.status is ControllerStatus.OPEN:
                 raise ValueError(f"open controller state does not admit {decision.kind.value}")
             raise ValueError(
-                f"{state.status.value} controller state must be explicitly reopened before "
-                f"{decision.kind.value}"
+                f"{state.status.value} controller state does not admit {decision.kind.value}"
             )
         return state
 
@@ -241,6 +293,49 @@ class CognitiveController:
         self._record_state(resumed)
         return resumed
 
+    def _form_closure(
+        self,
+        state: ControllerState,
+        decision: ControllerDecision,
+    ) -> ControllerState:
+        closure = decision.closure
+        if closure is None:
+            raise ValueError("form-closure decision has no closure")
+        if state.responsibility_ref != closure.responsibility_ref:
+            raise ValueError("closure responsibility_ref does not match controller state")
+        if state.subject_ref != closure.subject_ref:
+            raise ValueError("closure subject_ref does not match controller state")
+        if state.candidate_refs and not set(closure.selected_candidate_refs).issubset(state.candidate_refs):
+            raise ValueError("closure selected_candidate_refs are not current controller candidates")
+        missing_issue_dispositions = set(state.open_issue_refs) - set(closure.deferred_issue_refs)
+        if missing_issue_dispositions:
+            raise ValueError(
+                "closure must explicitly defer every unresolved controller issue: "
+                + ", ".join(sorted(missing_issue_dispositions))
+            )
+        if decision.policy_ref is not None:
+            if closure.policy_ref not in {None, decision.policy_ref}:
+                raise ValueError("closure policy_ref conflicts with controller decision")
+            closure = closure.model_copy(update={"policy_ref": decision.policy_ref})
+        event = Event(
+            id=new_id("event"),
+            type=CONTROLLER_CLOSURE_EVENT,
+            subject_ref=state.id,
+            payload={
+                "decision_ref": decision.id,
+                "closure": closure.model_dump(mode="json"),
+            },
+        )
+        self.store.append_event(event)
+        return self._transition(
+            state,
+            decision,
+            status=ControllerStatus.OPEN,
+            pending_ref=None,
+            active_closure_ref=closure.id,
+            last_result_ref=event.id,
+        )
+
     def _propose_work(
         self,
         state: ControllerState,
@@ -252,6 +347,15 @@ class CognitiveController:
             raise ValueError("propose-work requires controller subject_ref")
         if decision.assessment_ref is None or decision.work_title is None:
             raise ValueError("propose-work decision is incomplete")
+        if decision.closure_ref != state.active_closure_ref:
+            raise ValueError("propose-work must reference the active cognitive closure")
+        closure = self.get_closure(state.id, decision.closure_ref)
+        if closure is None:
+            raise ValueError("active cognitive closure is unavailable")
+        if EffectClass(decision.effect_class) is not closure.effect_class:
+            raise ValueError("work effect_class exceeds or differs from cognitive closure")
+        if not set(decision.requested_capabilities).issubset(closure.requested_capabilities):
+            raise ValueError("work requests capabilities outside cognitive closure")
 
         responsibility_version, _statement, _scope = self.responsibilities.current_definition(
             state.responsibility_ref
@@ -264,11 +368,26 @@ class CognitiveController:
             work_kind=decision.work_kind,
             title=decision.work_title,
             description=decision.work_description,
-            requested_capabilities=list(decision.requested_capabilities),
-            expected_result=decision.expected_result,
-            stop_conditions=list(decision.stop_conditions),
-            escalation_conditions=list(decision.escalation_conditions),
-            effect_class=EffectClass(decision.effect_class),
+            requested_capabilities=(
+                list(decision.requested_capabilities)
+                if decision.requested_capabilities
+                else list(closure.requested_capabilities)
+            ),
+            expected_result=(
+                decision.expected_result
+                or "; ".join(closure.acceptance_criteria)
+            ),
+            stop_conditions=(
+                list(decision.stop_conditions)
+                if decision.stop_conditions
+                else list(closure.stop_conditions)
+            ),
+            escalation_conditions=(
+                list(decision.escalation_conditions)
+                if decision.escalation_conditions
+                else list(closure.escalation_conditions)
+            ),
+            effect_class=closure.effect_class,
         )
         proposal = self.responsibilities.propose(proposal, now=utcnow())
         self.store.append_event(
@@ -278,6 +397,7 @@ class CognitiveController:
                 subject_ref=state.id,
                 payload={
                     "decision_ref": decision.id,
+                    "closure_ref": closure.id,
                     "proposal_ref": proposal.id,
                     "responsibility_ref": state.responsibility_ref,
                 },
@@ -286,9 +406,62 @@ class CognitiveController:
         return self._transition(
             state,
             decision,
-            status=ControllerStatus.OPEN,
-            pending_ref=None,
+            status=ControllerStatus.WAITING,
+            pending_ref=proposal.id,
+            work_proposal_ref=proposal.id,
             last_result_ref=proposal.id,
+        )
+
+    def _assess_revision(
+        self,
+        state: ControllerState,
+        decision: ControllerDecision,
+    ) -> ControllerState:
+        revision = decision.revision
+        if revision is None:
+            raise ValueError("assess-revision decision has no revision")
+        if state.active_closure_ref is None:
+            raise ValueError("revision requires an active cognitive closure")
+        if revision.closure_ref != state.active_closure_ref:
+            raise ValueError("revision does not refer to the active cognitive closure")
+        if decision.policy_ref is not None:
+            if revision.policy_ref not in {None, decision.policy_ref}:
+                raise ValueError("revision policy_ref conflicts with controller decision")
+            revision = revision.model_copy(update={"policy_ref": decision.policy_ref})
+
+        self.store.append_event(
+            Event(
+                id=new_id("event"),
+                type=CONTROLLER_REVISION_EVENT,
+                subject_ref=state.id,
+                payload={
+                    "decision_ref": decision.id,
+                    "revision": revision.model_dump(mode="json"),
+                },
+            )
+        )
+
+        if revision.recommended_disposition is RevisionDisposition.CLOSE:
+            status = ControllerStatus.CLOSED
+            pending_ref: str | None = None
+        elif revision.recommended_disposition in {
+            RevisionDisposition.REVISE_WORK,
+            RevisionDisposition.REOPEN_COGNITION,
+            RevisionDisposition.ACQUIRE_EVIDENCE,
+        }:
+            status = ControllerStatus.REOPEN_REQUIRED
+            pending_ref = None
+        else:
+            status = ControllerStatus.WAITING
+            pending_ref = revision.id
+
+        return self._transition(
+            state,
+            decision,
+            status=status,
+            pending_ref=pending_ref,
+            last_revision_ref=revision.id,
+            last_result_ref=revision.id,
         )
 
     def _transition(
@@ -298,18 +471,27 @@ class CognitiveController:
         *,
         status: ControllerStatus,
         pending_ref: str | None,
-        last_result_ref: str | None = None,
+        active_closure_ref: str | None | object = _UNCHANGED,
+        work_proposal_ref: str | None | object = _UNCHANGED,
+        last_revision_ref: str | None | object = _UNCHANGED,
+        last_result_ref: str | None | object = _UNCHANGED,
     ) -> ControllerState:
-        next_state = state.model_copy(
-            update={
-                "status": status,
-                "version": state.version + 1,
-                "pending_ref": pending_ref,
-                "last_decision_ref": decision.id,
-                "last_result_ref": last_result_ref if last_result_ref is not None else state.last_result_ref,
-                "updated_at": utcnow(),
-            }
-        )
+        update: dict[str, Any] = {
+            "status": status,
+            "version": state.version + 1,
+            "pending_ref": pending_ref,
+            "last_decision_ref": decision.id,
+            "updated_at": utcnow(),
+        }
+        if active_closure_ref is not _UNCHANGED:
+            update["active_closure_ref"] = active_closure_ref
+        if work_proposal_ref is not _UNCHANGED:
+            update["work_proposal_ref"] = work_proposal_ref
+        if last_revision_ref is not _UNCHANGED:
+            update["last_revision_ref"] = last_revision_ref
+        if last_result_ref is not _UNCHANGED:
+            update["last_result_ref"] = last_result_ref
+        next_state = state.model_copy(update=update)
         self._record_state(next_state)
         return next_state
 
