@@ -214,10 +214,10 @@ class CognitiveController:
                     ControllerDecisionKind.WAIT,
                 }
         elif state.status is ControllerStatus.WAITING:
-            allowed = {
-                ControllerDecisionKind.ASSESS_REVISION,
-                ControllerDecisionKind.REOPEN,
-            }
+            if state.active_closure_ref is not None and state.work_proposal_ref is not None:
+                allowed = {ControllerDecisionKind.ASSESS_REVISION}
+            else:
+                allowed = {ControllerDecisionKind.REOPEN}
         elif state.status in {ControllerStatus.CLOSED, ControllerStatus.REOPEN_REQUIRED}:
             allowed = {ControllerDecisionKind.REOPEN}
         else:  # pragma: no cover - StrEnum exhaustiveness guard
@@ -228,6 +228,10 @@ class CognitiveController:
                 raise ValueError(
                     "active cognitive closure admits only propose-work, close, or wait; "
                     "explicit reopen is required before further exploration"
+                )
+            if state.status is ControllerStatus.WAITING and state.work_proposal_ref is not None:
+                raise ValueError(
+                    "handed-off Work requires RevisionAssessment before retry, reopen, or close"
                 )
             if state.status is ControllerStatus.OPEN:
                 raise ValueError(f"open controller state does not admit {decision.kind.value}")
