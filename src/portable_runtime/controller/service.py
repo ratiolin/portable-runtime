@@ -8,6 +8,7 @@ from portable_runtime.controller.models import (
     ControllerState,
     ControllerStatus,
 )
+from portable_runtime.controller.policy import ControllerPolicy
 from portable_runtime.core.capabilities import CapabilityRequest
 from portable_runtime.core.models import Event, new_id, utcnow
 from portable_runtime.responsibility.models import EffectClass, WorkProposal
@@ -78,6 +79,27 @@ class CognitiveController:
                 values.append(ControllerDecision.model_validate(raw))
         return values
 
+    async def step(self, controller_id: str, policy: ControllerPolicy) -> ControllerState:
+        """Ask one policy for one selection, then apply it through normal guards."""
+
+        state = self.get(controller_id)
+        if state is None:
+            raise ValueError(f"unknown controller state: {controller_id}")
+        policy_ref = policy.policy_ref.strip()
+        if not policy_ref:
+            raise ValueError("controller policy_ref cannot be blank")
+
+        decision = await policy.select(state.model_copy(deep=True))
+        if decision.controller_ref != state.id:
+            raise ValueError("controller policy selected a decision for another controller")
+        if decision.state_version != state.version:
+            raise ValueError(
+                f"controller policy selected stale state version {decision.state_version}; "
+                f"current version is {state.version}"
+            )
+        decision = decision.model_copy(update={"policy_ref": policy_ref})
+        return await self.apply(decision)
+
     async def apply(self, decision: ControllerDecision) -> ControllerState:
         state = self._require_current(decision)
         self._record_decision(decision)
@@ -141,8 +163,25 @@ class CognitiveController:
                 f"stale controller decision: expected state version {state.version}, "
                 f"got {decision.state_version}"
             )
-        if state.status is ControllerStatus.WAITING and decision.kind is not ControllerDecisionKind.REOPEN:
-            raise ValueError("waiting controller state must be explicitly reopened before a new decision")
+
+        allowed = {
+            ControllerStatus.OPEN: {
+                ControllerDecisionKind.INVOKE_CAPABILITY,
+                ControllerDecisionKind.PROPOSE_WORK,
+                ControllerDecisionKind.CLOSE,
+                ControllerDecisionKind.WAIT,
+            },
+            ControllerStatus.WAITING: {ControllerDecisionKind.REOPEN},
+            ControllerStatus.CLOSED: {ControllerDecisionKind.REOPEN},
+            ControllerStatus.REOPEN_REQUIRED: {ControllerDecisionKind.REOPEN},
+        }
+        if decision.kind not in allowed[state.status]:
+            if state.status is ControllerStatus.OPEN:
+                raise ValueError(f"open controller state does not admit {decision.kind.value}")
+            raise ValueError(
+                f"{state.status.value} controller state must be explicitly reopened before "
+                f"{decision.kind.value}"
+            )
         return state
 
     async def _invoke_capability(
