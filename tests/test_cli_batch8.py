@@ -167,22 +167,37 @@ def test_cli_affected_by(tmp_path):
     assert isinstance(data2, list)
 
 
-def test_cli_reopen(tmp_path):
+def test_cli_legacy_reopen_is_fail_loud_and_cannot_create_work(tmp_path):
     db = _seed(tmp_path)
-    # need a work to reopen
     store = SQLiteStateStore(db)
     runtime = Runtime(store=store)
     work = runtime.create_work(title="to reopen", description="original")
     store.close()
-    # reopen via cli
-    rc, out = _capture(["--state", str(db), "reopen", work.id, "--scope", "other", "--reason", "test reopen"])
-    assert rc == 0, out
-    data = json.loads(out)
-    assert "assessment" in data
-    assert "work" in data
-    assert data["assessment"]["record_ref"] == work.id
 
-    # reopen nonexistent should fail
+    rc, out = _capture(
+        [
+            "--state",
+            str(db),
+            "reopen",
+            work.id,
+            "--scope",
+            "other",
+            "--reason",
+            "test reopen",
+        ]
+    )
+    assert rc == 1
+    assert "direct reopen-to-Work is retired" in out
+
+    reopened = SQLiteStateStore(db)
+    try:
+        assert [item.id for item in reopened.list_work()] == [work.id]
+        assert reopened.list_relations("supersedes") == []
+        assert not any(event.type == "ReopenCreated" for event in reopened.list_events())
+    finally:
+        reopened.close()
+
+    # nonexistent remains an ordinary lookup failure
     rc, out = _capture(["--state", str(db), "reopen", "nonexistent-id"])
     assert rc == 1
     assert "record not found" in out
@@ -273,5 +288,3 @@ def test_cli_knowledge_show(tmp_path):
 
     rc, out = _capture(["--state", str(db), "knowledge", "show", "nonexistent"])
     assert rc == 1
-
-
