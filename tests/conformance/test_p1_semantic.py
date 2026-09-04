@@ -10,7 +10,12 @@ from portable_runtime.core.qualification import AssessmentContext, InvocationPer
 from portable_runtime.records.knowledge import KnowledgeProjection
 from portable_runtime.records.experiment import ExperimentPlan, create_experiment_work, is_low_cost_discriminative
 from portable_runtime.records.models import Assertion, BaseRecord, Derivation, EvidenceArtifact
-from portable_runtime.records.reopen import ReopenAssessment, create_reopen_work
+from portable_runtime.records.reopen import (
+    LegacyReopenWorkBypassError,
+    ReopenAssessment,
+    build_reopen_package,
+    create_reopen_work,
+)
 from portable_runtime.records.revalidation import (
     DefaultRevalidationPolicyProfile,
     assess_revalidation,
@@ -26,7 +31,7 @@ from portable_runtime.workflows.context import WorkflowContext
 from portable_runtime.workflows.daily_scan.workflow import KnowledgeConsolidationWorkflow
 
 
-def test_deep_reopen_carries_handoff_and_never_reuses_original_workflow() -> None:
+def test_deep_reopen_preserves_handoff_but_cannot_create_work() -> None:
     store = InMemoryStateStore()
     original = Work(
         id="work_original",
@@ -44,20 +49,26 @@ def test_deep_reopen_carries_handoff_and_never_reuses_original_workflow() -> Non
     )
     store.save_work(original)
     store.save_record(assertion)
-    store.save_relation(RecordRelation(relation_type="supports", subject_ref=assertion.id, object_ref=original.id))
+    store.save_relation(
+        RecordRelation(
+            relation_type="supports",
+            subject_ref=assertion.id,
+            object_ref=original.id,
+        )
+    )
     assessment = ReopenAssessment(
         record_ref=original.id,
         revision_scope="problem-definition",
         reason="the problem frame was wrong",
     )
 
-    reopened = create_reopen_work(assessment, original, store=store)
+    package = build_reopen_package(assessment, original, store=store)
+    assert package.original_work_ref == original.id
+    assert package.handoff.assumption_refs == ["old frame"]
 
-    assert reopened.kind == "reframing"
-    assert reopened.metadata["auto_rerun_original_work"] is False
-    assert reopened.metadata["reopen_package"]["original_work_ref"] == original.id
-    assert reopened.metadata["handoff_envelope"]["assumption_refs"] == ["old frame"]
-    assert original.kind == "incident"
+    with pytest.raises(LegacyReopenWorkBypassError, match="direct reopen-to-Work is retired"):
+        create_reopen_work(assessment, original, store=store)
+    assert store.list_work() == [original]
 
 
 def test_experiment_plan_creates_discriminative_work_without_promoting_a_judgment() -> None:
@@ -179,9 +190,6 @@ async def test_canonical_consolidation_is_non_reentrant_and_evidence_ids_are_aut
         )
         store.save_knowledge_projection(projection)
 
-        # Public compatibility reads expose a legacy view, but canonical
-        # ingestion must use the raw namespace and therefore see no legacy
-        # duplicate for this canonical projection.
         assert len(store.list_knowledge("candidate")) == 1
         assert store.list_raw_legacy_knowledge("candidate") == []
         assert store.list_raw_legacy_evidence() == []
@@ -192,8 +200,6 @@ async def test_canonical_consolidation_is_non_reentrant_and_evidence_ids_are_aut
         assert [item.id for item in store.list_knowledge_projections()] == [projection.id]
         assert store.get_knowledge_projection(projection.id).lifecycle_status == "candidate"
 
-        # Fixed-point property: compatibility reads followed by another
-        # canonical consolidation cannot create a second semantic projection.
         projection_ids = [item.id for item in store.list_knowledge_projections()]
         assert await KnowledgeConsolidationWorkflow().run(context, work, run) == "succeeded"
         assert [item.id for item in store.list_knowledge_projections()] == projection_ids
