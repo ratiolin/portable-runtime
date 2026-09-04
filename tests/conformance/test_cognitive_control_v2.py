@@ -23,7 +23,7 @@ from portable_runtime.core.capabilities import (
     ProviderDescriptor,
     ProviderHealth,
 )
-from portable_runtime.core.models import utcnow
+from portable_runtime.core.models import Work, utcnow
 from portable_runtime.core.registry import ProviderRegistry
 from portable_runtime.core.runtime import Runtime
 from portable_runtime.responsibility.models import (
@@ -136,6 +136,17 @@ def _closure(state, *, assessment_ref: str, capability: str = "observe.health") 
         reopen_conditions=["health evidence contradicts the selected direction"],
         requested_capabilities=[capability],
     )
+
+
+def _save_descendant_work(runtime: Runtime, waiting, *, work_id: str = "work:observed") -> Work:
+    assert waiting.work_proposal_ref is not None
+    work = Work(
+        id=work_id,
+        title="Materialized descendant Work",
+        metadata={"responsibility_proposal_ref": waiting.work_proposal_ref},
+    )
+    runtime.store.save_work(work)
+    return work
 
 
 @pytest.mark.asyncio
@@ -339,10 +350,11 @@ async def test_revision_to_reopen_preserves_history_and_clears_current_closure_o
             requested_capabilities=["observe.health"],
         )
     )
+    work = _save_descendant_work(runtime, waiting)
     revision = RevisionAssessment(
         controller_ref=state.id,
         controller_state_version=waiting.version,
-        work_ref="work:observed",
+        work_ref=work.id,
         closure_ref=closure.id,
         verification_refs=["verification:still-unhealthy"],
         reason_refs=["verification:still-unhealthy"],
@@ -407,10 +419,11 @@ async def test_verified_close_revision_does_not_discharge_responsibility() -> No
             requested_capabilities=["observe.health"],
         )
     )
+    work = _save_descendant_work(runtime, waiting)
     revision = RevisionAssessment(
         controller_ref=state.id,
         controller_state_version=waiting.version,
-        work_ref="work:observed",
+        work_ref=work.id,
         closure_ref=closure.id,
         verification_refs=["verification:healthy"],
         revision_scope=RevisionScope.VERIFICATION,
