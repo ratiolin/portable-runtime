@@ -68,11 +68,18 @@ async def test_policy_step_rejects_stale_selection_before_apply() -> None:
             kind=ControllerDecisionKind.REOPEN,
         )
     )
+    before = controller.decisions(reopened.id)
 
     with pytest.raises(ValueError, match="policy selected stale state version"):
         await controller.step(reopened.id, StalePolicy())
 
-    assert controller.decisions(reopened.id)[-1].kind is ControllerDecisionKind.REOPEN
+    after = controller.decisions(reopened.id)
+    assert len(after) == len(before)
+    assert {decision.kind for decision in after} == {
+        ControllerDecisionKind.WAIT,
+        ControllerDecisionKind.REOPEN,
+    }
+    assert all(decision.policy_ref != StalePolicy.policy_ref for decision in after)
 
 
 @pytest.mark.asyncio
