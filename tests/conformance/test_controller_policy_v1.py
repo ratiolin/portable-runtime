@@ -94,7 +94,7 @@ async def test_closed_and_reopen_required_states_require_explicit_reopen() -> No
         )
     )
 
-    with pytest.raises(ValueError, match="explicitly reopened"):
+    with pytest.raises(ValueError, match="closed controller state does not admit wait"):
         await controller.apply(
             ControllerDecision(
                 controller_ref=closed.id,
@@ -113,7 +113,7 @@ async def test_closed_and_reopen_required_states_require_explicit_reopen() -> No
     required = controller.reopen_required(reopened.id, reason="new contradiction")
     assert required.status is ControllerStatus.REOPEN_REQUIRED
 
-    with pytest.raises(ValueError, match="explicitly reopened"):
+    with pytest.raises(ValueError, match="reopen-required controller state does not admit close"):
         await controller.apply(
             ControllerDecision(
                 controller_ref=required.id,

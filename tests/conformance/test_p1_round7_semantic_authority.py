@@ -11,6 +11,7 @@ from portable_runtime.api.cli import run_cli
 from portable_runtime.api.http import create_app
 from portable_runtime.core.runtime import Runtime
 from portable_runtime.records.authorization import (
+    AuthorizationGrant,
     CanonicalAuthorizationRequest,
     create_authorization_use,
 )
@@ -19,11 +20,12 @@ from portable_runtime.records.relations import RecordRelation
 from portable_runtime.records.revision import apply_revision, create_revision
 from portable_runtime.stores.memory import InMemoryStateStore
 from portable_runtime.stores.sqlite import SQLiteStateStore
-from portable_runtime.records.authorization import AuthorizationGrant
 
 
 @pytest.mark.parametrize("backend", ["memory", "sqlite"])
-def test_existing_semantic_fact_cannot_be_overwritten_without_authority(tmp_path: Path, backend: str) -> None:
+def test_existing_semantic_fact_cannot_be_overwritten_without_authority(
+    tmp_path: Path, backend: str
+) -> None:
     store = (
         InMemoryStateStore()
         if backend == "memory"
@@ -100,8 +102,12 @@ def test_http_local_governance_edge_requires_authority() -> None:
 def test_http_local_governance_edge_accepts_explicit_authority_ref() -> None:
     store = InMemoryStateStore()
     runtime = Runtime(store=store)
-    old = Assertion(id="assertion_edge_authorized_old", statement="old", lifecycle_status="draft")
-    new = Assertion(id="assertion_edge_authorized_new", statement="new", lifecycle_status="draft")
+    old = Assertion(
+        id="assertion_edge_authorized_old", statement="old", lifecycle_status="draft"
+    )
+    new = Assertion(
+        id="assertion_edge_authorized_new", statement="new", lifecycle_status="draft"
+    )
     store.save_record(old)
     store.save_record(new)
     grant = AuthorizationGrant(
@@ -141,8 +147,17 @@ def test_http_local_governance_edge_accepts_explicit_authority_ref() -> None:
 
 def test_semantic_content_update_accepts_applied_revision_authority() -> None:
     store = InMemoryStateStore()
-    old = Assertion(id="assertion_revision_target", statement="old", lifecycle_status="current", epistemic_status="supported")
-    replacement = Assertion(id="assertion_revision_replacement", statement="replacement", lifecycle_status="draft")
+    old = Assertion(
+        id="assertion_revision_target",
+        statement="old",
+        lifecycle_status="current",
+        epistemic_status="supported",
+    )
+    replacement = Assertion(
+        id="assertion_revision_replacement",
+        statement="replacement",
+        lifecycle_status="draft",
+    )
     store.save_record(old)
     store.save_record(replacement)
     revision = create_revision(old.id, replacement.id)
@@ -175,7 +190,9 @@ def test_semantic_content_update_accepts_applied_revision_authority() -> None:
 
 def test_semantic_content_update_accepts_durable_authorization_use() -> None:
     store = InMemoryStateStore()
-    record = Assertion(id="assertion_authuse_target", statement="old", lifecycle_status="draft")
+    record = Assertion(
+        id="assertion_authuse_target", statement="old", lifecycle_status="draft"
+    )
     store.save_record(record)
     grant = AuthorizationGrant(
         id="grant_round7_record_write",
@@ -211,17 +228,20 @@ def test_semantic_content_update_accepts_durable_authorization_use() -> None:
     assert store.get_record(record.id).statement == "authorized fact"  # type: ignore[union-attr]
 
 
-def test_cli_reopen_record_is_atomic_and_materializes_lineage(tmp_path: Path) -> None:
+def test_cli_legacy_reopen_cannot_materialize_work_or_lineage(tmp_path: Path) -> None:
     db = tmp_path / "cli-reopen.db"
     store = SQLiteStateStore(db)
     record = Assertion(id="assertion_cli_reopen", statement="claim", lifecycle_status="draft")
     store.save_record(record)
     store.close()
-    assert run_cli(["--state", str(db), "reopen", record.id, "--reason", "reframe"]) == 0
+
+    assert run_cli(["--state", str(db), "reopen", record.id, "--reason", "reframe"]) == 1
+
     reopened = SQLiteStateStore(db)
     try:
-        assert len(reopened.list_relations("supersedes")) == 1
-        assert any(event.type == "ReopenCreated" for event in reopened.list_events())
+        assert reopened.list_relations("supersedes") == []
+        assert not any(event.type == "ReopenCreated" for event in reopened.list_events())
+        assert reopened.list_work() == []
     finally:
         reopened.close()
 
@@ -248,6 +268,8 @@ def test_invalid_procedure_profile_is_not_silently_downgraded() -> None:
     work = runtime.create_work(title="procedure", description="test")
     client = TestClient(create_app(runtime))
 
-    response = client.get(f"/v1/procedures/{work.id}", params={"profile": "not-a-profile"})
+    response = client.get(
+        f"/v1/procedures/{work.id}", params={"profile": "not-a-profile"}
+    )
     assert response.status_code == 422
     assert "invalid procedure profile" in response.json()["detail"]

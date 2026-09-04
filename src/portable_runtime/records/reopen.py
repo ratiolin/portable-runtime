@@ -1,4 +1,10 @@
-"""Reopen — R1.5 implementation milestone."""
+"""Legacy record-level reopen observations.
+
+This module remains for historical/observation compatibility. It may assemble a
+responsibility-preserving handoff package, but it no longer creates Work. New
+cognitive failure handling is owned by controller RevisionAssessment and must
+re-enter Work through explicit reopen -> CognitiveClosure -> WorkProposal.
+"""
 
 from __future__ import annotations
 
@@ -22,16 +28,25 @@ RevisionScope = Literal[
     "other",
 ]
 
-HandoffDisposition = Literal["carry-forward", "reconsider", "invalidated", "unresolved", "context-only"]
-_DEEP_REOPEN_SCOPES = {"representation", "goal", "problem-definition"}
+HandoffDisposition = Literal[
+    "carry-forward",
+    "reconsider",
+    "invalidated",
+    "unresolved",
+    "context-only",
+]
 
 
 class ReopenAssemblyError(ValueError):
     """Authoritative semantic graph required to assemble a reopen package."""
 
 
+class LegacyReopenWorkBypassError(RuntimeError):
+    """Raised when a legacy caller attempts to mint Work from reopen metadata."""
+
+
 class HandoffEnvelope(BaseModel):
-    """Explicit responsibility handoff for a reopened work item."""
+    """Explicit responsibility handoff for a historical reopen observation."""
 
     model_config = ConfigDict(extra="allow")
 
@@ -53,7 +68,7 @@ class HandoffEnvelope(BaseModel):
 
 
 class ReopenPackage(BaseModel):
-    """Portable package carrying old responsibility structure into reopen."""
+    """Portable historical package carrying old responsibility structure."""
 
     model_config = ConfigDict(extra="allow")
 
@@ -78,13 +93,14 @@ class ReopenPackage(BaseModel):
     failure_history_refs: list[str] = Field(default_factory=list)
     handoff: HandoffEnvelope = Field(default_factory=HandoffEnvelope)
 
+
 class ReopenAssessment(BaseModel):
+    """Historical record-level reopen observation, not a Work admission object."""
+
     model_config = ConfigDict(extra="allow")
 
     id: str = Field(default_factory=lambda: new_id("reopen"))
     record_ref: str = ""
-    # ``target_ref`` is retained as a read-compatible spelling used by older
-    # callers; canonical code uses record_ref.
     target_ref: str | None = None
     revision_scope: RevisionScope = "other"
     reason: str = ""
@@ -105,20 +121,28 @@ class ReopenAssessment(BaseModel):
 
 
 class ReopenAssembler:
-    """Resolve reopen responsibility from the authoritative semantic graph.
+    """Resolve historical reopen responsibility from the authoritative graph.
 
-    Work metadata is intentionally not consulted.  It may remain useful to a
-    UI as a cache/display hint, but it cannot become a canonical handoff fact.
+    Work metadata is intentionally not consulted. The package is observation and
+    handoff material only; it cannot create or admit a new Work item.
     """
 
     def __init__(self, store: Any | None) -> None:
         self.store = store
 
-    def _records_and_relations(self, assessment: ReopenAssessment, original_work: Work) -> tuple[dict[str, Any], list[Any]]:
+    def _records_and_relations(
+        self,
+        assessment: ReopenAssessment,
+        original_work: Work,
+    ) -> tuple[dict[str, Any], list[Any]]:
         if self.store is None:
             return {}, []
         records: dict[str, Any] = {}
-        relations = list(self.store.list_relations()) if hasattr(self.store, "list_relations") else []
+        relations = (
+            list(self.store.list_relations())
+            if hasattr(self.store, "list_relations")
+            else []
+        )
         queue = [original_work.id, assessment.record_ref or original_work.id]
         seen = set(queue)
         while queue:
@@ -126,10 +150,18 @@ class ReopenAssembler:
             for rel in relations:
                 if rel.subject_ref != current and rel.object_ref != current:
                     continue
-                other = rel.object_ref if rel.subject_ref == current else rel.subject_ref
+                other = (
+                    rel.object_ref
+                    if rel.subject_ref == current
+                    else rel.subject_ref
+                )
                 if other in seen:
                     continue
-                candidate = self.store.get_record(other) if hasattr(self.store, "get_record") else None
+                candidate = (
+                    self.store.get_record(other)
+                    if hasattr(self.store, "get_record")
+                    else None
+                )
                 if candidate is None and hasattr(self.store, "get_authorization"):
                     candidate = self.store.get_authorization(other)
                 if candidate is None:
@@ -137,7 +169,11 @@ class ReopenAssembler:
                 seen.add(other)
                 queue.append(other)
                 records[other] = candidate
-        target = self.store.get_record(assessment.record_ref) if hasattr(self.store, "get_record") else None
+        target = (
+            self.store.get_record(assessment.record_ref)
+            if hasattr(self.store, "get_record")
+            else None
+        )
         if target is not None:
             records[assessment.record_ref] = target
         return records, relations
@@ -156,7 +192,8 @@ class ReopenAssembler:
         records, relations = self._records_and_relations(assessment, original_work)
         if self.store is None and handoff is None and assessment.handoff is None:
             raise ReopenAssemblyError(
-                "authoritative store or explicit handoff envelope is required for reopen assembly"
+                "authoritative store or explicit handoff envelope is required "
+                "for reopen assembly"
             )
 
         evidence_refs: list[str] = []
@@ -198,21 +235,43 @@ class ReopenAssembler:
                 rejected_refs.append(ref)
             if lifecycle in {"verified", "accepted", "confirmed", "official"}:
                 closure_refs.append(ref)
-            assumptions.extend(str(item) for item in (getattr(record, "assumptions", None) or []) if str(item).strip())
-            unknown_scopes.extend(str(item) for item in (getattr(record, "unknown_scopes", None) or []) if str(item).strip())
-            reopen_condition_refs.extend(str(item) for item in (getattr(record, "invalidation_conditions", None) or []) if str(item).strip())
-            environment_versions.update(dict(getattr(record, "environment_versions", None) or {}))
+            assumptions.extend(
+                str(item)
+                for item in (getattr(record, "assumptions", None) or [])
+                if str(item).strip()
+            )
+            unknown_scopes.extend(
+                str(item)
+                for item in (getattr(record, "unknown_scopes", None) or [])
+                if str(item).strip()
+            )
+            reopen_condition_refs.extend(
+                str(item)
+                for item in (getattr(record, "invalidation_conditions", None) or [])
+                if str(item).strip()
+            )
+            environment_versions.update(
+                dict(getattr(record, "environment_versions", None) or {})
+            )
             if not scope and isinstance(getattr(record, "scope", None), dict):
                 scope = dict(record.scope)
-            dispositions[ref] = "invalidated" if lifecycle in {"rejected", "deprecated", "archived", "superseded"} else "carry-forward"
+            dispositions[ref] = (
+                "invalidated"
+                if lifecycle in {"rejected", "deprecated", "archived", "superseded"}
+                else "carry-forward"
+            )
 
         for rel in relations:
             if rel.subject_ref not in records and rel.object_ref not in records:
                 continue
             if rel.relation_type == "authorizes":
-                authorization_refs.extend([ref for ref in (rel.subject_ref, rel.object_ref) if ref in records])
+                authorization_refs.extend(
+                    [ref for ref in (rel.subject_ref, rel.object_ref) if ref in records]
+                )
             elif rel.relation_type == "contradicts":
-                counterevidence_refs.extend([ref for ref in (rel.subject_ref, rel.object_ref) if ref in records])
+                counterevidence_refs.extend(
+                    [ref for ref in (rel.subject_ref, rel.object_ref) if ref in records]
+                )
                 for ref in (rel.subject_ref, rel.object_ref):
                     if ref in records:
                         dispositions[ref] = "invalidated"
@@ -227,6 +286,7 @@ class ReopenAssembler:
 
         def unique(values: list[str]) -> list[str]:
             return list(dict.fromkeys(values))
+
         handoff_envelope = handoff or assessment.handoff or HandoffEnvelope(
             subject_refs=unique([original_work.id, assessment.record_ref or original_work.id]),
             goal_refs=unique(goal_refs),
@@ -275,37 +335,32 @@ def build_reopen_package(
     handoff: HandoffEnvelope | None = None,
     store: Any | None = None,
 ) -> ReopenPackage:
-    """Build an explicit handoff package from the authoritative graph."""
+    """Build historical handoff material from the authoritative graph."""
+
     return ReopenAssembler(store).assemble(assessment, original_work, handoff=handoff)
 
-def create_reopen_work(assessment: ReopenAssessment, original_work: Work, *, store: Any | None = None) -> Work:
-    """Create superseding Work for reopen; preserves old history via supersedes relation."""
-    package = assessment.package or build_reopen_package(assessment, original_work, store=store)
-    deep = assessment.revision_scope in _DEEP_REOPEN_SCOPES
-    # Deep reopen changes the problem frame.  It must not resolve to the old
-    # workflow, so route it to a neutral reframing work kind and mark the
-    # original workflow as explicitly non-rerunnable.
-    kind = "reframing" if deep else original_work.kind
-    return Work(
-        id=new_id("work"),
-        title=f"Reopen: {original_work.title}",
-        description=assessment.reason,
-        kind=kind,
-        inputs=list(package.inputs),
-        artifact_refs=list(package.artifact_refs),
-        constraints=dict(package.constraints),
-        acceptance_criteria=list(package.acceptance_criteria),
-        metadata={
-            "reopen_assessment_id": assessment.id,
-            "revision_scope": assessment.revision_scope,
-            "supersedes_work_id": original_work.id,
-            "reopen_package": package.model_dump(mode="json"),
-            "handoff_envelope": package.handoff.model_dump(mode="json"),
-            "auto_rerun_original_work": False,
-            "deep_reopen": deep,
-        },
-        parent_work_id=original_work.id,
+
+def create_reopen_work(
+    assessment: ReopenAssessment,
+    original_work: Work,
+    *,
+    store: Any | None = None,
+) -> Work:
+    """Reject the retired reopen-to-Work shortcut.
+
+    Kept only as a fail-loud compatibility symbol. Callers must create a
+    controller RevisionAssessment and re-enter through CognitiveClosure ->
+    WorkProposal instead.
+    """
+
+    del assessment, original_work, store
+    raise LegacyReopenWorkBypassError(
+        "direct reopen-to-Work is retired; use RevisionAssessment -> explicit "
+        "controller reopen -> CognitiveClosure -> WorkProposal"
     )
 
+
 def should_reopen(assessment: ReopenAssessment) -> bool:
+    """Compatibility predicate for historical observation consumers only."""
+
     return bool(assessment.record_ref and assessment.revision_scope != "other")

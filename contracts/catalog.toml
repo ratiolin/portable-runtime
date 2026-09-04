@@ -22,8 +22,19 @@ public_read = true
 public_write = "authority-gated"
 
 [contracts.cognitive_control]
-current = "cognitive-control-v1"
-semantic_path = "contracts/semantics/core/cognitive-control-v1.md"
+current = "cognitive-control-v2"
+semantic_path = "contracts/semantics/core/cognitive-control-v2.md"
+supported_historical = ["cognitive-control-v1"]
+public = false
+
+[contracts.cognitive_closure]
+current = "cognitive-closure-v1"
+semantic_path = "contracts/semantics/core/cognitive-closure-v1.md"
+public = false
+
+[contracts.revision_control]
+current = "revision-control-v1"
+semantic_path = "contracts/semantics/core/revision-control-v1.md"
 public = false
 
 [contracts.distinction_governance]

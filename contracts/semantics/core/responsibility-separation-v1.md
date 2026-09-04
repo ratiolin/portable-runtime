@@ -1,10 +1,10 @@
 # Responsibility separation — v1
 
 Status: stable
-Owner: `portable-runtime/contracts`
+Owner: `agent-kernel/contracts`
 Contract: `responsibility-separation-v1`
 
-These are canonical product responsibility-separation contracts. They prevent one responsibility object, state, or observation from silently substituting for another.
+These are canonical product responsibility-separation contracts. They prevent one responsibility object, state, observation, or model output from silently substituting for another.
 
 | ID | Canonical product contract |
 |---|---|
@@ -20,6 +20,14 @@ These are canonical product responsibility-separation contracts. They prevent on
 | RSC-010 | `PolicyDecision=allow` is not `AuthorizationGrant`; policy admission does not mint authority. |
 | RSC-011 | `resolve_allowed` / `existing_assignment_use_allowed` may use an assignment already registered in the adopted partition; it does not classify reality, mutate partition membership, or assert ontic truth. |
 | RSC-012 | Governance admissibility validation does not prove external source truth; missing, ambiguous, stale, or mismatched identity, provenance, freshness, authority, or required source material fails closed for new positive use. |
+| RSC-013 | `ReasonerOutput` is not `ControllerDecision`; provider cognition may inform selection but cannot select itself. |
+| RSC-014 | `ReasonerOutput` is not `CognitiveClosure`; fluent or repeated model output cannot independently establish temporary closure. |
+| RSC-015 | `CognitiveClosure` is not `WorkProposal`, Work admission, or execution authority. |
+| RSC-016 | `ControllerDecision` is not Work admission or action authorization. |
+| RSC-017 | `FailureObserved` is not retry permission; failure evidence must not silently repeat an operation. |
+| RSC-018 | `RevisionAssessment` is not a retry, Work mutation, controller reopen, responsibility revision, or action authorization. |
+| RSC-019 | `ControllerClose` is not `ResponsibilityDischarge`. |
+| RSC-020 | Historical closure/revision existence is not current-use eligibility; current controller state/version remains authoritative for coordination. |
 
 ## Authority ceiling
 
@@ -32,7 +40,31 @@ current-use admission -/-> InvocationPermit
 GovernedApplication -/-> real-world Action
 provider success -/-> confirmed Outcome
 historical use -/-> current qualification
+ReasonerOutput -/-> CognitiveClosure
+CognitiveClosure -/-> Work
+CognitiveClosure -/-> ActionAuthorization
+FailureObserved -/-> RetryRun
+RevisionAssessment -/-> RetryRun
+RevisionAssessment -/-> Reopen
+ControllerClose -/-> ResponsibilityDischarge
 ```
+
+## Closed cognitive loop
+
+The canonical closed cognitive loop preserves explicit intermediate responsibility positions:
+
+```text
+open cognition
+    -> CognitiveClosure
+    -> WorkProposal
+    -> admission / commitment / authorization
+    -> Work / Run / external effect
+    -> verification / Outcome
+    -> RevisionAssessment
+    -> later retry / revise / reopen / wait / close decision
+```
+
+No arrow grants permission to skip the intermediate owner. In particular, a deep reopen cannot directly mint a replacement Work; it must return through explicit controller reopen, a new closure, and the normal WorkProposal/admission chain.
 
 ## Formal and research evidence
 
