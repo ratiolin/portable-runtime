@@ -14,6 +14,7 @@ authorization system.
 ```text
 existing context / records / responsibility state
     -> ControllerState
+    -> ControllerPolicy selection
     -> ControllerDecision
         -> cognitive capability invocation
         -> WorkProposal handoff
@@ -40,10 +41,11 @@ into a second truth store.
 | CC-006 | `ControllerClose -/-> ActionAuthorization`. |
 | CC-007 | `CapabilityResult -/-> VerifiedOutcome`. Provider success remains execution evidence only. |
 | CC-008 | A controller decision is bound to one exact `ControllerState.version`; stale decisions fail closed. |
-| CC-009 | A waiting controller state requires an explicit reopen before another controller selection. |
+| CC-009 | A waiting, closed or reopen-required controller state admits only an explicit `reopen` decision before further cognitive/work selection. |
 | CC-010 | Controller restart/reconstruction preserves state identity/history but mints no Work or authority. |
 | CC-011 | Cognitive capability invocation uses the existing capability/provider boundary; cognitive control does not create a second provider registry or model router. |
 | CC-012 | Framework/research text is not a runtime decision or authority source. Only promoted product contracts and current runtime state govern this contract. |
+| CC-013 | A policy-driven controller step records one explicit `policy_ref`; policy identity/version is decision provenance, not truth, Work admission or authority. |
 
 ## Durable state
 
@@ -75,6 +77,31 @@ A durable implementation may persist controller snapshots in the existing
 append-only Event journal. Storage representation does not make Event the
 semantic owner.
 
+## Policy seam
+
+`ControllerPolicy` is the minimal replaceable seam that selects one
+`ControllerDecision` for one exact durable `ControllerState`. It owns selection
+logic only; it does not mutate controller state, execute capabilities, admit
+Work, mint authorization or verify outcomes.
+
+A policy may use local computation and current durable references to decide what
+should happen next. If additional cognition or observation is needed, the
+resulting decision uses `invoke-capability` so provider execution still crosses
+the existing capability/runtime boundary.
+
+The canonical controller may expose a one-step orchestration operation:
+
+```text
+current ControllerState
+    -> ControllerPolicy.select
+    -> exact-state / policy provenance check
+    -> normal ControllerDecision apply path
+```
+
+This seam does not make one universal policy canonical. Different deployments
+may supply different policies while sharing the same controller state and
+transition semantics.
+
 ## Decisions
 
 The v1 decision vocabulary is intentionally small:
@@ -87,6 +114,16 @@ reopen
 wait
 ```
 
+Legal state transitions are deliberately narrow:
+
+```text
+open
+    -> invoke-capability | propose-work | close | wait
+
+waiting | closed | reopen-required
+    -> reopen
+```
+
 `invoke-capability` creates a read-class `CapabilityRequest` through the
 existing Runtime/RealityBoundary/provider path. The provider result is retained
 as controller evidence/provenance for reassessment; it is not automatically
@@ -97,7 +134,8 @@ written as knowledge or current truth.
 portfolio admission, resource reservation, commitment or Work materialization.
 
 `close` ends only the current cognitive-control loop. It does not complete a
-Work, discharge a responsibility or authorize an effect.
+Work, discharge a responsibility or authorize an effect. Any later cognitive
+selection requires an explicit `reopen`.
 
 `reopen` and `wait` are controller coordination states only. A restart while
 waiting preserves the pending reference and requires explicit handling; it is
@@ -122,6 +160,9 @@ The initial promoted implementation must demonstrate at least:
 - `PROPOSE_WORK` stops at canonical `WorkProposal`;
 - controller close leaves an active standing responsibility active;
 - stale controller decisions are rejected;
+- waiting, closed and reopen-required states reject non-reopen selections;
+- a policy-driven step records policy provenance and still uses the normal
+  decision guards;
 - controller state survives SQLite process restart through the existing durable
   store/event substrate.
 

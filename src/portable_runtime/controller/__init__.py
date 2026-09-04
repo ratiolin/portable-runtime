@@ -4,12 +4,14 @@ from portable_runtime.controller.models import (
     ControllerState,
     ControllerStatus,
 )
+from portable_runtime.controller.policy import ControllerPolicy
 from portable_runtime.controller.service import CognitiveController
 
 __all__ = [
     "CognitiveController",
     "ControllerDecision",
     "ControllerDecisionKind",
+    "ControllerPolicy",
     "ControllerState",
     "ControllerStatus",
 ]

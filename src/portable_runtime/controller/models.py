@@ -68,6 +68,7 @@ class ControllerDecision(BaseModel):
     state_version: int
     kind: ControllerDecisionKind
     reason: str = ""
+    policy_ref: str | None = None
 
     # INVOKE_CAPABILITY payload.
     capability: str | None = None
@@ -91,6 +92,8 @@ class ControllerDecision(BaseModel):
     def _kind_payload(self) -> ControllerDecision:
         if self.state_version < 0:
             raise ValueError("controller decision state_version cannot be negative")
+        if self.policy_ref is not None and not self.policy_ref.strip():
+            raise ValueError("controller decision policy_ref cannot be blank")
         if (
             self.kind is ControllerDecisionKind.INVOKE_CAPABILITY
             and (not self.capability or not self.capability.strip())
