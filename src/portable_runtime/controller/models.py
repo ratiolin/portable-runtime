@@ -110,9 +110,11 @@ class ControllerDecision(BaseModel):
             raise ValueError("controller decision state_version cannot be negative")
         if self.policy_ref is not None and not self.policy_ref.strip():
             raise ValueError("controller decision policy_ref cannot be blank")
-        if self.kind is ControllerDecisionKind.INVOKE_CAPABILITY:
-            if not self.capability or not self.capability.strip():
-                raise ValueError("invoke-capability requires capability")
+        if (
+            self.kind is ControllerDecisionKind.INVOKE_CAPABILITY
+            and (not self.capability or not self.capability.strip())
+        ):
+            raise ValueError("invoke-capability requires capability")
         if self.kind is ControllerDecisionKind.FORM_CLOSURE:
             if self.closure is None:
                 raise ValueError("form-closure requires closure")
