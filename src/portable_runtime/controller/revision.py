@@ -77,16 +77,29 @@ class RevisionAssessment(BaseModel):
             raise ValueError("revision requires reason")
         if not (self.outcome_refs or self.verification_refs):
             raise ValueError("revision requires outcome_refs or verification_refs")
-        if self.recommended_disposition is RevisionDisposition.CLOSE and not self.verification_refs:
+        if (
+            self.recommended_disposition is RevisionDisposition.CLOSE
+            and not self.verification_refs
+        ):
             raise ValueError("close disposition requires verification_refs")
-        if self.recommended_disposition is RevisionDisposition.RECONCILE_EFFECT and self.revision_scope is not RevisionScope.EXECUTION:
+        if (
+            self.recommended_disposition is RevisionDisposition.RECONCILE_EFFECT
+            and self.revision_scope is not RevisionScope.EXECUTION
+        ):
             raise ValueError("reconcile-effect requires execution revision_scope")
-        if self.recommended_disposition is RevisionDisposition.REQUEST_AUTHORIZATION and self.revision_scope is not RevisionScope.AUTHORIZATION:
+        if (
+            self.recommended_disposition is RevisionDisposition.REQUEST_AUTHORIZATION
+            and self.revision_scope is not RevisionScope.AUTHORIZATION
+        ):
             raise ValueError("request-authorization requires authorization revision_scope")
-        if self.recommended_disposition is RevisionDisposition.RETRY_RUN and self.revision_scope not in {
-            RevisionScope.EXECUTION,
-            RevisionScope.WORK_SPEC,
-            RevisionScope.DECISION,
-        }:
+        if (
+            self.recommended_disposition is RevisionDisposition.RETRY_RUN
+            and self.revision_scope
+            not in {
+                RevisionScope.EXECUTION,
+                RevisionScope.WORK_SPEC,
+                RevisionScope.DECISION,
+            }
+        ):
             raise ValueError("retry-run is incompatible with deep revision_scope")
         return self
