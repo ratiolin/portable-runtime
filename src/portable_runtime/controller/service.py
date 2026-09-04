@@ -305,7 +305,9 @@ class CognitiveController:
             raise ValueError("closure responsibility_ref does not match controller state")
         if state.subject_ref != closure.subject_ref:
             raise ValueError("closure subject_ref does not match controller state")
-        if state.candidate_refs and not set(closure.selected_candidate_refs).issubset(state.candidate_refs):
+        if state.candidate_refs and not set(closure.selected_candidate_refs).issubset(
+            state.candidate_refs
+        ):
             raise ValueError("closure selected_candidate_refs are not current controller candidates")
         missing_issue_dispositions = set(state.open_issue_refs) - set(closure.deferred_issue_refs)
         if missing_issue_dispositions:
@@ -347,12 +349,13 @@ class CognitiveController:
             raise ValueError("propose-work requires controller subject_ref")
         if decision.assessment_ref is None or decision.work_title is None:
             raise ValueError("propose-work decision is incomplete")
-        if decision.closure_ref != state.active_closure_ref:
+        closure_ref = decision.closure_ref
+        if closure_ref is None or closure_ref != state.active_closure_ref:
             raise ValueError("propose-work must reference the active cognitive closure")
-        closure = self.get_closure(state.id, decision.closure_ref)
+        closure = self.get_closure(state.id, closure_ref)
         if closure is None:
             raise ValueError("active cognitive closure is unavailable")
-        if EffectClass(decision.effect_class) is not closure.effect_class:
+        if EffectClass(decision.effect_class) != closure.effect_class:
             raise ValueError("work effect_class exceeds or differs from cognitive closure")
         if not set(decision.requested_capabilities).issubset(closure.requested_capabilities):
             raise ValueError("work requests capabilities outside cognitive closure")
@@ -373,10 +376,7 @@ class CognitiveController:
                 if decision.requested_capabilities
                 else list(closure.requested_capabilities)
             ),
-            expected_result=(
-                decision.expected_result
-                or "; ".join(closure.acceptance_criteria)
-            ),
+            expected_result=decision.expected_result or "; ".join(closure.acceptance_criteria),
             stop_conditions=(
                 list(decision.stop_conditions)
                 if decision.stop_conditions
@@ -422,8 +422,15 @@ class CognitiveController:
             raise ValueError("assess-revision decision has no revision")
         if state.active_closure_ref is None:
             raise ValueError("revision requires an active cognitive closure")
+        if state.work_proposal_ref is None:
+            raise ValueError("revision requires a handed-off WorkProposal")
         if revision.closure_ref != state.active_closure_ref:
             raise ValueError("revision does not refer to the active cognitive closure")
+        work = self.store.get_work(revision.work_ref)
+        if work is None:
+            raise ValueError("revision work_ref does not identify a durable Work")
+        if work.metadata.get("responsibility_proposal_ref") != state.work_proposal_ref:
+            raise ValueError("revision Work does not descend from the current WorkProposal")
         if decision.policy_ref is not None:
             if revision.policy_ref not in {None, decision.policy_ref}:
                 raise ValueError("revision policy_ref conflicts with controller decision")
