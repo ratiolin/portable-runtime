@@ -59,11 +59,12 @@ wait
 | CC2-013 | Every controller decision is bound to one exact `ControllerState.version`; stale decisions fail closed. |
 | CC2-014 | An active closure blocks further ordinary exploration until Work handoff, wait/close, or explicit reopen. |
 | CC2-015 | `PROPOSE_WORK` must reference the active closure and stops at `WorkProposal`. |
-| CC2-016 | Waiting controllers accept only explicit reopen or revision assessment. |
-| CC2-017 | `reopen-required` and closed states accept only explicit reopen. |
-| CC2-018 | Restart/reconstruction preserves state/history but mints no Work or authority. |
-| CC2-019 | Cognitive capability invocation uses the existing capability/provider boundary. |
-| CC2-020 | Framework/research text is not a runtime decision or authority source. |
+| CC2-016 | A waiting controller with a handed-off WorkProposal accepts only `assess-revision`; it cannot directly retry, reopen or close. |
+| CC2-017 | A waiting controller without a handed-off WorkProposal accepts only explicit reopen. |
+| CC2-018 | `reopen-required` and closed states accept only explicit reopen. |
+| CC2-019 | Restart/reconstruction preserves state/history but mints no Work or authority. |
+| CC2-020 | Cognitive capability invocation uses the existing capability/provider boundary. |
+| CC2-021 | Framework/research text is not a runtime decision or authority source. |
 
 ## Durable state
 
@@ -110,14 +111,23 @@ propose-work
     -> waiting(pending = WorkProposal)
 ```
 
-Reality return:
+Reality return for handed-off Work:
 
 ```text
-waiting
-    -> assess-revision | reopen
+waiting(active closure + WorkProposal)
+    -> assess-revision
 ```
 
-Revision recommendations that invalidate closure move to `reopen-required`; retry/reconcile/authorization/wait recommendations remain waiting; verified close may close the controller episode.
+The Work path cannot jump directly from waiting to reopen. Reality feedback must first be classified by a `RevisionAssessment`. Recommendations that invalidate closure move to `reopen-required`; retry/reconcile/authorization/wait recommendations remain waiting; verified close may close the controller episode.
+
+A coordination wait without handed-off Work remains distinct:
+
+```text
+waiting(no WorkProposal)
+    -> reopen
+```
+
+This covers interrupted/read-class cognition and explicit waiting where no closed Work has entered the responsibility chain.
 
 ```text
 closed | reopen-required
@@ -144,10 +154,11 @@ Conformance must demonstrate at least:
 - further exploration is rejected while a closure is active;
 - Work proposal without the active closure is rejected;
 - Work handoff stops at `WorkProposal` and changes the controller to waiting;
+- handed-off Work cannot directly reopen before revision assessment;
 - failure evidence does not automatically retry or reopen;
 - close revision requires verification references;
 - deep revision cannot recommend retry-run;
-- explicit reopen clears current closure eligibility while retaining history;
+- explicit reopen after a revision-triggered `reopen-required` clears current closure eligibility while retaining history;
 - controller close does not discharge standing responsibility;
 - controller state survives process restart.
 
