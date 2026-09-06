@@ -6,6 +6,11 @@ from portable_runtime.controller.models import (
     ControllerState,
     ControllerStatus,
 )
+from portable_runtime.controller.plugins import (
+    controller_capability_result,
+    latest_controller_decision,
+    load_controller_policy,
+)
 from portable_runtime.controller.policy import ControllerPolicy
 from portable_runtime.controller.revision import (
     RevisionAssessment,
@@ -27,4 +32,7 @@ __all__ = [
     "RevisionAssessment",
     "RevisionDisposition",
     "RevisionScope",
+    "controller_capability_result",
+    "latest_controller_decision",
+    "load_controller_policy",
 ]
