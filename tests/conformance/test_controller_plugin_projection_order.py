@@ -23,7 +23,7 @@ def test_latest_controller_decision_uses_event_chronology_not_store_order() -> N
         id="decision:older",
         controller_ref=controller_id,
         state_version=1,
-        kind=ControllerDecisionKind.FORM_CLOSURE,
+        kind=ControllerDecisionKind.WAIT,
         reason="old stage",
     )
     newer = ControllerDecision(
