@@ -10,6 +10,13 @@ from portable_runtime.controller.service import (
     CONTROLLER_RESULT_EVENT,
     CognitiveController,
 )
+from portable_runtime.core.models import Event
+
+
+def _is_later(event: Event, current: Event | None) -> bool:
+    if current is None:
+        return True
+    return (event.created_at, event.id) > (current.created_at, current.id)
 
 
 def latest_controller_decision(
@@ -18,18 +25,24 @@ def latest_controller_decision(
 ) -> ControllerDecision | None:
     """Return the latest durable controller decision for external policy plugins.
 
+    Store list ordering is not part of the controller plugin contract. Select by
+    durable event time explicitly so memory/SQLite ordering cannot invert the
+    policy stage projection.
+
     This is a read projection over canonical controller history; it creates no
     second decision store and grants no authority.
     """
 
-    decisions: list[ControllerDecision] = []
+    latest_event: Event | None = None
+    latest_decision: ControllerDecision | None = None
     for event in controller.store.list_events(controller_id):
         if event.type != CONTROLLER_DECISION_EVENT:
             continue
         raw = event.payload.get("decision")
-        if isinstance(raw, dict):
-            decisions.append(ControllerDecision.model_validate(raw))
-    return decisions[-1] if decisions else None
+        if isinstance(raw, dict) and _is_later(event, latest_event):
+            latest_event = event
+            latest_decision = ControllerDecision.model_validate(raw)
+    return latest_decision
 
 
 def controller_capability_result(
@@ -37,8 +50,9 @@ def controller_capability_result(
     controller_id: str,
     decision_ref: str,
 ) -> dict[str, Any] | None:
-    """Read the durable capability result produced for one controller decision."""
+    """Read the latest durable capability result for one controller decision."""
 
+    latest_event: Event | None = None
     result: dict[str, Any] | None = None
     for event in controller.store.list_events(controller_id):
         if event.type != CONTROLLER_RESULT_EVENT:
@@ -46,7 +60,8 @@ def controller_capability_result(
         if event.payload.get("decision_ref") != decision_ref:
             continue
         raw = event.payload.get("result")
-        if isinstance(raw, dict):
+        if isinstance(raw, dict) and _is_later(event, latest_event):
+            latest_event = event
             result = dict(raw)
     return result
 
