@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import asyncio
 import contextlib
 import logging
+from pathlib import Path
 from typing import Any
 
 from portable_runtime.core.capabilities import (
@@ -69,29 +71,140 @@ class FeishuNotificationProvider:
     async def health(self) -> ProviderHealth:
         return ProviderHealth(provider_id=self.descriptor.id, available=True, detail="notify ready")
 
-    async def invoke(self, request: CapabilityRequest, context: InvocationContext) -> CapabilityResult:
-        # Delegate to feishu-notify.ps1 if present, else no-op
-        import asyncio
-        import pathlib
-
-        script = pathlib.Path.home() / ".local" / "bin" / "feishu-notify.ps1"
-        if script.is_file():
-            with contextlib.suppress(Exception):  # noqa: SIM105,S110
-                proc = await asyncio.create_subprocess_exec(  # noqa: S607
-                    "powershell.exe",
-                    "-File",
-                    str(script),
-                    request.instruction or "",
-                    stdout=asyncio.subprocess.DEVNULL,
-                    stderr=asyncio.subprocess.DEVNULL,
-                )
-                with contextlib.suppress(TimeoutError):
-                    await asyncio.wait_for(proc.wait(), timeout=10)
-        return CapabilityResult(  # noqa: E501
+    def _result(
+        self,
+        request: CapabilityRequest,
+        *,
+        status: str,
+        provider_accepted: bool | None,
+        message: str,
+        error: dict[str, Any] | None = None,
+        metadata: dict[str, Any] | None = None,
+    ) -> CapabilityResult:
+        # The legacy script contract exposes only its process exit code.  It
+        # has no response channel containing a Feishu message id or delivery
+        # receipt, so delivery is never confirmed by this provider.
+        result_metadata: dict[str, Any] = {
+            "provider_accepted": provider_accepted,
+            "delivery_confirmed": False,
+            "delivery_confirmation": "not_available",
+        }
+        if metadata:
+            result_metadata.update(metadata)
+        return CapabilityResult(
             request_id=request.id,
             provider_id=self.descriptor.id,
+            status=status,
+            message=message,
+            error=error,
+            metadata=result_metadata,
+        )
+
+    @staticmethod
+    async def _terminate_process(process: Any) -> None:
+        with contextlib.suppress(Exception):
+            process.kill()
+        with contextlib.suppress(Exception):
+            await process.wait()
+
+    async def invoke(self, request: CapabilityRequest, context: InvocationContext) -> CapabilityResult:
+        script = Path.home() / ".local" / "bin" / "feishu-notify.ps1"
+        if not script.is_file():
+            return self._result(
+                request,
+                status="unavailable",
+                provider_accepted=False,
+                message="Feishu notification script is unavailable",
+                error={
+                    "code": "feishu_script_missing",
+                    "type": "script_missing",
+                    "message": f"notification script not found: {script}",
+                },
+                metadata={"failure_phase": "script_lookup"},
+            )
+
+        timeout_seconds = (
+            request.timeout_seconds if request.timeout_seconds is not None else 10.0
+        )
+        try:
+            proc = await asyncio.create_subprocess_exec(  # noqa: S607
+                "powershell.exe",
+                "-File",
+                str(script),
+                request.instruction or "",
+                stdout=asyncio.subprocess.DEVNULL,
+                stderr=asyncio.subprocess.DEVNULL,
+            )
+        except Exception as exc:  # noqa: BLE001 - subprocess startup is provider I/O
+            return self._result(
+                request,
+                status="failed",
+                provider_accepted=False,
+                message="Feishu notification script failed to start",
+                error={
+                    "code": "feishu_script_start_failed",
+                    "type": "script_start_failed",
+                    "message": str(exc)[:500] or type(exc).__name__,
+                },
+                metadata={"failure_phase": "script_start"},
+            )
+
+        try:
+            await asyncio.wait_for(proc.wait(), timeout=timeout_seconds)
+        except TimeoutError:
+            await self._terminate_process(proc)
+            return self._result(
+                request,
+                status="unknown",
+                provider_accepted=None,
+                message="Feishu notification script timed out; delivery is unknown",
+                error={
+                    "code": "feishu_script_timeout",
+                    "type": "timeout",
+                    "message": f"notification script timed out after {timeout_seconds:g}s",
+                },
+                metadata={
+                    "failure_phase": "script_wait",
+                    "timeout_seconds": timeout_seconds,
+                },
+            )
+        except Exception as exc:  # noqa: BLE001 - provider wait is untrusted I/O
+            await self._terminate_process(proc)
+            return self._result(
+                request,
+                status="unknown",
+                provider_accepted=None,
+                message="Feishu notification script result could not be observed",
+                error={
+                    "code": "feishu_script_wait_failed",
+                    "type": "script_wait_failed",
+                    "message": str(exc)[:500] or type(exc).__name__,
+                },
+                metadata={"failure_phase": "script_wait"},
+            )
+
+        exit_code = proc.returncode
+        if exit_code != 0:
+            return self._result(
+                request,
+                status="failed",
+                provider_accepted=False,
+                message=f"Feishu notification script exited with code {exit_code}",
+                error={
+                    "code": "feishu_script_exit_nonzero",
+                    "type": "script_exit",
+                    "exit_code": exit_code,
+                    "message": f"notification script exited with code {exit_code}",
+                },
+                metadata={"failure_phase": "script_exit", "exit_code": exit_code},
+            )
+
+        return self._result(
+            request,
             status="succeeded",
-            message="notified",
+            provider_accepted=True,
+            message="Feishu notification provider accepted the request; delivery is not confirmed",
+            metadata={"script_exit_code": 0},
         )
 
     async def cancel(self, request_id: str) -> None:
