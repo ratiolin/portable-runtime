@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime
 from importlib import import_module
 from typing import Any, cast
 
@@ -13,10 +14,43 @@ from portable_runtime.controller.service import (
 from portable_runtime.core.models import Event
 
 
-def _is_later(event: Event, current: Event | None) -> bool:
-    if current is None:
-        return True
-    return (event.created_at, event.id) > (current.created_at, current.id)
+def _version_value(value: Any) -> int | None:
+    if isinstance(value, int) and not isinstance(value, bool):
+        return value
+    return None
+
+
+def _controller_state_version(event: Event) -> int | None:
+    """Read the durable controller chronology version from an event."""
+
+    for payload in (event.metadata, event.payload):
+        version = _version_value(payload.get("controller_state_version"))
+        if version is not None:
+            return version
+        version = _version_value(payload.get("state_version"))
+        if version is not None:
+            return version
+
+    decision = event.payload.get("decision")
+    if isinstance(decision, dict):
+        version = _version_value(decision.get("controller_state_version"))
+        if version is not None:
+            return version
+        version = _version_value(decision.get("state_version"))
+        if version is not None:
+            return version
+    return None
+
+
+def _chronology_key(
+    event: Event,
+    logical_version: int | None = None,
+) -> tuple[int, datetime, str]:
+    """Order controller projections by state version before wall-clock ties."""
+
+    if logical_version is None:
+        logical_version = _controller_state_version(event)
+    return (logical_version if logical_version is not None else -1, event.created_at, event.id)
 
 
 def latest_controller_decision(
@@ -26,22 +60,27 @@ def latest_controller_decision(
     """Return the latest durable controller decision for external policy plugins.
 
     Store list ordering is not part of the controller plugin contract. Select by
-    durable event time explicitly so memory/SQLite ordering cannot invert the
-    policy stage projection.
+    controller state version first, with event time and id only as same-version
+    tie-breakers, so memory/SQLite ordering cannot invert the policy stage
+    projection.
 
     This is a read projection over canonical controller history; it creates no
     second decision store and grants no authority.
     """
 
-    latest_event: Event | None = None
+    latest_key: tuple[int, datetime, str] | None = None
     latest_decision: ControllerDecision | None = None
     for event in controller.store.list_events(controller_id):
         if event.type != CONTROLLER_DECISION_EVENT:
             continue
         raw = event.payload.get("decision")
-        if isinstance(raw, dict) and _is_later(event, latest_event):
-            latest_event = event
-            latest_decision = ControllerDecision.model_validate(raw)
+        if not isinstance(raw, dict):
+            continue
+        decision = ControllerDecision.model_validate(raw)
+        key = _chronology_key(event, _controller_state_version(event))
+        if latest_key is None or key > latest_key:
+            latest_key = key
+            latest_decision = decision
     return latest_decision
 
 
@@ -52,7 +91,7 @@ def controller_capability_result(
 ) -> dict[str, Any] | None:
     """Read the latest durable capability result for one controller decision."""
 
-    latest_event: Event | None = None
+    latest_key: tuple[int, datetime, str] | None = None
     result: dict[str, Any] | None = None
     for event in controller.store.list_events(controller_id):
         if event.type != CONTROLLER_RESULT_EVENT:
@@ -60,8 +99,9 @@ def controller_capability_result(
         if event.payload.get("decision_ref") != decision_ref:
             continue
         raw = event.payload.get("result")
-        if isinstance(raw, dict) and _is_later(event, latest_event):
-            latest_event = event
+        key = _chronology_key(event)
+        if isinstance(raw, dict) and (latest_key is None or key > latest_key):
+            latest_key = key
             result = dict(raw)
     return result
 

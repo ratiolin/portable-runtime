@@ -280,6 +280,7 @@ class CognitiveController:
             payload={
                 "decision_ref": decision.id,
                 "request_ref": request.id,
+                "controller_state_version": state.version,
                 "result": result.model_dump(mode="json"),
             },
         )

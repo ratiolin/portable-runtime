@@ -4,6 +4,9 @@ from portable_runtime.controller import (
     CognitiveController,
     ControllerDecision,
     ControllerDecisionKind,
+    RevisionAssessment,
+    RevisionDisposition,
+    RevisionScope,
     controller_capability_result,
     latest_controller_decision,
 )
@@ -58,6 +61,64 @@ def test_latest_controller_decision_uses_event_chronology_not_store_order() -> N
     assert projected is not None
     assert projected.id == newer.id
     assert projected.kind is ControllerDecisionKind.REOPEN
+
+
+def test_latest_controller_decision_prefers_state_version_at_equal_timestamp() -> None:
+    runtime = Runtime(runtime_id="projection-state-version")
+    controller = CognitiveController(runtime)
+    controller_id = "controller:test"
+    timestamp = datetime(2026, 1, 3, tzinfo=UTC)
+    assessed = ControllerDecision(
+        id="decision:assess-revision",
+        controller_ref=controller_id,
+        state_version=20,
+        kind=ControllerDecisionKind.ASSESS_REVISION,
+        revision=RevisionAssessment(
+            controller_ref=controller_id,
+            controller_state_version=20,
+            work_ref="work:test",
+            closure_ref="closure:test",
+            verification_refs=["verification:test"],
+            revision_scope=RevisionScope.VERIFICATION,
+            recommended_disposition=RevisionDisposition.WAIT,
+            reason="wait for the next observation",
+        ),
+    )
+    reopened = ControllerDecision(
+        id="decision:reopen",
+        controller_ref=controller_id,
+        state_version=21,
+        kind=ControllerDecisionKind.REOPEN,
+        reason="reopen after the revision assessment",
+    )
+
+    # Reverse both persistence order and lexical event-id order: version 21
+    # must still project after version 20 at the same timestamp.
+    runtime.store.append_event(
+        Event(
+            id="event:a-reopen",
+            type=CONTROLLER_DECISION_EVENT,
+            subject_ref=controller_id,
+            created_at=timestamp,
+            payload={"decision": reopened.model_dump(mode="json")},
+        )
+    )
+    runtime.store.append_event(
+        Event(
+            id="event:z-assess",
+            type=CONTROLLER_DECISION_EVENT,
+            subject_ref=controller_id,
+            created_at=timestamp,
+            payload={"decision": assessed.model_dump(mode="json")},
+        )
+    )
+
+    projected = latest_controller_decision(controller, controller_id)
+
+    assert projected is not None
+    assert projected.id == reopened.id
+    assert projected.kind is ControllerDecisionKind.REOPEN
+    assert projected.state_version == 21
 
 
 def test_controller_capability_result_uses_latest_result_event() -> None:

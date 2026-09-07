@@ -10,7 +10,7 @@ from portable_runtime.stores.sqlite import SQLiteStateStore
 
 
 def create_local_runtime(state_path: Path, artifact_root: Path | None = None) -> Runtime:
-    """Create the minimal portable-local runtime (no Codex/Feishu/Docker required).
+    """Create the minimal portable-local runtime (no Codex/Docker required).
 
     This is the one-click portable deployment used by:
 
@@ -38,10 +38,10 @@ def create_local_runtime(state_path: Path, artifact_root: Path | None = None) ->
 
 
 def create_personal_platform_runtime(state_path: Path, artifact_root: Path | None = None) -> Runtime:
-    """Create the legacy personal-platform profile runtime (§57) with Codex/Feishu capabilities available.
+    """Create the legacy personal-platform profile runtime (§57) with external capabilities available.
 
     In this phase the profile reuses the same SQLite store but documents the
-    intended provider set. Actual Codex/Feishu provider registration is done
+    intended provider set. Actual provider registration is done
     by the deployment entrypoint that loads ``control_plane.toml`` or ``portable_runtime.toml``.
 
     The deployment layer (``deployments/windows-personal-platform``) is responsible for

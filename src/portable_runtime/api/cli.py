@@ -130,7 +130,7 @@ def run_cli(args: list[str]) -> int:
         print(json.dumps(workflows, ensure_ascii=False))
         return 0
     if parsed.command == "trigger":
-        triggers = ["alertmanager", "webhook", "schedule", "feishu"]
+        triggers = ["alertmanager", "webhook", "schedule"]
         print(json.dumps(triggers, ensure_ascii=False))
         return 0
     if parsed.command in {"init", "start"}:

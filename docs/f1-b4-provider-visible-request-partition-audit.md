@@ -126,9 +126,9 @@ run_id / request.id
 
 This is exactly why a field-name-only canonicalizer is insufficient.
 
-### Feishu providers
+### Test-only narrow provider fixture
 
-The current Feishu providers observe narrower projections:
+The audit uses a test-local narrow provider fixture that observes only:
 
 ```text
 capability

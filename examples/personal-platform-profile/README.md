@@ -1,7 +1,7 @@
 # Profile: personal-platform (legacy Windows)
 
 This directory is documentation-only.  It records the legacy personal-platform
-deployment shape (Codex / Feishu / Prometheus / Alertmanager / Docker); the
+deployment shape (Codex / Prometheus / Alertmanager / Docker); the
 deployment-specific scripts, credentials, and host configuration are not part
 of this repository.
 
@@ -15,7 +15,7 @@ The historical provider/trigger set was:
 - AlertmanagerTrigger -> Work(kind="incident") -> IncidentRepairWorkflow
 - CodexProvider (codex exec)
 - PrometheusProvider / DockerProvider (verifiers)
-- FeishuTrigger + FeishuHumanProvider + FeishuNotificationProvider
+- Deployment-owned messaging/human interaction integration (outside Agent Kernel)
 - SQLiteStateStore + FilesystemArtifactStore
 - DailyScanWorkflow + KnowledgeConsolidationWorkflow
 - legacy policies

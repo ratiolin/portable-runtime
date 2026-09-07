@@ -1,6 +1,6 @@
 # Deployment: portable-local
 
-Runs anywhere without Codex/Feishu/Docker/Prometheus.
+Runs anywhere without Codex, Docker, or Prometheus.
 
 ```powershell
 uv sync

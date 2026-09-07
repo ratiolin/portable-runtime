@@ -10,13 +10,18 @@ import inspect
 
 import pytest
 
-from portable_runtime.core.capabilities import CapabilityRequest, InvocationContext, ProviderDescriptor
+from portable_runtime.core.capabilities import (
+    CapabilityRequest,
+    CapabilityResult,
+    InvocationContext,
+    ProviderDescriptor,
+    ProviderHealth,
+)
 from portable_runtime.core.provider_semantics import (
     ProviderSemanticContract,
     build_provider_replay_binding,
     project_provider_semantics,
 )
-from portable_runtime.interactions.feishu.provider import FeishuHumanProvider, FeishuNotificationProvider
 from portable_runtime.interfaces.provider import CapabilityProvider
 from portable_runtime.protocol.messages import InvokeMessage
 from portable_runtime.providers.codex.provider import CodexProvider
@@ -32,6 +37,37 @@ def _contract(*, version: str = "1", **updates: object) -> ProviderSemanticContr
     }
     values.update(updates)
     return ProviderSemanticContract.model_validate(values)
+
+
+class _DummyNarrowProvider:
+    """Test-only provider fixture with a deliberately narrow request projection."""
+
+    def __init__(self, provider_id: str = "dummy-narrow") -> None:
+        self._descriptor = ProviderDescriptor(
+            id=provider_id,
+            name="Dummy Narrow Provider",
+            version="1.0.0",
+            capabilities=["example.write"],
+        )
+
+    @property
+    def descriptor(self) -> ProviderDescriptor:
+        return self._descriptor
+
+    async def health(self) -> ProviderHealth:
+        return ProviderHealth(provider_id=self.descriptor.id, available=True)
+
+    async def invoke(self, request: CapabilityRequest, context: InvocationContext) -> CapabilityResult:
+        del context
+        return CapabilityResult(
+            request_id=request.id,
+            provider_id=self.descriptor.id,
+            status="succeeded",
+            message=f"{request.capability}: {request.instruction}",
+        )
+
+    async def cancel(self, request_id: str) -> None:
+        del request_id
 
 
 def test_partition_audit_capability_request_allows_provider_visible_extras() -> None:
@@ -87,14 +123,11 @@ def test_partition_audit_codex_observes_a_different_projection() -> None:
         assert field in source
 
 
-def test_partition_audit_feishu_observes_narrower_request_values() -> None:
-    human = inspect.getsource(FeishuHumanProvider.invoke)
-    notification = inspect.getsource(FeishuNotificationProvider.invoke)
-    assert "request.capability" in human
-    assert "request.instruction" in human
-    assert "request.instruction" in notification
-    assert "request.metadata" not in human
-    assert "request.metadata" not in notification
+def test_partition_audit_dummy_provider_observes_narrower_request_values() -> None:
+    source = inspect.getsource(_DummyNarrowProvider.invoke)
+    assert "request.capability" in source
+    assert "request.instruction" in source
+    assert "request.metadata" not in source
 
 
 def test_partition_audit_provider_descriptor_does_not_embed_semantic_authority() -> None:
